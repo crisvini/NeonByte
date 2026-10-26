@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:neonbyte:contracts:v1:status",
+  "title": "Estado do dispositivo",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "firmwareVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "ip": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "freeStorageBytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["auto", "spotify", "gif"]
+    },
+    "activeScene": {
+      "type": "string",
+      "enum": ["spotify", "gif"]
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "firmwareVersion",
+    "ip",
+    "freeStorageBytes",
+    "mode",
+    "activeScene"
+  ],
+  "additionalProperties": false
+}
+

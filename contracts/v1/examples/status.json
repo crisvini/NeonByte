@@ -1,0 +1,9 @@
+{
+  "protocolVersion": "v1",
+  "firmwareVersion": "example",
+  "ip": "192.0.2.1",
+  "freeStorageBytes": 0,
+  "mode": "auto",
+  "activeScene": "gif"
+}
+

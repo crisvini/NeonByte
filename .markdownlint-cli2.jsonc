@@ -1,0 +1,11 @@
+{
+  "config": {
+    "default": true,
+    "MD013": false,
+    // PLANNING.md uses compact table separators; keep its existing format.
+    "MD060": false
+  },
+  "globs": ["**/*.md"],
+  "ignores": [".serena/**", "**/node_modules/**"]
+}
+

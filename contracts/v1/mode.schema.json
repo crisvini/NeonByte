@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:neonbyte:contracts:v1:mode",
+  "title": "Atualização do modo de tela",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["auto", "spotify", "gif"]
+    }
+  },
+  "required": ["mode"],
+  "additionalProperties": false
+}
+

@@ -1,0 +1,25 @@
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+
+# JavaScript tooling and generated output
+node_modules/
+coverage/
+dist/
+build/
+
+# Python tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# PlatformIO output
+.pio/
+
+# Local editor and agent state
+.serena/
+.DS_Store
+Thumbs.db
+

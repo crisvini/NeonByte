@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:neonbyte:contracts:v1:now-playing",
+  "title": "Estado de reprodução Spotify",
+  "type": "object",
+  "properties": {
+    "trackId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "artist": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "isPlaying": {
+      "type": "boolean"
+    },
+    "durationMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "progressMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sampledAtUnixMs": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "trackId",
+    "title",
+    "artist",
+    "isPlaying",
+    "durationMs",
+    "progressMs",
+    "sampledAtUnixMs"
+  ],
+  "additionalProperties": false
+}
+

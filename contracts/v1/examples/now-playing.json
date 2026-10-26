@@ -1,0 +1,10 @@
+{
+  "trackId": "example-track-id",
+  "title": "Example Track",
+  "artist": "Example Artist",
+  "isPlaying": true,
+  "durationMs": 180000,
+  "progressMs": 42000,
+  "sampledAtUnixMs": 1790000000000
+}
+
