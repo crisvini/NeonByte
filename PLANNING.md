@@ -1,6 +1,6 @@
 # NeonByte — Implementation Plan
 
-> **Status:** Phases 1, 2, and 3 are complete; OAuth validation with a real account is pending Spotify credentials. Phase 4 awaits explicit approval and hardware identification · **Intended license:** MIT · **Target device:** JUZIPi SD PRO (hardware identification pending)
+> **Status:** Phases 1, 2, and 3 are complete; OAuth validation with a real account is pending Spotify credentials. The Phase 4 hardware-independent subset is complete; physical hardware validation and recovery remain pending, and board-specific development awaits evidence and explicit approval · **Intended license:** MIT · **Target device:** JUZIPi SD PRO (hardware identification pending)
 >
 > **Primary rule:** implement phases sequentially; do not flash firmware until the hardware is validated and recovery is documented.
 
@@ -78,6 +78,7 @@ NeonByte/
 ├── docs/
 │   ├── hardware.md
 │   ├── protocol.md
+│   ├── firmware-development.md
 │   ├── development.md
 │   ├── installation.md
 │   └── recovery.md
@@ -240,6 +241,15 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 
 **Deliverables:** compilable PlatformIO project, scenes, network, storage, implemented API, and bench tests.
 
+**Verified hardware-independent progress:** the [native firmware notes](docs/firmware-development.md) document the host-only project, protocol coverage, memory constraints, and remaining dependencies. The native suite covers scene selection and timeout, progress correction, v1 JSON validation and responses, authentication, service interfaces, and bounded animation reads. This progress does not complete hardware validation, recovery, the binary upload routes, or Phase 4 acceptance.
+
+- [x] Create a C++17 PlatformIO native test environment without selecting a device board.
+- [x] Implement host-tested scene modes, Spotify progress correction, and heartbeat fallback.
+- [x] Implement transport-independent validation and handling for the v1 JSON status, mode, Spotify, and heartbeat routes.
+- [x] Define display, storage, clock, authentication, and network interfaces with native mocks.
+- [x] Stream the existing version 1 RGB565 animation format from storage in caller-sized chunks.
+- [x] Document host memory costs, resource limits, protocol compatibility, and remaining hardware dependencies.
+
 - [ ] Document verified hardware and prepare a testable backup/restore procedure.
 - [ ] Configure the board, framework, flags, and partition scheme based on evidence.
 - [ ] Initialize the LCD, orientation, colors, and backlight with a minimal visual test.
@@ -338,7 +348,7 @@ English (en-US) is mandatory throughout the NeonByte project, including all curr
 
 **Instruction to the coding agent:**
 
-> Read all of `PLANNING.md` and execute only the phase explicitly authorized by the maintainer. Phases 1, 2, and 3 are complete; real-account OAuth validation still depends on Spotify credentials. Do not start Phase 4 without explicit approval.
+> Read all of `PLANNING.md` and execute only the phase explicitly authorized by the maintainer. Phases 1, 2, and 3 are complete; real-account OAuth validation still depends on Spotify credentials. The Phase 4 hardware-independent subset is complete. Do not begin board-specific Phase 4 work until the hardware and recovery blockers are resolved and the maintainer approves it.
 
 ## 12. Decision Log
 

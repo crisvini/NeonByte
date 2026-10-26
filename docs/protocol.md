@@ -1,6 +1,6 @@
 # Local HTTP v1 Contract
 
-**Status:** initial specification; no device server, client, or firmware has been implemented. The `/api/v1` routes describe the intended contract, not existing endpoints. The agent's local interface routes under `/api/*` are private to the simulator and are not part of this contract.
+**Status:** initial v1 specification. A hardware-independent C++ handler now implements the JSON status, mode, Spotify, and heartbeat behavior for host tests. There is still no network-stack binding, device server, or agent client. The agent's local interface routes under `/api/*` are private to the simulator and are not part of this contract.
 
 ## Transport and Compatibility
 
@@ -92,3 +92,9 @@ JSON errors follow [error.schema.json](../contracts/v1/error.schema.json). The `
 - Define the port, body limits, and binary formats with hardware evidence before implementing firmware or integration.
 - Reject unknown modes, invalid payloads, bad checksums, and incomplete uploads; preserve the last valid asset.
 - The protocol does not include commands to control Spotify playback.
+
+## Hardware-Independent Firmware Status
+
+The C++ handler in [firmware development](firmware-development.md) preserves the existing v1 paths, JSON fields, mode values, status fields, and error codes. The JSON schemas and examples are unchanged. The handler checks the existing bearer-authentication requirement through an injected authenticator; token pairing and provisioning are not implemented.
+
+The handler currently returns `415 unsupported_media_type` for the cover and animation routes because upload size limits, hardware storage behavior, and safe asset replacement remain pending. This response uses an existing v1 error code and does not change the route envelope or checksum header contract. No device endpoint is available until a hardware network adapter is implemented and validated.
