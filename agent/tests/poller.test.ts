@@ -39,6 +39,72 @@ test("poller exposes local state, deduplicates unchanged snapshots, and caches t
   assert.equal(poller.cachedTrackCount, 1);
 });
 
+test("suppresses expected progress but publishes seeks, accumulated drift, pause, and resume", async () => {
+  const provider = new MockSpotifyProvider(track(10_000));
+  let now = 1_000;
+  const poller = new PlaybackPoller({ provider, pollIntervalMs: 15_000, now: () => now });
+  const updates: Array<{ status: string; progress: number | undefined }> = [];
+  poller.subscribe((snapshot) => updates.push({ status: snapshot.status, progress: snapshot.nowPlaying?.progressMs }));
+
+  await poller.pollOnce();
+  now += 15_000;
+  provider.setPlayback(track(25_500));
+  await poller.pollOnce();
+  now += 15_000;
+  provider.setPlayback(track(41_500));
+  await poller.pollOnce();
+  assert.equal(updates.length, 1);
+  assert.equal(poller.currentSnapshot.nowPlaying?.progressMs, 41_500);
+
+  // Drift is measured from the last published sample, not the previous poll.
+  now += 15_000;
+  provider.setPlayback(track(57_500));
+  await poller.pollOnce();
+  now += 15_000;
+  provider.setPlayback(track(20_000));
+  await poller.pollOnce();
+  now += 15_000;
+  provider.setPlayback({ ...track(35_000), is_playing: false });
+  await poller.pollOnce();
+  now += 15_000;
+  provider.setPlayback({ ...track(35_000), is_playing: false });
+  await poller.pollOnce();
+  now += 15_000;
+  provider.setPlayback(track(35_000));
+  await poller.pollOnce();
+
+  assert.deepEqual(updates, [
+    { status: "playing", progress: 10_000 },
+    { status: "playing", progress: 57_500 },
+    { status: "playing", progress: 20_000 },
+    { status: "paused", progress: 35_000 },
+    { status: "playing", progress: 35_000 },
+  ]);
+});
+
+test("refreshes cached metadata for the same track, including a removed cover", async () => {
+  const provider = new MockSpotifyProvider(track(10_000));
+  const poller = new PlaybackPoller({ provider, pollIntervalMs: 15_000, now: () => 1_000 });
+  const updates: string[] = [];
+  poller.subscribe((snapshot) => updates.push(snapshot.nowPlaying?.title ?? "none"));
+
+  await poller.pollOnce();
+  const original = track(10_000);
+  provider.setPlayback({ ...original, item: { ...original.item, name: "Updated", artists: [{ name: "New Artist" }], duration_ms: 200_000, album: { images: [] } } });
+  await poller.pollOnce();
+
+  assert.deepEqual(updates, ["Song", "Updated"]);
+  assert.equal(poller.currentSnapshot.nowPlaying?.artist, "New Artist");
+  assert.equal(poller.currentSnapshot.nowPlaying?.durationMs, 200_000);
+  assert.equal(poller.currentSnapshot.coverUrl, null);
+  assert.equal(poller.cachedTrackCount, 1);
+
+  provider.setPlayback({ ...original, item: { ...original.item, name: "Updated", artists: [{ name: "New Artist" }], duration_ms: 200_000, album: { images: [{ url: "https://images.example/new.jpg" }] } } });
+  await poller.pollOnce();
+  assert.deepEqual(updates, ["Song", "Updated", "Updated"]);
+  assert.equal(poller.currentSnapshot.coverUrl, "https://images.example/new.jpg");
+});
+
 test("publishes idle and unavailable transitions and recovers after a transient failure", async () => {
   const provider = new MockSpotifyProvider(track(10_000));
   const poller = new PlaybackPoller({ provider, pollIntervalMs: 15_000, now: () => 200 });

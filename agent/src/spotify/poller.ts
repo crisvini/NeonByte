@@ -31,6 +31,9 @@ const initialSnapshot: PlaybackSnapshot = {
   sampledAtUnixMs: 0,
 };
 
+// Small differences can arise from polling and Spotify's timing; larger ones need resynchronization.
+const PROGRESS_TOLERANCE_MS = 2_000;
+
 function samePlayback(left: PlaybackSnapshot, right: PlaybackSnapshot): boolean {
   if (left.status !== right.status || left.coverUrl !== right.coverUrl || left.unavailableReason !== right.unavailableReason) {
     return false;
@@ -41,12 +44,19 @@ function samePlayback(left: PlaybackSnapshot, right: PlaybackSnapshot): boolean 
 
   const leftTrack: NowPlayingV1 = left.nowPlaying;
   const rightTrack: NowPlayingV1 = right.nowPlaying;
+  const elapsed = rightTrack.sampledAtUnixMs - leftTrack.sampledAtUnixMs;
+  const expectedProgress = leftTrack.isPlaying
+    ? Math.min(leftTrack.durationMs, leftTrack.progressMs + Math.max(0, elapsed))
+    : leftTrack.progressMs;
   return leftTrack.trackId === rightTrack.trackId &&
     leftTrack.title === rightTrack.title &&
     leftTrack.artist === rightTrack.artist &&
     leftTrack.isPlaying === rightTrack.isPlaying &&
     leftTrack.durationMs === rightTrack.durationMs &&
-    leftTrack.progressMs === rightTrack.progressMs;
+    elapsed >= 0 &&
+    (leftTrack.isPlaying
+      ? Math.abs(expectedProgress - rightTrack.progressMs) <= PROGRESS_TOLERANCE_MS
+      : expectedProgress === rightTrack.progressMs);
 }
 
 function unavailableReason(error: unknown): UnavailableReason {
@@ -71,6 +81,7 @@ export class PlaybackPoller {
   private readonly listeners = new Set<(snapshot: PlaybackSnapshot) => void>();
   private readonly metadataCache = new Map<string, TrackMetadata>();
   private snapshot: PlaybackSnapshot = initialSnapshot;
+  private publishedSnapshot: PlaybackSnapshot = initialSnapshot;
   private failureCount = 0;
   private retryAfterMs: number | null = null;
   private timer: NodeJS.Timeout | null = null;
@@ -188,13 +199,15 @@ export class PlaybackPoller {
 
   private withCachedMetadata(normalized: NonNullable<ReturnType<typeof normalizeSpotifyPlayback>>): PlaybackSnapshot {
     const key = normalized.nowPlaying.trackId;
-    const existing = this.metadataCache.get(key);
-    const metadata = existing ?? {
+    const fresh = {
       title: normalized.nowPlaying.title,
       artist: normalized.nowPlaying.artist,
       durationMs: normalized.nowPlaying.durationMs,
       coverUrl: normalized.coverUrl,
     };
+    const cached = this.metadataCache.get(key);
+    const metadata = cached && cached.title === fresh.title && cached.artist === fresh.artist &&
+      cached.durationMs === fresh.durationMs && cached.coverUrl === fresh.coverUrl ? cached : fresh;
     this.metadataCache.delete(key);
     this.metadataCache.set(key, metadata);
     while (this.metadataCache.size > 100) {
@@ -219,12 +232,13 @@ export class PlaybackPoller {
   }
 
   private publish(next: PlaybackSnapshot): void {
-    if (samePlayback(this.snapshot, next)) {
+    if (samePlayback(this.publishedSnapshot, next)) {
       this.snapshot = next;
       return;
     }
 
     this.snapshot = next;
+    this.publishedSnapshot = next;
     for (const listener of this.listeners) {
       try {
         listener(next);

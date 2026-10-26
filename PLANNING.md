@@ -217,6 +217,8 @@ Cada etapa contém **entrega, tarefas, testes, aceite e dependências**. Só ava
 
 **Aceite:** fluxos OAuth e refresh cobertos por testes com mocks; validação de autenticação real pendente até configurar uma conta Spotify; mock reproduz play/pause/troca; testes passam; segredos não são enviados ao logger.
 
+**Revisão corretiva:** `make check` passou localmente com Node.js 22.12.0 e 24.21.0. A CI foi configurada para ambas as versões principais; a execução remota dessa alteração ainda depende de um novo push. A deduplicação considera o avanço esperado e corrige desvios superiores a 2 segundos; a integração com o relógio permanece pendente da etapa correspondente.
+
 ### Etapa 3 — Simulador e interface local (sem flash)
 
 **Entregáveis:** prévia fiel 240 × 240 e painel local funcional.
