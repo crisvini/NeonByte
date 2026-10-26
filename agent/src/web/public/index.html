@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#10101a">
+    <title>NeonByte · Simulador local</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="NeonByte início">
+          <span class="brand-mark" aria-hidden="true">N</span>
+          <span><strong>NeonByte</strong><small>SIMULADOR LOCAL</small></span>
+        </a>
+        <div class="agent-status"><span class="status-dot" id="agent-dot"></span><span id="agent-label">Iniciando agente…</span></div>
+      </header>
+
+      <section class="intro">
+        <div>
+          <p class="eyebrow">DISPLAY 240 × 240</p>
+          <h1>Seu display, em tempo real.</h1>
+          <p class="lede">Conecte o Spotify, envie uma animação e veja as duas cenas no simulador local.</p>
+        </div>
+        <div class="device-pill"><span class="device-icon" aria-hidden="true">◉</span><span><strong>Relógio</strong><small id="device-status">Simulação sem dispositivo</small></span></div>
+      </section>
+
+      <section class="workspace" aria-label="Simulador e controles">
+        <article class="card preview-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">PRÉVIA AO VIVO</p><h2>Tela simulada</h2></div>
+            <span class="scene-chip" id="scene-label">GIF FULLSCREEN</span>
+          </div>
+          <div class="display-stage">
+            <div class="display-bezel"><canvas id="display" width="240" height="240" role="img" aria-label="Prévia de tela 240 por 240"></canvas></div>
+          </div>
+          <div class="preview-footer"><span class="live-indicator"><span></span>Renderização local</span><span>240 × 240 px</span></div>
+        </article>
+
+        <div class="control-column">
+          <article class="card mode-card">
+            <div class="card-heading compact"><div><p class="eyebrow">CENA</p><h2>Modo de exibição</h2></div></div>
+            <div class="mode-switch" role="group" aria-label="Modo de exibição">
+              <button type="button" data-mode="auto" aria-pressed="true">Auto</button>
+              <button type="button" data-mode="spotify" aria-pressed="false">Spotify</button>
+              <button type="button" data-mode="gif" aria-pressed="false">GIF</button>
+            </div>
+            <p class="mode-help" id="mode-help">Spotify quando estiver tocando; GIF nos outros momentos.</p>
+          </article>
+
+          <article class="card spotify-card">
+            <div class="card-heading compact">
+              <div><p class="eyebrow">CONTA E PRÉVIA</p><h2>Spotify</h2></div>
+              <span class="connection-badge" id="spotify-badge">Não conectado</span>
+            </div>
+            <p class="card-copy">A autorização usa o fluxo PKCE configurado neste agente.</p>
+            <button class="button button-spotify" type="button" id="connect-spotify"><span aria-hidden="true">↗</span> Conectar Spotify</button>
+            <div class="demo-panel">
+              <div class="demo-heading"><div><strong>Dados de demonstração</strong><small>Teste sem conta ou dispositivo</small></div><button class="demo-toggle" id="demo-toggle" type="button" aria-pressed="false"><span class="toggle-knob"></span><span class="sr-only">Ativar dados de demonstração</span></button></div>
+              <div class="demo-controls" id="demo-controls" hidden>
+                <button type="button" data-action="play" aria-label="Reproduzir mock">▶</button>
+                <button type="button" data-action="pause" aria-label="Pausar mock">Ⅱ</button>
+                <button type="button" data-action="next" aria-label="Próxima faixa mock">↻</button>
+                <button type="button" data-action="offline" aria-label="Simular agente offline">⌁</button>
+                <span id="demo-message">Mock pronto</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="card gif-card">
+            <div class="card-heading compact"><div><p class="eyebrow">ANIMAÇÃO PERSONALIZADA</p><h2>Seu GIF</h2></div><span class="file-limit">até 8 MB</span></div>
+            <label class="upload-zone" for="gif-file">
+              <span class="upload-icon" aria-hidden="true">↑</span>
+              <strong>Escolher arquivo GIF</strong>
+              <span>Prévia em loop, preenchendo a tela</span>
+            </label>
+            <input id="gif-file" type="file" accept="image/gif,.gif" hidden>
+            <p class="upload-status" id="upload-status" aria-live="polite">Nenhum GIF enviado nesta sessão.</p>
+          </article>
+        </div>
+      </section>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+      <footer class="page-footer"><span>O simulador não valida o hardware físico.</span><span>NeonByte · Interface local em 127.0.0.1</span></footer>
+    </main>
+  </body>
+</html>

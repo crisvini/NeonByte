@@ -4,7 +4,7 @@ NeonByte é um projeto open-source planejado para um display Wi-Fi JUZIPi SD PRO
 
 ## Estado atual
 
-A **Etapa 1 está concluída**. A Etapa 2 implementa o agente Spotify em Node.js/TypeScript, OAuth PKCE, polling e estado interno compatível com o contrato v1. A validação de OAuth com uma conta real depende de credenciais Spotify configuradas; os testes automatizados usam mocks. Simulador, interface gráfica, integração com dispositivo e firmware continuam fora desta etapa. Nenhum firmware foi compilado ou gravado.
+As **Etapas 1, 2 e 3 estão concluídas**. O agente Spotify em Node.js/TypeScript usa OAuth PKCE, polling e estado compatível com o contrato v1. A interface local inclui simulador responsivo 240 × 240, visualização de Spotify e GIF em loop, modos de tela, upload e dados de demonstração. A validação de OAuth com uma conta real depende de credenciais Spotify configuradas. O relógio físico, firmware e sincronização com dispositivo ainda não estão implementados; nenhum firmware foi compilado ou gravado.
 
 A resolução de 240 × 240 é uma expectativa do planejamento, não uma medição desta unidade. Veja [investigação de hardware](docs/hardware.md) antes de qualquer trabalho que dependa da placa.
 
@@ -16,18 +16,18 @@ A resolução de 240 × 240 é uma expectativa do planejamento, não uma mediç�
 | **spotify** | Spotify Now Playing | Tela Spotify em espera |
 | **gif** | GIF fullscreen | GIF fullscreen |
 
-O dispositivo deve manter localmente o modo escolhido e a animação. O agente consulta e normaliza a reprodução; a integração com o dispositivo ainda não está implementada.
+O simulador aplica os modos à prévia local; o modo escolhido fica guardado no navegador. O agente consulta e normaliza a reprodução. Persistência no dispositivo e integração com o relógio ainda não estão implementadas.
 
 ## Estrutura
 
 ```text
 .
-├── agent/                 # Agente Spotify Node.js/TypeScript
+├── agent/                 # Agente Spotify, painel e simulador Node.js/TypeScript
 ├── assets/samples/        # Amostras futuras, sem assets incluídos
 ├── contracts/v1/          # Schemas e exemplos dos contratos
 ├── docs/                  # Hardware, protocolo, desenvolvimento e pendências
 ├── firmware/              # Estrutura reservada; hardware ainda não confirmado
-├── simulator/             # Estrutura reservada para a Etapa 3
+├── simulator/             # Local reservado; simulador servido pelo agente em agent/src/web
 ├── tests/                 # Testes dos contratos v1
 ├── AGENTS.md
 ├── PLANNING.md
@@ -51,11 +51,10 @@ npm run check
 
 ```sh
 npm --prefix agent run build
-npm --prefix agent run auth
 npm --prefix agent run start
 ```
 
-O comando `auth` exibe uma URL para abrir no navegador e recebe o retorno em `127.0.0.1`. O refresh token fica no cofre seguro do sistema; tokens não são escritos em `.env` nem nos logs. `SPOTIFY_POLL_INTERVAL_MS` configura o intervalo (15 segundos por padrão). Veja [desenvolvimento](docs/development.md) e [instalação](docs/installation.md) para detalhes.
+Abra [http://localhost:8787](http://localhost:8787), conecte o Spotify pelo botão e escolha um modo. Sem Client ID válido, o agente inicia com dados mock; os controles permitem simular play, pausa, próxima faixa e indisponibilidade. O comando `auth` continua disponível se preferir autorizar sem abrir a interface. O refresh token fica no cofre seguro do sistema; tokens não são escritos em `.env` nem nos logs. `SPOTIFY_POLL_INTERVAL_MS` configura o intervalo (15 segundos por padrão). Veja [desenvolvimento](docs/development.md) e [instalação](docs/installation.md) para detalhes.
 
 ## Documentação
 

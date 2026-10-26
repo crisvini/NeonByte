@@ -1,6 +1,6 @@
 # NeonByte — Plano de implementação
 
-> **Status:** Etapas 1 e 2 implementadas; validação OAuth com conta real pendente de credenciais Spotify. A Etapa 3 aguarda autorização explícita · **Licença pretendida:** MIT · **Dispositivo-alvo:** JUZIPi SD PRO (identificação de hardware pendente)
+> **Status:** Etapas 1, 2 e 3 implementadas; validação OAuth com conta real pendente de credenciais Spotify. A Etapa 4 aguarda autorização explícita e identificação do hardware · **Licença pretendida:** MIT · **Dispositivo-alvo:** JUZIPi SD PRO (identificação de hardware pendente)
 >
 > **Regra principal:** implementar as fases sequencialmente; nenhuma gravação de firmware até validar o hardware e documentar recuperação.
 
@@ -223,14 +223,16 @@ Cada etapa contém **entrega, tarefas, testes, aceite e dependências**. Só ava
 
 **Entregáveis:** prévia fiel 240 × 240 e painel local funcional.
 
-- [ ] Criar simulador das duas cenas com escala sem alterar a composição lógica de 240 × 240.
-- [ ] Spotify: capa, título, artista, barra de progresso e estado sem reprodução.
-- [ ] GIF: upload, validação, preview fullscreen, loop, política de corte e mensagem clara para GIF inviável.
-- [ ] Implementar modos `auto`/`spotify`/`gif` e lógica de timeout do agente no simulador.
-- [ ] Interface local `localhost:8787` para conexão Spotify, modo, GIF e status.
-- [ ] Implementar conversão de GIF e capa para formato intermediário proposto, com testes de integridade e limites.
+- [x] Criar simulador das duas cenas com escala sem alterar a composição lógica de 240 × 240.
+- [x] Spotify: capa, título, artista, barra de progresso e estado sem reprodução.
+- [x] GIF: upload, validação, preview fullscreen, loop, política de corte e mensagem clara para GIF inviável.
+- [x] Implementar modos `auto`/`spotify`/`gif` e lógica de timeout do agente no simulador.
+- [x] Interface local `localhost:8787` para conexão Spotify, modo, GIF e status.
+- [x] Implementar conversão de GIF e capa para formato intermediário proposto, com testes de integridade e limites.
 
 **Aceite:** com mock, iniciar/parar/trocar músicas altera cenas corretamente; GIF usa todo o frame; upload inválido é rejeitado; tudo funciona sem o dispositivo.
+
+**Validação desta etapa:** `npm run check` passou com testes de contrato, mídia, cenas, modos, OAuth integrado e upload; a página e os assets foram verificados via `http://localhost`. A prévia é local e não valida a unidade física.
 
 ### Etapa 4 — Firmware próprio e validação do hardware
 

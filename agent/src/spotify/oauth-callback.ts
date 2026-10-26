@@ -38,7 +38,7 @@ function sameState(expected: string, actual: string): boolean {
   return expectedBytes.length === actualBytes.length && timingSafeEqual(expectedBytes, actualBytes);
 }
 
-function callbackResult(url: URL, expectedState: string): OAuthCallbackResult {
+export function parseOAuthCallback(url: URL, expectedState: string): OAuthCallbackResult {
   const state = url.searchParams.get("state") ?? "";
   if (!sameState(expectedState, state)) {
     throw new SpotifyOAuthError("A resposta OAuth não passou na validação de estado. Inicie uma nova autorização.");
@@ -104,7 +104,7 @@ export async function startOAuthCallbackServer(options: OAuthCallbackOptions): P
     }
 
     try {
-      const result = callbackResult(incoming, options.expectedState);
+      const result = parseOAuthCallback(incoming, options.expectedState);
       response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" })
         .end("Autorização concluída. Você pode fechar esta janela.");
       finish(result);

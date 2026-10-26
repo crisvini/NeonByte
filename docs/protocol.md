@@ -1,6 +1,6 @@
 # Contrato HTTP local v1
 
-**Estado:** especificação inicial; ainda não há servidor, cliente ou firmware implementado. As rotas descrevem o contrato pretendido, não endpoints existentes.
+**Estado:** especificação inicial; ainda não há servidor, cliente ou firmware implementado para o dispositivo. As rotas `/api/v1` descrevem o contrato pretendido, não endpoints existentes. As rotas `/api/*` da interface local do agente são privadas ao simulador e não fazem parte deste contrato.
 
 ## Transporte e compatibilidade
 
