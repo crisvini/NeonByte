@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -37,6 +38,8 @@ public:
     std::uint64_t availableBytes = 65'536;
     std::vector<std::uint8_t> animationBytes;
     mutable std::size_t largestRead = 0;
+    std::uint32_t failedReadOffset = std::numeric_limits<std::uint32_t>::max();
+    bool partialReadOnFailure = false;
 
     bool loadMode(DisplayMode& mode) const override {
         if (!modeAvailable) {
@@ -66,6 +69,12 @@ public:
     bool readAnimationAt(std::uint32_t offset, std::uint8_t* destination, std::size_t length) const override {
         largestRead = std::max(largestRead, length);
         if (offset > animationBytes.size() || length > animationBytes.size() - offset) {
+            return false;
+        }
+        if (offset == failedReadOffset) {
+            if (partialReadOnFailure && length > 0) {
+                destination[0] = animationBytes[offset];
+            }
             return false;
         }
         std::copy_n(animationBytes.data() + offset, length, destination);
@@ -151,6 +160,12 @@ HttpRequest jsonRequest(HttpMethod method, std::string_view path, std::string_vi
     return {method, path, authorization, "application/json; charset=utf-8", body};
 }
 
+std::string makeSpotifyJson(std::string_view titleJson = "\"title\"", std::string_view durationJson = "100") {
+    return std::string(R"({"trackId":"id","title":)") + std::string(titleJson) +
+        R"(,"artist":"artist","isPlaying":true,"durationMs":)" + std::string(durationJson) +
+        R"(,"progressMs":0,"sampledAtUnixMs":1})";
+}
+
 void writeLittleEndian16(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint16_t value) {
     bytes[offset] = static_cast<std::uint8_t>(value & 0xff);
     bytes[offset + 1] = static_cast<std::uint8_t>((value >> 8) & 0xff);
@@ -210,6 +225,83 @@ void testManualModesPersistAndSpotifyShowsWaitingWhenStale() {
 
     TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
     TEST_ASSERT_EQUAL(ActiveScene::gif, scenes.currentState().activeScene);
+}
+
+void testHeartbeatsDoNotKeepStalePlaybackActive() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeDisplay display;
+    scenes.updateNowPlaying(makeTrack(true, 180'000));
+    scenes.heartbeat();
+
+    clock.currentMillis = 45'000;
+    scenes.heartbeat();
+    TEST_ASSERT_EQUAL(ActiveScene::spotify, scenes.currentState().activeScene);
+    clock.currentMillis = 45'001;
+    scenes.heartbeat();
+    TEST_ASSERT_TRUE(scenes.currentState().agentAvailable);
+    scenes.render(display);
+    TEST_ASSERT_EQUAL(FakeDisplay::LastRender::gif, display.lastRender);
+
+    TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::spotify));
+    scenes.render(display);
+    TEST_ASSERT_EQUAL(FakeDisplay::LastRender::waiting, display.lastRender);
+    scenes.updateNowPlaying(makeTrack(true, 180'000));
+    scenes.render(display);
+    TEST_ASSERT_EQUAL(FakeDisplay::LastRender::spotify, display.lastRender);
+}
+
+void testOldSpotifySamplesExpireEvenWhenReceivedAgain() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    NowPlaying track = makeTrack(true, 180'000);
+    track.sampledAtUnixMs = 1'000;
+    clock.currentUnixMillis = 46'000;
+    scenes.heartbeat();
+    scenes.updateNowPlaying(track);
+    TEST_ASSERT_EQUAL(ActiveScene::spotify, scenes.currentState().activeScene);
+    clock.currentUnixMillis = 46'001;
+    scenes.updateNowPlaying(track);
+    TEST_ASSERT_EQUAL(ActiveScene::gif, scenes.currentState().activeScene);
+}
+
+void testPlaybackFreshnessIncludesSampleAgeAndUsesMonotonicTime() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    NowPlaying track = makeTrack(true, 180'000);
+    track.sampledAtUnixMs = 1'000;
+    clock.currentUnixMillis = 45'000;
+    clock.currentMillis = 100;
+    scenes.updateNowPlaying(track);
+    scenes.heartbeat();
+    clock.currentUnixMillis = 0;
+    clock.currentMillis = 1'100;
+    TEST_ASSERT_EQUAL(ActiveScene::spotify, scenes.currentState().activeScene);
+    clock.currentMillis = 1'101;
+    TEST_ASSERT_EQUAL(ActiveScene::gif, scenes.currentState().activeScene);
+    clock.currentMillis = 99;
+    TEST_ASSERT_EQUAL(ActiveScene::gif, scenes.currentState().activeScene);
+}
+
+void testFutureSampleAndExtremeProgressDoNotOverflow() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    clock.currentUnixMillis = 10;
+    NowPlaying track = makeTrack(true, std::numeric_limits<std::uint64_t>::max(),
+                                 std::numeric_limits<std::uint64_t>::max() - 1);
+    scenes.updateNowPlaying(track);
+    scenes.heartbeat();
+    TEST_ASSERT_EQUAL(ActiveScene::spotify, scenes.currentState().activeScene);
+    clock.currentMillis = 2;
+    TEST_ASSERT_EQUAL_UINT64(std::numeric_limits<std::uint64_t>::max(), scenes.currentState().progressMs);
+    track.durationMs = 100;
+    track.progressMs = 200;
+    scenes.updateNowPlaying(track);
+    TEST_ASSERT_EQUAL_UINT64(100, scenes.currentState().progressMs);
 }
 
 void testFailedModePersistenceDoesNotChangeCurrentMode() {
@@ -343,6 +435,29 @@ void testProtocolRejectsInvalidClosedSchemaAndMalformedJson() {
                                                   {"0.1.0", "192.0.2.1"}).statusCode);
 }
 
+void testProtocolAcceptsJsonWhitespaceAroundEveryValueType() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeAuthenticator authenticator;
+    ProtocolHandler protocol(scenes, storage, authenticator);
+
+    TEST_ASSERT_EQUAL_UINT16(204, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/mode",
+        " \n{ \"mode\" \t: \r\n\"spotify\" } \t"), {}).statusCode);
+    TEST_ASSERT_EQUAL(DisplayMode::spotify, scenes.mode());
+    TEST_ASSERT_EQUAL_UINT16(204, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify",
+        R"({
+            "trackId": "example-track-id",
+            "title": "Example Track",
+            "artist": "Example Artist",
+            "isPlaying": true,
+            "durationMs": 180000,
+            "progressMs": 42000,
+            "sampledAtUnixMs": 1790000000000
+        })"), {}).statusCode);
+    TEST_ASSERT_EQUAL_UINT64(42'000, scenes.currentState().progressMs);
+}
+
 void testProtocolSpotifyRouteValidatesFieldsAndClampsProgress() {
     FakeClock clock;
     FakeStorage storage;
@@ -361,6 +476,165 @@ void testProtocolSpotifyRouteValidatesFieldsAndClampsProgress() {
     TEST_ASSERT_EQUAL_UINT16(400, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify",
         R"({"trackId":"id","title":"title","artist":"artist","isPlaying":true,"durationMs":100,"progressMs":0,"sampledAtUnixMs":1.5})"),
         {"0.1.0", "192.0.2.1"}).statusCode);
+}
+
+void testProtocolRejectsMalformedJsonWithoutChangingPlayback() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeAuthenticator authenticator;
+    ProtocolHandler protocol(scenes, storage, authenticator);
+    scenes.updateNowPlaying(makeTrack());
+    const std::string valid = makeSpotifyJson();
+    const std::string duplicate = valid.substr(0, valid.size() - 1) + R"(,"title":"duplicate"})";
+    const std::string missing = R"({"trackId":"id","title":"title","artist":"artist","isPlaying":true,"durationMs":100,"progressMs":0})";
+    const std::string wrongType = makeSpotifyJson("null");
+    const std::string invalidBodies[] = {
+        "", "{}", "[]", valid.substr(0, valid.size() - 1), valid + "x", duplicate, missing, wrongType,
+        R"({"trackId":"","title":"title","artist":"artist","isPlaying":true,"durationMs":100,"progressMs":0,"sampledAtUnixMs":1})",
+        R"({"trackId":"id","title":"title","artist":"artist","isPlaying":1,"durationMs":100,"progressMs":0,"sampledAtUnixMs":1})",
+        valid.substr(0, valid.size() - 1) + ",}"
+    };
+    for (const auto& body : invalidBodies) {
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(400, protocol.handle(
+            jsonRequest(HttpMethod::put, "/api/v1/spotify", body), {}).statusCode, body.c_str());
+        TEST_ASSERT_TRUE(scenes.nowPlaying()->trackId.view() == "track-1");
+        TEST_ASSERT_EQUAL_UINT64(200, scenes.currentState().progressMs);
+    }
+    clock.currentMillis = 45'001;
+    protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", duplicate), {});
+    scenes.heartbeat();
+    TEST_ASSERT_EQUAL(ActiveScene::gif, scenes.currentState().activeScene);
+}
+
+void testProtocolValidatesUtf8EscapesAndCodePointLimits() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeAuthenticator authenticator;
+    ProtocolHandler protocol(scenes, storage, authenticator);
+    std::string title = "\"";
+    for (std::size_t index = 0; index < 256; ++index) title += "\xf0\x9f\x9a\x80";
+    title += '"';
+    std::string body = makeSpotifyJson(title);
+    TEST_ASSERT_EQUAL_UINT16(204, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", body), {}).statusCode);
+    TEST_ASSERT_EQUAL_UINT16(1024, scenes.nowPlaying()->title.length);
+    title.insert(title.size() - 1, "a");
+    body = makeSpotifyJson(title);
+    TEST_ASSERT_EQUAL_UINT16(400, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", body), {}).statusCode);
+
+    std::string escapedTitle = "\"";
+    for (std::size_t index = 0; index < 256; ++index) escapedTitle += R"(\ud83d\ude80)";
+    escapedTitle += '"';
+    body = makeSpotifyJson(escapedTitle);
+    TEST_ASSERT_EQUAL_UINT16(204, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", body), {}).statusCode);
+    TEST_ASSERT_EQUAL_UINT16(1024, scenes.nowPlaying()->title.length);
+    const std::string invalidTitles[] = {
+        R"("\ud800")", R"("\udc00")", R"("\ud800\u0041")", R"("\u12")", R"("\q")",
+        "\"\xc0\xaf\"", "\"\xed\xa0\x80\"", "\"\xf4\x90\x80\x80\"", "\"\xe2\x82\"", "\"\x80\"", "\"\n\""
+    };
+    for (const auto& invalidTitle : invalidTitles) {
+        body = makeSpotifyJson(invalidTitle);
+        TEST_ASSERT_EQUAL_UINT16(400, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", body), {}).statusCode);
+    }
+    body = makeSpotifyJson(R"("\"\\\/\b\f\n\r\t\u0000")");
+    TEST_ASSERT_EQUAL_UINT16(204, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", body), {}).statusCode);
+    const char expected[] = {'"', '\\', '/', '\b', '\f', '\n', '\r', '\t', '\0'};
+    TEST_ASSERT_EQUAL_UINT16(sizeof(expected), scenes.nowPlaying()->title.length);
+    TEST_ASSERT_EQUAL_MEMORY(expected, scenes.nowPlaying()->title.bytes.data(), sizeof(expected));
+}
+
+void testProtocolAcceptsExactIntegerNotationAndRejectsOverflow() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeAuthenticator authenticator;
+    ProtocolHandler protocol(scenes, storage, authenticator);
+    const struct { const char* input; std::uint64_t expected; } validNumbers[] = {
+        {"-0", 0}, {"0e999999999999999999999", 0}, {"1.2e2", 120}, {"1200e-1", 120},
+        {"1.000", 1}, {"18446744073709551615", std::numeric_limits<std::uint64_t>::max()},
+        {"184467440737095516150e-1", std::numeric_limits<std::uint64_t>::max()}
+    };
+    for (const auto& number : validNumbers) {
+        const std::string body = makeSpotifyJson("\"title\"", number.input);
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(204, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", body), {}).statusCode, number.input);
+        TEST_ASSERT_EQUAL_UINT64(number.expected, scenes.nowPlaying()->durationMs);
+    }
+    const char* invalidNumbers[] = {
+        "-1", "01", "+1", "1.", ".1", "1e", "1e+", "1.1", "1e-1", "18446744073709551616",
+        "18446744073709551616.0", "18446744073709551616e0", "1e20", "1e99999999999999999999", "null", "true"
+    };
+    for (const auto* number : invalidNumbers) {
+        const std::string body = makeSpotifyJson("\"title\"", number);
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(400, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", body), {}).statusCode, number);
+    }
+}
+
+void testEveryMutatingRouteAuthenticatesBeforeProcessing() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    BearerTokenAuthenticator authenticator("test-token");
+    ProtocolHandler protocol(scenes, storage, authenticator);
+    const char* paths[] = {"/api/v1/mode", "/api/v1/spotify", "/api/v1/cover", "/api/v1/animation", "/api/v1/heartbeat"};
+    const char* credentials[] = {"", "test-token", "Bearer wrong-token", "Bearer test-token-extra", "Bearer test-token "};
+    for (const auto* path : paths) {
+        for (const auto* credential : credentials) {
+            const auto response = protocol.handle(jsonRequest(HttpMethod::put, path, "malformed", credential), {});
+            TEST_ASSERT_EQUAL_UINT16(401, response.statusCode);
+            TEST_ASSERT_NULL(std::strstr(response.body.data(), "test-token"));
+        }
+    }
+    TEST_ASSERT_FALSE(storage.modeAvailable);
+    TEST_ASSERT_NULL(scenes.nowPlaying());
+    TEST_ASSERT_FALSE(scenes.currentState().agentAvailable);
+    TEST_ASSERT_TRUE(authenticator.isAuthorized("bEaReR test-token"));
+    BearerTokenAuthenticator unconfigured("");
+    TEST_ASSERT_FALSE(unconfigured.isAuthorized("Bearer "));
+}
+
+void testProtocolRejectsWrongMethodsMediaTypesAndBodies() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeAuthenticator authenticator;
+    ProtocolHandler protocol(scenes, storage, authenticator);
+    const HttpRequest invalidRequests[] = {
+        {HttpMethod::post, "/api/v1/status", {}, {}, {}},
+        {HttpMethod::get, "/api/v1/status", {}, {}, "{}"},
+        {HttpMethod::post, "/api/v1/mode", {}, "application/json", R"({"mode":"gif"})"},
+        {HttpMethod::post, "/api/v1/spotify", {}, "application/json", "{}"},
+        {HttpMethod::put, "/api/v1/heartbeat", {}, {}, {}},
+        {HttpMethod::post, "/api/v1/heartbeat", {}, {}, "{}"},
+        {HttpMethod::post, "/api/v1/cover", {}, {}, {}},
+        {HttpMethod::post, "/api/v1/animation", {}, {}, {}}
+    };
+    for (const auto& request : invalidRequests) TEST_ASSERT_EQUAL_UINT16(400, protocol.handle(request, {}).statusCode);
+    TEST_ASSERT_EQUAL_UINT16(415, protocol.handle({HttpMethod::put, "/api/v1/mode", {}, "text/plain", R"({"mode":"gif"})"}, {}).statusCode);
+    TEST_ASSERT_EQUAL_UINT16(415, protocol.handle({HttpMethod::put, "/api/v1/spotify", {}, {}, "{}"}, {}).statusCode);
+    TEST_ASSERT_EQUAL_UINT16(204, protocol.handle({HttpMethod::put, "/api/v1/mode", {}, " APPLICATION/JSON ; charset=utf-8", R"({"mode":"gif"})"}, {}).statusCode);
+    storage.modeWriteSucceeds = false;
+    TEST_ASSERT_EQUAL_UINT16(500, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/mode", R"({"mode":"spotify"})"), {}).statusCode);
+    TEST_ASSERT_EQUAL(DisplayMode::gif, scenes.mode());
+}
+
+void testStatusEscapingFitsResponseAtSchemaLimits() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeAuthenticator authenticator;
+    ProtocolHandler protocol(scenes, storage, authenticator);
+    storage.availableBytes = std::numeric_limits<std::uint64_t>::max();
+    const std::string text(64, '\x01');
+    const auto response = protocol.handle({HttpMethod::get, "/api/v1/status", {}, {}, {}}, {text, text});
+    TEST_ASSERT_EQUAL_UINT16(200, response.statusCode);
+    TEST_ASSERT_TRUE(response.bodySize < response.body.size());
+    TEST_ASSERT_TRUE(response.bodyView().back() == '}');
+    TEST_ASSERT_NOT_NULL(std::strstr(response.body.data(), "\\u0001"));
+    TEST_ASSERT_NOT_NULL(std::strstr(response.body.data(), "18446744073709551615"));
+    const std::string tooLong(65, 'a');
+    TEST_ASSERT_EQUAL_UINT16(500, protocol.handle({HttpMethod::get, "/api/v1/status", {}, {}, {}}, {tooLong, "192.0.2.1"}).statusCode);
+    TEST_ASSERT_EQUAL_UINT16(500, protocol.handle({HttpMethod::get, "/api/v1/status", {}, {}, {}}, {"\xc0\xaf", "192.0.2.1"}).statusCode);
 }
 
 void testHeartbeatRefreshesTimeoutAndBinaryRoutesStayExplicitlyUnavailable() {
@@ -440,12 +714,124 @@ void testAnimationReaderRejectsMalformedLengthsAndTiming() {
     TEST_ASSERT_FALSE(reader.open(metadata));
 }
 
+void testAnimationReaderRejectsInvalidHeadersAndAcceptsMaximumLayout() {
+    FakeStorage storage;
+    AnimationReader reader(storage);
+    AnimationMetadata metadata{};
+    for (std::size_t length = 0; length < 11; ++length) {
+        storage.animationBytes.resize(length);
+        TEST_ASSERT_FALSE(reader.open(metadata));
+    }
+    const struct { std::size_t offset; std::uint16_t value; } invalidHeaders[] = {
+        {0, 'X'}, {4, 2}, {5, 239}, {7, 241}, {9, 0}, {9, 21}, {9, 65'535}
+    };
+    for (const auto& invalid : invalidHeaders) {
+        storage.animationBytes = makeAnimation();
+        writeLittleEndian16(storage.animationBytes, invalid.offset, invalid.value);
+        TEST_ASSERT_FALSE(reader.open(metadata));
+        TEST_ASSERT_EQUAL_UINT16(0, metadata.frameCount);
+    }
+    storage.animationBytes = makeAnimation(20, 1'500);
+    TEST_ASSERT_TRUE(reader.open(metadata));
+    TEST_ASSERT_EQUAL_UINT16(20, metadata.frameCount);
+    TEST_ASSERT_EQUAL_UINT32(30'000, metadata.durationMs);
+    std::uint16_t delayMs = 0;
+    TEST_ASSERT_TRUE(reader.frameDelayMs(19, delayMs));
+    TEST_ASSERT_EQUAL_UINT16(1'500, delayMs);
+    storage.animationBytes = makeAnimation(1, 20);
+    TEST_ASSERT_TRUE(reader.open(metadata));
+}
+
+void testAnimationChunksRespectFrameAndDestinationBounds() {
+    FakeStorage storage;
+    storage.animationBytes = makeAnimation(2, 120);
+    storage.animationBytes[115'212] = 0xa5;
+    storage.animationBytes[115'215] = 0x5a;
+    AnimationReader reader(storage);
+    AnimationMetadata metadata{};
+    std::uint8_t chunk[] = {0xcc, 0xcc, 0xcc};
+    std::size_t bytesRead = 99;
+    TEST_ASSERT_FALSE(reader.readFrameChunk(0, 0, chunk, sizeof(chunk), bytesRead));
+    TEST_ASSERT_EQUAL_UINT32(0, bytesRead);
+    TEST_ASSERT_TRUE(reader.open(metadata));
+    TEST_ASSERT_TRUE(reader.readFrameChunk(0, 115'199, chunk, std::numeric_limits<std::size_t>::max(), bytesRead));
+    TEST_ASSERT_EQUAL_UINT32(1, bytesRead);
+    TEST_ASSERT_EQUAL_HEX8(0xa5, chunk[0]);
+    TEST_ASSERT_EQUAL_HEX8(0xcc, chunk[1]);
+    TEST_ASSERT_TRUE(reader.readFrameChunk(1, 0, chunk, 1, bytesRead));
+    TEST_ASSERT_EQUAL_HEX8(0x5a, chunk[0]);
+    const struct { std::uint16_t frame; std::uint32_t offset; std::size_t capacity; } invalidReads[] = {
+        {2, 0, 1}, {65'535, 0, 1}, {0, 115'200, 1}, {0, 0xffff'ffff, 1}, {0, 0, 0}
+    };
+    for (const auto& invalid : invalidReads) {
+        bytesRead = 99;
+        TEST_ASSERT_FALSE(reader.readFrameChunk(invalid.frame, invalid.offset, chunk, invalid.capacity, bytesRead));
+        TEST_ASSERT_EQUAL_UINT32(0, bytesRead);
+    }
+    TEST_ASSERT_FALSE(reader.readFrameChunk(0, 0, nullptr, 1, bytesRead));
+    TEST_ASSERT_EQUAL_UINT32(0, bytesRead);
+}
+
+void testAnimationReadFailuresReportNoUsableChunkAndCanRetry() {
+    FakeStorage storage;
+    storage.animationBytes = makeAnimation(2);
+    AnimationReader reader(storage);
+    AnimationMetadata metadata{};
+    storage.failedReadOffset = 0;
+    TEST_ASSERT_FALSE(reader.open(metadata));
+    storage.failedReadOffset = 115'213;
+    TEST_ASSERT_FALSE(reader.open(metadata));
+    TEST_ASSERT_EQUAL_UINT16(0, metadata.frameCount);
+    storage.failedReadOffset = std::numeric_limits<std::uint32_t>::max();
+    TEST_ASSERT_TRUE(reader.open(metadata));
+    storage.failedReadOffset = 11;
+    std::uint16_t delayMs = 777;
+    TEST_ASSERT_FALSE(reader.frameDelayMs(0, delayMs));
+    storage.failedReadOffset = 13;
+    storage.partialReadOnFailure = true;
+    storage.animationBytes[13] = 0x12;
+    storage.animationBytes[14] = 0x34;
+    std::uint8_t chunk[2]{};
+    std::size_t bytesRead = 99;
+    TEST_ASSERT_FALSE(reader.readFrameChunk(0, 0, chunk, sizeof(chunk), bytesRead));
+    TEST_ASSERT_EQUAL_UINT32(0, bytesRead);
+    storage.failedReadOffset = std::numeric_limits<std::uint32_t>::max();
+    TEST_ASSERT_TRUE(reader.readFrameChunk(0, 0, chunk, sizeof(chunk), bytesRead));
+    TEST_ASSERT_EQUAL_UINT32(2, bytesRead);
+    TEST_ASSERT_EQUAL_HEX8(0x12, chunk[0]);
+    TEST_ASSERT_EQUAL_HEX8(0x34, chunk[1]);
+    storage.animationBytes.resize(14);
+    TEST_ASSERT_FALSE(reader.readFrameChunk(0, 0, chunk, sizeof(chunk), bytesRead));
+    TEST_ASSERT_EQUAL_UINT32(0, bytesRead);
+}
+
+void testFailedAnimationReopenInvalidatesPreviousMetadata() {
+    FakeStorage storage;
+    storage.animationBytes = makeAnimation();
+    AnimationReader reader(storage);
+    AnimationMetadata metadata{};
+    TEST_ASSERT_TRUE(reader.open(metadata));
+    storage.animationBytes[0] = 'X';
+    TEST_ASSERT_FALSE(reader.open(metadata));
+    TEST_ASSERT_EQUAL_UINT16(0, metadata.frameCount);
+    std::uint16_t delayMs = 0;
+    TEST_ASSERT_FALSE(reader.frameDelayMs(0, delayMs));
+    std::uint8_t chunk[2]{};
+    std::size_t bytesRead = 99;
+    TEST_ASSERT_FALSE(reader.readFrameChunk(0, 0, chunk, sizeof(chunk), bytesRead));
+    TEST_ASSERT_EQUAL_UINT32(0, bytesRead);
+}
+
 } // namespace
 
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(testAutoSceneRequiresFreshHeartbeatAndPlayingTrack);
     RUN_TEST(testManualModesPersistAndSpotifyShowsWaitingWhenStale);
+    RUN_TEST(testHeartbeatsDoNotKeepStalePlaybackActive);
+    RUN_TEST(testOldSpotifySamplesExpireEvenWhenReceivedAgain);
+    RUN_TEST(testPlaybackFreshnessIncludesSampleAgeAndUsesMonotonicTime);
+    RUN_TEST(testFutureSampleAndExtremeProgressDoNotOverflow);
     RUN_TEST(testFailedModePersistenceDoesNotChangeCurrentMode);
     RUN_TEST(testPlaybackProgressAdvancesClampsAndStopsWhenPaused);
     RUN_TEST(testPlayingProgressAccountsForTimeSinceTheAgentSample);
@@ -455,10 +841,21 @@ int main(int, char**) {
     RUN_TEST(testProtocolModeRouteValidatesPersistsAndRequiresAuthentication);
     RUN_TEST(testBearerAuthenticatorChecksSchemeAndExactConfiguredToken);
     RUN_TEST(testProtocolRejectsInvalidClosedSchemaAndMalformedJson);
+    RUN_TEST(testProtocolAcceptsJsonWhitespaceAroundEveryValueType);
     RUN_TEST(testProtocolSpotifyRouteValidatesFieldsAndClampsProgress);
+    RUN_TEST(testProtocolRejectsMalformedJsonWithoutChangingPlayback);
+    RUN_TEST(testProtocolValidatesUtf8EscapesAndCodePointLimits);
+    RUN_TEST(testProtocolAcceptsExactIntegerNotationAndRejectsOverflow);
+    RUN_TEST(testEveryMutatingRouteAuthenticatesBeforeProcessing);
+    RUN_TEST(testProtocolRejectsWrongMethodsMediaTypesAndBodies);
+    RUN_TEST(testStatusEscapingFitsResponseAtSchemaLimits);
     RUN_TEST(testHeartbeatRefreshesTimeoutAndBinaryRoutesStayExplicitlyUnavailable);
     RUN_TEST(testNetworkAdapterDispatchesOneRequestWithoutTransportCoupling);
     RUN_TEST(testAnimationReaderValidatesHeaderAndReadsRgb565InBoundedChunks);
     RUN_TEST(testAnimationReaderRejectsMalformedLengthsAndTiming);
+    RUN_TEST(testAnimationReaderRejectsInvalidHeadersAndAcceptsMaximumLayout);
+    RUN_TEST(testAnimationChunksRespectFrameAndDestinationBounds);
+    RUN_TEST(testAnimationReadFailuresReportNoUsableChunkAndCanRetry);
+    RUN_TEST(testFailedAnimationReopenInvalidatesPreviousMetadata);
     return UNITY_END();
 }

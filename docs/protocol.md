@@ -27,6 +27,8 @@ The persisted mode is exactly one of these values:
 
 Initial timeout interpretation: a missing heartbeat for 45 seconds makes the agent unavailable. In `auto` mode this returns to GIF; manual `spotify` mode stays on its waiting screen, as specified by the planning mode matrix. The default mode is `auto`; a manual selection persists across restarts.
 
+The native firmware also expires Spotify metadata independently using the same timeout, even when heartbeats continue. Its age includes the nonnegative Unix sample age at receipt plus monotonic elapsed time since receipt; exactly 45 seconds remains fresh. Expired metadata selects GIF in `auto` and the waiting state in `spotify`. Fresh playback samples must therefore arrive within the timeout. Heartbeats record presence only. Unix clock synchronization remains PENDING; see the [core review](firmware-core-review.md) for clock and integration limitations.
+
 The suggested Spotify polling interval is 15 seconds and will be configurable in the agent. Keeping `spotify` on its waiting screen after heartbeat expiration reconciles the mode matrix with the planning timeout behavior; revisit this if the maintainer wants the timeout to override manual mode as well.
 
 | Mode | Recent agent update and track playing | No track, paused, or agent stale |

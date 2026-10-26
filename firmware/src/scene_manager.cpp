@@ -27,15 +27,14 @@ bool SceneManager::setMode(DisplayMode mode) {
 void SceneManager::updateNowPlaying(const NowPlaying& nowPlaying) {
     nowPlaying_ = nowPlaying;
     nowPlaying_.progressMs = std::min(nowPlaying_.progressMs, nowPlaying_.durationMs);
+    const std::uint64_t nowUnixMs = clock_.unixMillis();
+    sampleAgeAtReceiptMs_ = nowUnixMs >= nowPlaying_.sampledAtUnixMs
+        ? nowUnixMs - nowPlaying_.sampledAtUnixMs : 0;
     if (nowPlaying_.isPlaying) {
-        const std::uint64_t nowUnixMs = clock_.unixMillis();
-        if (nowUnixMs >= nowPlaying_.sampledAtUnixMs) {
-            const std::uint64_t remaining = nowPlaying_.durationMs - nowPlaying_.progressMs;
-            const std::uint64_t sampleAge = nowUnixMs - nowPlaying_.sampledAtUnixMs;
-            nowPlaying_.progressMs = sampleAge >= remaining
-                ? nowPlaying_.durationMs
-                : nowPlaying_.progressMs + sampleAge;
-        }
+        const std::uint64_t remaining = nowPlaying_.durationMs - nowPlaying_.progressMs;
+        nowPlaying_.progressMs = sampleAgeAtReceiptMs_ >= remaining
+            ? nowPlaying_.durationMs
+            : nowPlaying_.progressMs + sampleAgeAtReceiptMs_;
     }
     receivedPlaybackMs_ = clock_.monotonicMillis();
     hasNowPlaying_ = true;
@@ -63,7 +62,10 @@ SceneState SceneManager::currentState() const {
     const std::uint64_t nowMs = clock_.monotonicMillis();
     const bool agentAvailable = hasHeartbeat_ && nowMs >= lastHeartbeatMs_ &&
         nowMs - lastHeartbeatMs_ <= heartbeatTimeoutMs_;
-    const bool playing = agentAvailable && hasNowPlaying_ && nowPlaying_.isPlaying;
+    const bool playbackFresh = hasNowPlaying_ && nowMs >= receivedPlaybackMs_ &&
+        sampleAgeAtReceiptMs_ <= heartbeatTimeoutMs_ &&
+        nowMs - receivedPlaybackMs_ <= heartbeatTimeoutMs_ - sampleAgeAtReceiptMs_;
+    const bool playing = agentAvailable && playbackFresh && nowPlaying_.isPlaying;
 
     if (mode_ == DisplayMode::gif) {
         return {ActiveScene::gif, false, agentAvailable, currentProgressMs(nowMs), hasNowPlaying_ ? &nowPlaying_ : nullptr};

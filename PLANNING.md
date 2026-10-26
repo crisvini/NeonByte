@@ -243,6 +243,8 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 
 **Verified hardware-independent progress:** the [native firmware notes](docs/firmware-development.md) document the host-only project, protocol coverage, memory constraints, and remaining dependencies. The native suite covers scene selection and timeout, progress correction, v1 JSON validation and responses, authentication, service interfaces, and bounded animation reads. This progress does not complete hardware validation, recovery, the binary upload routes, or Phase 4 acceptance.
 
+**Core review (2026-10-26):** the [review report](docs/firmware-core-review.md) records fixes for metadata that stayed active under continued heartbeats and rejection of valid JSON whitespace. The expanded 31-test native suite, AddressSanitizer/UndefinedBehaviorSanitizer run, and complete repository checks passed. Host stack measurements are documented as integration constraints; target memory, hardware validation, recovery, uploads, and all board-specific work remain **PENDING**. No later phase is authorized by this review.
+
 - [x] Create a C++17 PlatformIO native test environment without selecting a device board.
 - [x] Implement host-tested scene modes, Spotify progress correction, and heartbeat fallback.
 - [x] Implement transport-independent validation and handling for the v1 JSON status, mode, Spotify, and heartbeat routes.

@@ -113,7 +113,11 @@ private:
             return false;
         }
         skipWhitespace();
-        return consume(':');
+        if (!consume(':')) {
+            return false;
+        }
+        skipWhitespace();
+        return true;
     }
 
     bool nextProperty() {

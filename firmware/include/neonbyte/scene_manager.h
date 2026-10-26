@@ -36,6 +36,7 @@ private:
     std::uint64_t heartbeatTimeoutMs_;
     std::uint64_t lastHeartbeatMs_ = 0;
     std::uint64_t receivedPlaybackMs_ = 0;
+    std::uint64_t sampleAgeAtReceiptMs_ = 0;
     bool hasHeartbeat_ = false;
     bool hasNowPlaying_ = false;
     NowPlaying nowPlaying_{};
