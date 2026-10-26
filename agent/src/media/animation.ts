@@ -101,7 +101,7 @@ function rgb565Pixels(rgba: Uint8Array): Buffer {
 
 function assertDimensions(width: number, height: number): void {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width * height > DEFAULT_LIMITS.maxFramePixels) {
-    throw new Error("As dimensões da imagem não são válidas para a prévia 240 × 240.");
+    throw new Error("Image dimensions are invalid for the 240 × 240 preview.");
   }
 }
 
@@ -125,12 +125,12 @@ export function validateGifFrameDescriptors(
       left + width > canvasWidth || top + height > canvasHeight ||
       framePixels > maxFramePixels
     ) {
-      throw new Error("O GIF contém um descritor de quadro fora do limite da tela.");
+      throw new Error("The GIF contains a frame descriptor outside the screen bounds.");
     }
 
     totalFramePixels += framePixels;
     if (totalFramePixels > maxTotalFramePixels) {
-      throw new Error(`O GIF excede o limite total de ${maxTotalFramePixels} pixels nos quadros.`);
+      throw new Error(`The GIF exceeds the total frame limit of ${maxTotalFramePixels} pixels.`);
     }
   }
 }
@@ -143,7 +143,7 @@ function rgbaFrameToCanvas(frame: ParsedFrame, canvas: Uint8Array, width: number
     left + frameWidth > width || top + frameHeight > height ||
     frame.patch.length !== frameWidth * frameHeight * 4
   ) {
-    throw new Error("O GIF contém um quadro inválido e não pode ser pré-visualizado.");
+    throw new Error("The GIF contains an invalid frame and cannot be previewed.");
   }
 
   for (let y = 0; y < frameHeight; y += 1) {
@@ -209,11 +209,11 @@ export function convertGifToAnimation(input: Uint8Array, limits: AnimationLimits
   const maxTotalFramePixels = limits.maxTotalFramePixels ?? DEFAULT_LIMITS.maxTotalFramePixels;
   const maxDurationMs = limits.maxDurationMs ?? DEFAULT_LIMITS.maxDurationMs;
   if (input.byteLength > maxUploadBytes) {
-    throw new Error(`O GIF excede o limite de ${maxUploadBytes} bytes.`);
+    throw new Error(`The GIF exceeds the ${maxUploadBytes}-byte limit.`);
   }
   const signature = Buffer.from(input.subarray(0, 6)).toString("ascii");
   if (signature !== "GIF87a" && signature !== "GIF89a") {
-    throw new Error("GIF inválido: o arquivo não tem uma assinatura GIF reconhecida.");
+    throw new Error("Invalid GIF: the file has no recognized GIF signature.");
   }
 
   try {
@@ -222,16 +222,16 @@ export function convertGifToAnimation(input: Uint8Array, limits: AnimationLimits
     const width = gif.lsd.width;
     const height = gif.lsd.height;
     if (width * height > maxFramePixels) {
-      throw new Error("O GIF tem dimensões grandes demais para a prévia 240 × 240.");
+      throw new Error("The GIF dimensions are too large for the 240 × 240 preview.");
     }
     assertDimensions(width, height);
     const imageFrames = gif.frames.filter((frame) => "image" in frame);
     const imageFrameCount = imageFrames.length;
     if (imageFrameCount === 0) {
-      throw new Error("O GIF não contém quadros de imagem.");
+      throw new Error("The GIF contains no image frames.");
     }
     if (imageFrameCount > maxFrames) {
-      throw new Error(`O GIF tem ${imageFrameCount} quadros; o limite atual para a prévia é ${maxFrames}.`);
+      throw new Error(`The GIF has ${imageFrameCount} frames; the current preview limit is ${maxFrames}.`);
     }
 
     validateGifFrameDescriptors(width, height, imageFrames.map((frame) => frame.image.descriptor), {
@@ -261,7 +261,7 @@ export function convertGifToAnimation(input: Uint8Array, limits: AnimationLimits
       const delayMs = Math.max(20, frame.delay > 0 ? Math.trunc(frame.delay) : 100);
       durationMs += delayMs;
       if (durationMs > maxDurationMs) {
-        throw new Error(`A animação excede o limite de ${maxDurationMs} ms para a prévia.`);
+        throw new Error(`The animation exceeds the ${maxDurationMs} ms preview limit.`);
       }
       composedFrames.push({ pixels: rgb565Pixels(coverScale(canvas, width, height)), delayMs });
       restorePrevious = savedCanvas;
@@ -281,10 +281,10 @@ export function convertGifToAnimation(input: Uint8Array, limits: AnimationLimits
     validateAnimation(bytes, sha256, { maxFrames, maxDurationMs });
     return { bytes, sha256, frameCount: composedFrames.length, durationMs };
   } catch (error) {
-    if (error instanceof Error && /limite|dimensões|descritor|pixels|quadros|animação|prévia/i.test(error.message)) {
+    if (error instanceof Error && /limit|dimensions|descriptor|pixels|frames|animation|preview/i.test(error.message)) {
       throw error;
     }
-    throw new Error("GIF inválido ou incompatível. Escolha um GIF animado menor e tente novamente.");
+    throw new Error("Invalid or unsupported GIF. Choose a smaller animated GIF and try again.");
   }
 }
 
@@ -297,31 +297,31 @@ export function validateAnimation(
   const maxFrames = limits.maxFrames ?? DEFAULT_LIMITS.maxFrames;
   const maxDurationMs = limits.maxDurationMs ?? DEFAULT_LIMITS.maxDurationMs;
   if (expectedSha256 !== digest(bytes)) {
-    throw new Error("O checksum da animação não confere.");
+    throw new Error("The animation checksum does not match.");
   }
   if (bytes.length < ANIMATION_HEADER_BYTES || bytes.toString("ascii", 0, 4) !== ANIMATION_MAGIC || bytes.readUInt8(4) !== MEDIA_VERSION) {
-    throw new Error("O formato da animação é inválido ou incompatível.");
+    throw new Error("The animation format is invalid or unsupported.");
   }
   const width = bytes.readUInt16LE(5);
   const height = bytes.readUInt16LE(7);
   const frameCount = bytes.readUInt16LE(9);
   if (width !== DISPLAY_WIDTH || height !== DISPLAY_HEIGHT || frameCount < 1 || frameCount > maxFrames) {
-    throw new Error("As dimensões ou a quantidade de quadros da animação excedem o limite.");
+    throw new Error("The animation dimensions or frame count exceed the limit.");
   }
   const frameBytes = COVER_BYTES + 2;
   if (bytes.length !== ANIMATION_HEADER_BYTES + frameCount * frameBytes) {
-    throw new Error("O arquivo da animação está incompleto ou contém dados extras.");
+    throw new Error("The animation file is incomplete or contains trailing data.");
   }
   let durationMs = 0;
   for (let index = 0, offset = ANIMATION_HEADER_BYTES; index < frameCount; index += 1, offset += frameBytes) {
     const delayMs = bytes.readUInt16LE(offset);
     if (delayMs < 20) {
-      throw new Error("A temporização de um quadro da animação é inválida.");
+      throw new Error("An animation frame has invalid timing.");
     }
     durationMs += delayMs;
   }
   if (durationMs > maxDurationMs) {
-    throw new Error("A duração da animação excede o limite da prévia.");
+    throw new Error("The animation duration exceeds the preview limit.");
   }
   return { width, height, frameCount, durationMs, sha256: expectedSha256 };
 }
@@ -329,7 +329,7 @@ export function validateAnimation(
 export function createCoverAsset(input: Uint8Array, sourceWidth: number, sourceHeight: number): MediaAsset {
   assertDimensions(sourceWidth, sourceHeight);
   if (input.byteLength !== sourceWidth * sourceHeight * 4) {
-    throw new Error("As dimensões dos pixels da capa não correspondem aos dados enviados.");
+    throw new Error("The cover pixel dimensions do not match the submitted data.");
   }
   const scaled = coverScale(input, sourceWidth, sourceHeight);
   const bytes = Buffer.alloc(COVER_HEADER_BYTES + COVER_BYTES);
@@ -341,7 +341,7 @@ export function createCoverAsset(input: Uint8Array, sourceWidth: number, sourceH
 export function validateCover(input: Uint8Array, expectedSha256: string): MediaMetadata {
   const bytes = Buffer.from(input);
   if (expectedSha256 !== digest(bytes)) {
-    throw new Error("O checksum da capa não confere.");
+    throw new Error("The cover checksum does not match.");
   }
   if (
     bytes.length !== COVER_HEADER_BYTES + COVER_BYTES ||
@@ -350,7 +350,7 @@ export function validateCover(input: Uint8Array, expectedSha256: string): MediaM
     bytes.readUInt16LE(5) !== DISPLAY_WIDTH ||
     bytes.readUInt16LE(7) !== DISPLAY_HEIGHT
   ) {
-    throw new Error("O formato da capa é inválido ou incompatível.");
+    throw new Error("The cover format is invalid or unsupported.");
   }
   return { width: DISPLAY_WIDTH, height: DISPLAY_HEIGHT, sha256: expectedSha256 };
 }

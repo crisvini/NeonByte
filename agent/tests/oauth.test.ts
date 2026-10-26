@@ -151,7 +151,7 @@ test("clears an expired or revoked refresh token and requires authorization agai
     fetchImpl: async () => new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }),
   });
 
-  await assert.rejects(oauth.getAccessToken(), /autorização novamente/i);
+  await assert.rejects(oauth.getAccessToken(), /authorization command again/i);
   assert.equal(store.value, null);
   assert.equal(store.clears, 1);
 });
@@ -166,7 +166,7 @@ test("rejects non-loopback callback URLs before opening an OAuth flow", () => {
     clientId: "client-id",
     redirectUri: "http://127.0.0.1:0/callback",
     tokenStore: new MemoryTokenStore(),
-  }), /porta/i);
+  }), /port/i);
 });
 
 test("receives the authorization code through a loopback callback and rejects a wrong state", async () => {
@@ -192,7 +192,7 @@ test("receives the authorization code through a loopback callback and rejects a 
       const badCallback = new URL(secondListener.redirectUri);
       badCallback.search = new URLSearchParams({ code: "must-not-be-accepted", state: "wrong-state" }).toString();
       assert.equal((await fetch(badCallback)).status, 400);
-      await assert.rejects(rejectedCallback, /estado/i);
+      await assert.rejects(rejectedCallback, /state validation/i);
     } finally {
       await secondListener.close();
     }

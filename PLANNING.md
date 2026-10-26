@@ -1,74 +1,74 @@
-# NeonByte — Plano de implementação
+# NeonByte — Implementation Plan
 
-> **Status:** Etapas 1, 2 e 3 implementadas; validação OAuth com conta real pendente de credenciais Spotify. A Etapa 4 aguarda autorização explícita e identificação do hardware · **Licença pretendida:** MIT · **Dispositivo-alvo:** JUZIPi SD PRO (identificação de hardware pendente)
+> **Status:** Phases 1, 2, and 3 are complete; OAuth validation with a real account is pending Spotify credentials. Phase 4 awaits explicit approval and hardware identification · **Intended license:** MIT · **Target device:** JUZIPi SD PRO (hardware identification pending)
 >
-> **Regra principal:** implementar as fases sequencialmente; nenhuma gravação de firmware até validar o hardware e documentar recuperação.
+> **Primary rule:** implement phases sequentially; do not flash firmware until the hardware is validated and recovery is documented.
 
-## 1. Objetivo e escopo
+## 1. Objective and Scope
 
-Construir o **NeonByte**, um projeto open-source composto por firmware próprio para um pequeno display Wi-Fi e um agente desktop que consulta o Spotify. O dispositivo apresenta **exatamente duas telas**:
+Build **NeonByte**, an open-source project consisting of custom firmware for a small Wi-Fi display and a desktop agent that reads Spotify. The device presents **exactly two screens**:
 
-1. **Spotify Now Playing:** capa do álbum, título, artista e progresso da faixa.
-2. **GIF fullscreen:** animação ocupando toda a tela, reproduzida em loop sem elementos sobrepostos.
+1. **Spotify Now Playing:** album cover, title, artist, and track progress.
+2. **Fullscreen GIF:** animation fills the entire screen and loops with no overlays.
 
-**Comportamento padrão:** reprodução ativa no Spotify → Spotify; pausa, ausência de reprodução ou indisponibilidade do agente → GIF. O usuário pode escolher `auto`, `spotify` ou `gif` manualmente. No modo `spotify` sem música, mostrar um estado de espera discreto (não inventar faixa). O GIF deve permanecer disponível após reiniciar o relógio; se o PC desligar e o display ainda estiver energizado, o GIF continua.
+**Default behavior:** active Spotify playback → Spotify; paused playback, no playback, or an unavailable agent → GIF. The user can manually select `auto`, `spotify`, or `gif`. In `spotify` mode with no music, show a subtle waiting state (do not invent a track). The GIF must remain available after the clock restarts; if the PC shuts down while the display remains powered, the GIF continues.
 
-### Fora de escopo para a primeira versão
+### Out of Scope for the First Version
 
-- Home Assistant, MQTT, banco de dados, Docker, nuvem obrigatória, aplicativo móvel, controle de reprodução ou integração com outros players.
-- Editor de GIF, múltiplos GIFs, transições sofisticadas ou vários temas.
-- Áudio tocado no relógio: ele **mostra** informações, não reproduz músicas.
-- Compatibilidade com variantes não verificadas do SD PRO.
+- Home Assistant, MQTT, databases, Docker, required cloud services, mobile apps, playback control, or integration with other players.
+- GIF editor, multiple GIFs, elaborate transitions, or multiple themes.
+- Audio playback on the clock: it **displays** information; it does not play music.
+- Compatibility with unverified SD PRO variants.
 
-## 2. Premissas que precisam de validação
+## 2. Assumptions Requiring Validation
 
-- **Não assumir** chip, pinagem SPI, driver do LCD, backlight, orientação, tamanho de flash, esquema de partições, sistema de arquivos ou layout OTA só pelo nome comercial do dispositivo.
-- A tela esperada é **240 × 240**; validar resolução, rotação e cores no hardware real.
-- Confirmar se existe meio confiável de salvar/restaurar o firmware original e recuperar o dispositivo (ex.: conexão serial e modo bootloader) antes de flash.
-- Investigar limitações de RAM, armazenamento, tamanho máximo de firmware, velocidade de desenho e desgaste de flash.
-- Confirmar exigências atuais da Spotify Web API (escopos, modalidade de app, regras de rate limit e credenciais) na documentação oficial durante a implementação.
-- Verificar as licenças de bibliotecas, fontes e assets adicionados ao projeto, respeitando atribuições.
+- **Do not assume** the chip, SPI pinout, LCD driver, backlight, orientation, flash size, partition scheme, file system, or OTA layout from the device's commercial name alone.
+- The expected display is **240 × 240**; validate resolution, rotation, and colors on the actual hardware.
+- Confirm a reliable way to back up and restore the original firmware and recover the device (for example, a serial connection and bootloader mode) before flashing.
+- Investigate RAM, storage, maximum firmware size, drawing speed, and flash wear limits.
+- Confirm current Spotify Web API requirements (scopes, app mode, rate-limit rules, and credentials) in the official documentation during implementation.
+- Verify licenses for libraries, fonts, and assets added to the project, including attribution requirements.
 
-**Marco bloqueante:** sem evidência técnica para identificar e recuperar o dispositivo, manter o desenvolvimento no simulador; não adivinhar configurações de hardware.
+**Blocking milestone:** without technical evidence to identify and recover the device, keep development in the simulator; do not guess hardware settings.
 
-## 3. Arquitetura proposta
+## 3. Proposed Architecture
 
-```text
+~~~text
 Spotify Web API
       |
-      | OAuth + consulta HTTPS (somente no computador)
+      | OAuth + HTTPS polling (computer only)
       v
 NeonByte Agent (Node.js + TypeScript)
-  - OAuth, refresh token e armazenamento seguro
-  - polling e normalização de estado
-  - conversão/cache da arte do álbum
-  - conversão/otimização do GIF
-  - configuração web somente em localhost
-  - comunicação e sincronização com o relógio
+  - OAuth, refresh token, and secure storage
+  - Polling and state normalization
+  - Album art conversion and cache
+  - GIF conversion and optimization
+  - Configuration UI bound to localhost only
+  - Communication and synchronization with the clock
       |
-      | HTTP local autenticado / Wi-Fi
+      | Authenticated local HTTP / Wi-Fi
       v
-NeonByte Firmware (C++ / PlatformIO, plataforma a confirmar)
-  - Wi-Fi e pareamento local
-  - renderização da tela Spotify
-  - player de animação otimizada fullscreen
-  - armazenamento persistente do GIF e configurações
-  - fallback em perda de conectividade
-```
+NeonByte Firmware (C++ / PlatformIO, platform to be confirmed)
+  - Wi-Fi and local pairing
+  - Spotify screen rendering
+  - Fullscreen optimized animation player
+  - Persistent storage for GIFs and settings
+  - Fallback when connectivity is lost
+~~~
 
-O agente inicia automaticamente **no login do usuário** (Windows 11 e Fedora), sem precisar manter terminal aberto. Não é necessário iniciá-lo antes do login. A conexão local e o Spotify podem falhar temporariamente; o sistema deve se recuperar sem intervenção.
+The agent starts automatically **when the user logs in** (Windows 11 and Fedora), without requiring an open terminal. It does not need to start before login. Local connectivity and Spotify can fail temporarily; the system must recover without intervention.
 
-### Responsabilidades
+### Responsibilities
 
-| Componente | Responsabilidades | Não deve fazer |
+| Component | Responsibilities | Must not do |
 |---|---|---|
-| Agente | OAuth, Spotify, polling, cache, conversão de mídia, UI de configuração, envio de atualizações | Guardar segredos no firmware; exigir container ou banco |
-| Firmware | Exibir cenas, atualizar progresso localmente, reproduzir GIF, persistir assets e responder a comandos | Chamar Spotify diretamente; depender de Internet para GIF |
-| Simulador | Reproduzir a lógica visual e testar protocolos antes do flash | Fingir que testes no browser validam o hardware |
+| Agent | OAuth, Spotify, polling, caching, media conversion, configuration UI, sending updates | Store secrets in firmware; require a container or database |
+| Firmware | Display scenes, update progress locally, play GIFs, persist assets, and respond to commands | Call Spotify directly; depend on the Internet for GIF playback |
+| Simulator | Reproduce visual behavior and test protocols before flashing | Pretend browser tests validate hardware |
 
-## 4. Estrutura do repositório
+## 4. Repository Structure
 
-```text
+~~~text
 NeonByte/
 ├── PLANNING.md
 ├── README.md
@@ -105,73 +105,73 @@ NeonByte/
 │   └── test/
 └── assets/
     └── samples/
-```
+~~~
 
-A estrutura pode ser ajustada se houver justificativa registrada. Evitar abstrações prematuras e dependências pesadas.
+The structure may change when there is a documented reason. Avoid premature abstractions and heavy dependencies.
 
-## 5. Comportamento funcional
+## 5. Functional Behavior
 
-### 5.1 Modos de tela
+### 5.1 Display Modes
 
-| Configuração | Spotify tocando | Pausado/sem faixa/agente offline |
+| Setting | Spotify playing | Paused/no track/agent offline |
 |---|---|---|
-| `auto` (padrão) | Spotify | GIF |
-| `spotify` | Spotify | Estado de espera da tela Spotify |
+| `auto` (default) | Spotify | GIF |
+| `spotify` | Spotify | Spotify waiting state |
 | `gif` | GIF | GIF |
 
-- Em `auto`, detectar reprodução com base no estado confirmado pela API; não inferir que uma janela do Spotify aberta significa reprodução.
-- Aplicar **timeout de atualização** configurável: se o agente deixar de enviar heartbeat por um período definido (exemplo inicial: 45 s), o firmware volta ao GIF.
-- Quando o Spotify pausar, fazer transição para GIF sem exigir reboot.
-- A troca manual deve persistir após reinicialização.
+- In `auto` mode, detect playback from the confirmed API state; do not infer playback from an open Spotify window.
+- Apply a configurable **update timeout**: if the agent stops sending a heartbeat for a defined period (initial example: 45 seconds), firmware returns to GIF.
+- When Spotify pauses, switch to GIF without requiring a reboot.
+- The manual selection must persist after restart.
 
 ### 5.2 Spotify
 
-- Exibir capa em proporção correta, título e artista com truncamento/scroll controlado e barra de progresso.
-- Progresso avança no firmware entre sincronizações e é corrigido quando chegar novo timestamp da reprodução.
-- Polling inicial sugerido: **15 s** (configurável); tratar `429` e `Retry-After`, falhas de rede, `204 No Content`, expiração e renovação de tokens.
-- Atualizar capa apenas quando a faixa/arte mudar; transferir dados em formato apropriado ao LCD.
-- Não exibir tokens ou segredos em logs, URLs compartilhadas ou respostas do dispositivo.
-- Fluxo Spotify recomendado para app local: **Authorization Code com PKCE**, com redirect em loopback permitido pela plataforma e escopo mínimo de leitura da reprodução. Conferir regras atualizadas antes de codificar.
+- Display the cover at the correct aspect ratio, title, artist, controlled truncation/scrolling, and a progress bar.
+- Progress advances in firmware between syncs and is corrected when a new playback timestamp arrives.
+- Suggested initial polling interval: **15 seconds** (configurable); handle `429` and `Retry-After`, network failures, `204 No Content`, token expiration, and token refresh.
+- Update the cover only when the track or cover changes; transfer data in a format suitable for the LCD.
+- Do not show tokens or secrets in logs, shared URLs, or device responses.
+- Recommended Spotify flow for a local app: **Authorization Code with PKCE**, with a loopback redirect allowed by the platform and the minimum playback-read scope. Check current rules before coding.
 
-### 5.3 GIF fullscreen
+### 5.3 Fullscreen GIF
 
-- Interface do agente permite selecionar um GIF e visualizar prévia 240 × 240.
-- Converter para dimensões finais 240 × 240: política padrão `cover` (preencher e recortar), oferecendo alternativa `contain` apenas se realmente necessária.
-- Preservar temporização dos quadros sempre que possível; reduzir FPS, paleta ou número de frames conforme orçamento real de flash/RAM.
-- **Não pressupor que o ESP8266 decodificará GIF original em tempo real.** Agente gera um formato de animação próprio/otimizado e documentado, adequado a leitura sequencial/streaming da flash.
-- Validar integridade (tamanho, versão, checksum) antes de substituir a animação atual. Gravação atômica ou procedimento recuperável para não perder o GIF funcional em caso de falha.
-- GIF deve tocar em loop sem conexão com o computador, desde que o dispositivo esteja energizado.
+- The agent interface lets the user select a GIF and preview it at 240 × 240.
+- Convert to a final size of 240 × 240: default `cover` policy (fill and crop), with `contain` offered only if it is actually needed.
+- Preserve frame timing where possible; reduce FPS, palette, or frame count as required by measured flash/RAM limits.
+- **Do not assume the ESP8266 can decode an original GIF in real time.** The agent produces a documented, custom optimized animation format suitable for sequential/streaming reads from flash.
+- Validate integrity (size, version, checksum) before replacing the current animation. Use atomic writes or a recoverable procedure so a failure does not destroy the working GIF.
+- The GIF must loop without a computer connection while the device is powered.
 
-### 5.4 Aplicativo local de configuração
+### 5.4 Local Configuration App
 
-Interface acessível somente em `http://localhost:8787` (porta configurável) com:
+The app is available only at `http://localhost:8787` (configurable port) and includes:
 
-- Estado da conexão com o dispositivo.
-- Botão **Conectar Spotify** / reconectar.
-- Prévia de Spotify usando dados mock ou dados atuais.
-- Upload de GIF e prévia de como ficará na tela.
-- Seletor `Auto` / `Spotify` / `GIF`.
-- Endereço do dispositivo ou descoberta local (somente se descoberta for confiável).
-- Mensagens de erro acionáveis, sem mostrar segredos.
+- Device connection status.
+- **Connect Spotify** / reconnect button.
+- Spotify preview using mock data or current data.
+- GIF upload and preview of the device display.
+- `Auto` / `Spotify` / `GIF` selector.
+- Device address or local discovery (only if discovery is reliable).
+- Actionable error messages that do not reveal secrets.
 
-**Segurança local:** bind apenas em `127.0.0.1`, validação de inputs, proteção de endpoints mutáveis contra origens não autorizadas (CSRF/origin), limites de tamanho de upload. Não guardar credenciais em texto puro dentro do repositório; preferir cofre do sistema, com fallback documentado e permissões restritas.
+**Local security:** bind only to `127.0.0.1`, validate inputs, protect mutating endpoints against unauthorized origins (CSRF/origin), and limit upload size. Do not store credentials in plaintext in the repository; prefer the operating system's credential manager, with documented fallback and restricted permissions.
 
-## 6. Protocolo agente ↔ firmware (proposta inicial)
+## 6. Agent ↔ Firmware Protocol (Initial Proposal)
 
-O protocolo abaixo **é especificação a implementar**, não endpoints já existentes. Definir formato exato em `docs/protocol.md`, com versionamento (`v1`). Autenticar operações de alteração por token de pareamento, armazenado no agente e no dispositivo, sem expor o token em logs.
+The protocol below **is a specification to implement**, not a set of existing endpoints. Define the exact format in `docs/protocol.md`, with versioning (`v1`). Authenticate mutating operations with a pairing token stored by the agent and device; do not expose the token in logs.
 
-| Método | Endpoint | Uso |
+| Method | Endpoint | Use |
 |---|---|---|
-| `GET` | `/api/v1/status` | Firmware, versão do protocolo, IP, espaço livre, modo e cena ativa |
-| `PUT` | `/api/v1/mode` | Atualizar `auto`, `spotify` ou `gif` |
-| `PUT` | `/api/v1/spotify` | Atualizar metadados, `isPlaying`, duração, progresso e timestamp |
-| `PUT` | `/api/v1/cover` | Enviar imagem otimizada com identificação da faixa |
-| `PUT` | `/api/v1/animation` | Enviar arquivo otimizado de animação com validação de integridade |
-| `POST` | `/api/v1/heartbeat` | Renovar estado de presença do agente |
+| `GET` | `/api/v1/status` | Firmware version, protocol version, IP, free space, mode, and active scene |
+| `PUT` | `/api/v1/mode` | Set `auto`, `spotify`, or `gif` |
+| `PUT` | `/api/v1/spotify` | Update metadata, `isPlaying`, duration, progress, and timestamp |
+| `PUT` | `/api/v1/cover` | Send an optimized image with track identification |
+| `PUT` | `/api/v1/animation` | Send an optimized animation file with integrity validation |
+| `POST` | `/api/v1/heartbeat` | Refresh the agent presence state |
 
-Exemplo de payload para `PUT /api/v1/spotify`:
+Example payload for `PUT /api/v1/spotify`:
 
-```json
+~~~json
 {
   "trackId": "example-track-id",
   "title": "Example Track",
@@ -181,176 +181,180 @@ Exemplo de payload para `PUT /api/v1/spotify`:
   "progressMs": 42000,
   "sampledAtUnixMs": 1790000000000
 }
-```
+~~~
 
-Especificar e testar: limites de tamanho e texto, versão, erros HTTP, autenticação, timeout, reconnect, idempotência, checksum e comportamento se a capa chegar antes/depois dos metadados. O relógio não deve tentar abrir URLs HTTPS de capa diretamente.
+Specify and test: size and text limits, version, HTTP errors, authentication, timeout, reconnect, idempotency, checksum, and behavior when the cover arrives before or after metadata. The clock must not open Spotify cover HTTPS URLs directly.
 
-> **Segurança:** HTTP local com token protege contra alterações acidentais/não autorizadas em redes confiáveis, mas **não cifra** o tráfego. Documentar a limitação; para redes não confiáveis, avaliar alternativa segura em evolução futura.
+> **Security:** Local HTTP with a token protects against accidental or unauthorized changes on trusted networks, but it **does not encrypt** traffic. Document this limitation; evaluate a secure alternative for untrusted networks in future work.
 
-## 7. Etapas de implementação
+## 7. Implementation Phases
 
-Cada etapa contém **entrega, tarefas, testes, aceite e dependências**. Só avançar quando os critérios de aceite forem satisfeitos e houver aprovação explícita do mantenedor.
+Each phase includes deliverables, tasks, tests, acceptance criteria, and dependencies. Proceed only after acceptance criteria are met and the maintainer explicitly approves.
 
-### Etapa 1 — Fundação e investigação (sem tocar no relógio)
+### Phase 1 — Foundation and Investigation (Do Not Touch the Clock)
 
-**Entregáveis:** estrutura do repositório, `README.md`, `AGENTS.md`, documentação inicial, contratos, testes básicos e levantamento de hardware.
+**Deliverables:** repository structure, `README.md`, `AGENTS.md`, initial documentation, contracts, basic tests, and hardware investigation.
 
-- [x] Criar monorepo e convenções de scripts, estilo de código e CI básica.
-- [x] Registrar em `docs/hardware.md` evidências do modelo (fotos, interface original, link oficial de firmware/repositório, identificação da placa e hardware quando disponível).
-- [x] Levantar riscos de pinagem, bootloader, flash, OTA, filesystem e recuperação; marcar desconhecidos como `PENDENTE`, sem adivinhar.
-- [x] Especificar fluxos `auto`/`spotify`/`gif`, modelo de dados e API v1.
-- [x] Definir orçamento preliminar de recursos a ser medido no hardware (flash, RAM, FPS), sem números inventados.
-- [x] Preparar `.env.example` apenas com configurações não secretas e placeholders.
+- [x] Create the monorepo and conventions for scripts, code style, and basic CI.
+- [x] Record evidence for the model in `docs/hardware.md` (photos, original interface, official firmware/repository link, board and hardware identification when available).
+- [x] Identify pinout, bootloader, flash, OTA, file-system, and recovery risks; mark unknowns as `PENDING` without guessing.
+- [x] Specify `auto`/`spotify`/`gif` flows, data model, and v1 API.
+- [x] Define a preliminary resource budget to measure on hardware (flash, RAM, FPS), without invented values.
+- [x] Prepare `.env.example` with non-secret settings and placeholders only.
 
-**Aceite:** repositório abre, lint/testes iniciais executam, contratos e pendências estão documentados; nenhuma integração/flash iniciado.
+**Acceptance:** the repository setup is usable, initial lint/tests run, contracts and pending items are documented, no integration or flashing has started, and language consistency is verified.
 
-### Etapa 2 — Agente Spotify (sem firmware)
+### Phase 2 — Spotify Agent (No Firmware)
 
-**Entregáveis:** aplicação Node.js + TypeScript executável, autenticação, leitura e normalização do estado de reprodução.
+**Deliverables:** executable Node.js + TypeScript app, authentication, and reading/normalization of playback state.
 
-- [x] Configurar projeto TS, testes unitários, logs e tratamento de erros.
-- [x] Implementar OAuth Spotify Authorization Code + PKCE, callback em loopback e armazenamento seguro de refresh token.
-- [x] Consultar reprodução atual com o menor escopo aplicável, tratar `204`, `401`, `429`/`Retry-After`, offline e token expirado.
-- [x] Implementar polling configurável (valor inicial 15 s), comparador para não reenviar informações idênticas e cache de metadados.
-- [x] Criar adaptador mock para desenvolver sem conta Spotify e sem chamadas externas em testes.
-- [x] Expor estado interno ao simulador por interface local definida e testada (sem expor credenciais).
+- [x] Configure the TypeScript project, unit tests, logs, and error handling.
+- [x] Implement Spotify OAuth Authorization Code + PKCE, loopback callback, and secure refresh-token storage.
+- [x] Read current playback with the smallest applicable scope; handle `204`, `401`, `429`/`Retry-After`, offline state, and expired tokens.
+- [x] Implement configurable polling (initial value 15 seconds), a comparator to avoid identical updates, and metadata caching.
+- [x] Create a mock adapter for development without a Spotify account or external requests in tests.
+- [x] Expose internal state to the simulator through a defined and tested local interface (without exposing credentials).
 
-**Aceite:** fluxos OAuth e refresh cobertos por testes com mocks; validação de autenticação real pendente até configurar uma conta Spotify; mock reproduz play/pause/troca; testes passam; segredos não são enviados ao logger.
+**Acceptance:** OAuth and refresh flows are covered by mock-based tests; real-account authentication remains pending until a Spotify account is configured; the mock reproduces play/pause/track changes; tests pass; secrets are not sent to the logger; and language consistency is verified.
 
-**Revisão corretiva:** `make check` passou localmente com Node.js 22.12.0 e 24.21.0. A CI foi configurada para ambas as versões principais; a execução remota dessa alteração ainda depende de um novo push. A deduplicação considera o avanço esperado e corrige desvios superiores a 2 segundos; a integração com o relógio permanece pendente da etapa correspondente.
+**Corrective review:** `make check` passed locally with Node.js 22.12.0 and 24.21.0. CI was configured for both major versions; the remote run for that change still depends on a new push. Deduplication accounts for expected progress and corrects deviations greater than 2 seconds; clock integration remains pending for its corresponding phase.
 
-### Etapa 3 — Simulador e interface local (sem flash)
+### Phase 3 — Simulator and Local Interface (No Flashing)
 
-**Entregáveis:** prévia fiel 240 × 240 e painel local funcional.
+**Deliverables:** faithful 240 × 240 preview and functional local dashboard.
 
-- [x] Criar simulador das duas cenas com escala sem alterar a composição lógica de 240 × 240.
-- [x] Spotify: capa, título, artista, barra de progresso e estado sem reprodução.
-- [x] GIF: upload, validação, preview fullscreen, loop, política de corte e mensagem clara para GIF inviável.
-- [x] Implementar modos `auto`/`spotify`/`gif` e lógica de timeout do agente no simulador.
-- [x] Interface local `localhost:8787` para conexão Spotify, modo, GIF e status.
-- [x] Implementar conversão de GIF e capa para formato intermediário proposto, com testes de integridade e limites.
+- [x] Create a simulator for the two scenes with scaling that does not change the logical 240 × 240 composition.
+- [x] Spotify screen: cover, title, artist, progress bar, and no-playback state.
+- [x] GIF screen: upload, validation, fullscreen preview, looping, crop policy, and a clear message for unplayable GIFs.
+- [x] Implement `auto`/`spotify`/`gif` modes and agent-timeout behavior in the simulator.
+- [x] Implement the `localhost:8787` local interface for Spotify connection, mode, GIF, and status.
+- [x] Implement GIF and cover conversion to the proposed intermediate format, with integrity and limit tests.
 
-**Aceite:** com mock, iniciar/parar/trocar músicas altera cenas corretamente; GIF usa todo o frame; upload inválido é rejeitado; tudo funciona sem o dispositivo.
+**Acceptance:** with the mock, starting/stopping/changing tracks changes scenes correctly; the GIF fills the frame; invalid uploads are rejected; everything works without the device; and language consistency is verified.
 
-**Validação desta etapa:** `npm run check` passou com testes de contrato, mídia, cenas, modos, OAuth integrado e upload; a página e os assets foram verificados via `http://localhost`. A prévia é local e não valida a unidade física.
+**Phase validation:** `npm run check` passed with contract, media, scene, mode, OAuth integration, and upload tests; the page and assets were checked through `http://localhost`. The preview is local and does not validate the physical unit.
 
-### Etapa 4 — Firmware próprio e validação do hardware
+### Phase 4 — Custom Firmware and Hardware Validation
 
-**Bloqueio obrigatório antes da gravação:** confirmar chip, pinout, alimentação, display, resolução, backlight, flash, partitions, bootloader, interface serial, backup do original e recuperação. Se algum item crítico não puder ser confirmado, não executar flash.
+**Required block before flashing:** confirm the chip, pinout, power, display, resolution, backlight, flash, partitions, bootloader, serial interface, original backup, and recovery procedure. If any critical item cannot be confirmed, do not flash.
 
-**Entregáveis:** projeto PlatformIO compilável, cenas, rede, storage e API implementada, testes de bancada.
+**Deliverables:** compilable PlatformIO project, scenes, network, storage, implemented API, and bench tests.
 
-- [ ] Documentar hardware verificado e preparar procedimento testável de backup/restore.
-- [ ] Configurar placa/board, framework, flags e esquema de partições baseado em evidências.
-- [ ] Inicializar LCD, orientação, cores e backlight com teste visual mínimo.
-- [ ] Configurar Wi-Fi de maneira recuperável, sem credenciais hardcoded.
-- [ ] Implementar API HTTP local e autenticação/pareamento.
-- [ ] Desenhar cena Spotify e renderizar imagem recebida de forma incremental/compatível com RAM.
-- [ ] Ler e animar frames otimizados de storage com uso limitado de memória, temporização e loop.
-- [ ] Persistir modo e asset, validar checksum e recuperar último asset válido após upload interrompido.
-- [ ] Implementar watchdog/fallback GIF após perda do agente; impedir que falhas de Wi-Fi bloqueiem renderização.
-- [ ] Medir RAM, espaço livre e FPS reais; ajustar codec/limites/documentação.
+- [ ] Document verified hardware and prepare a testable backup/restore procedure.
+- [ ] Configure the board, framework, flags, and partition scheme based on evidence.
+- [ ] Initialize the LCD, orientation, colors, and backlight with a minimal visual test.
+- [ ] Configure Wi-Fi recoverably, without hardcoded credentials.
+- [ ] Implement the local HTTP API and authentication/pairing.
+- [ ] Draw the Spotify scene and render received images incrementally within RAM limits.
+- [ ] Read and animate optimized frames from storage with limited memory, timing, and looping.
+- [ ] Persist the mode and asset, validate checksums, and recover the last valid asset after an interrupted upload.
+- [ ] Implement a watchdog/GIF fallback when the agent is lost; ensure Wi-Fi failures do not block rendering.
+- [ ] Measure actual RAM, free space, and FPS; adjust codec, limits, and documentation.
 
-**Aceite:** build reproduzível; gravação somente com autorização; dispositivo recuperável; GIF roda sozinho e interface responde, sem travamentos observáveis em testes prolongados.
+**Acceptance:** reproducible build; flashing only with authorization; recoverable device; GIF runs on its own and the interface responds without observable stalls during extended tests; and language consistency is verified.
 
-### Etapa 5 — Integração ponta a ponta
+### Phase 5 — End-to-End Integration
 
-**Entregáveis:** agente ↔ SD PRO conectados pela LAN com cenas sincronizadas.
+**Deliverables:** agent ↔ SD PRO connection over LAN with synchronized scenes.
 
-- [ ] Implementar client HTTP no agente para endpoints da versão `v1`.
-- [ ] Pairing e configuração de IP/hostname do dispositivo; lidar com IP alterado.
-- [ ] Enviar capa somente quando necessário; garantir ordem/consistência de metadados e imagem.
-- [ ] Implantar upload de animação com progresso, retry seguro e verificação no dispositivo.
-- [ ] Implementar heartbeat, desconexão, reconexão, timeout e sincronização após reboot.
-- [ ] Testar modos manuais, mudança de música, pause/resume e fim de sessão.
-- [ ] Testar Wi-Fi instável, PC suspenso, dispositivo reiniciado, internet indisponível e GIF grande.
+- [ ] Implement the agent HTTP client for v1 endpoints.
+- [ ] Pair and configure the device IP/hostname; handle IP changes.
+- [ ] Send the cover only when needed; ensure metadata and image ordering/consistency.
+- [ ] Implement animation upload with progress, safe retries, and device-side verification.
+- [ ] Implement heartbeat, disconnect, reconnect, timeout, and synchronization after reboot.
+- [ ] Test manual modes, track changes, pause/resume, and end of session.
+- [ ] Test unstable Wi-Fi, suspended PC, restarted device, unavailable Internet, and large GIFs.
 
-**Aceite:** alternância automática estável; sem intervenção manual após perda/retorno de rede; GIF persiste; Spotify não interfere no GIF quando modo manual está ativo.
+**Acceptance:** stable automatic switching; no manual intervention after network loss/return; GIF persists; Spotify does not affect the GIF while manual mode is active; and language consistency is verified.
 
-### Etapa 6 — Inicialização automática, distribuição e qualidade
+### Phase 6 — Automatic Startup, Distribution, and Quality
 
-**Entregáveis:** instaladores/scripts de inicialização, instruções para Windows/Fedora e versão de lançamento.
+**Deliverables:** installers/startup scripts, Windows/Fedora instructions, and a release version.
 
-- [ ] Windows 11: registrar tarefa no Agendador de Tarefas para iniciar o agente no **login**; logs acessíveis, sem janela de terminal permanente, com instalação/remoção documentadas.
-- [ ] Fedora: criar serviço `systemd --user` com inicialização no login, reinício em falhas e comandos de habilitar/desabilitar.
-- [ ] Evitar múltiplas instâncias simultâneas, registrar erros sem expor tokens, implementar desligamento limpo.
-- [ ] Empacotar agente ou documentar instalação reproducível (Node LTS suportado, dependências e configuração).
-- [ ] Completar `README.md`, `docs/installation.md`, `docs/recovery.md`, screenshots do simulador e limites conhecidos.
-- [ ] Adicionar workflow CI (lint, build, testes) e versão `0.1.0` após checklist final.
+- [ ] Windows 11: register a Task Scheduler task to start the agent at **login**; provide accessible logs without a persistent terminal window and document installation/removal.
+- [ ] Fedora: create a `systemd --user` service that starts at login, restarts on failure, and has documented enable/disable commands.
+- [ ] Prevent multiple concurrent instances, log errors without exposing tokens, and shut down cleanly.
+- [ ] Package the agent or document a reproducible installation (supported Node LTS, dependencies, and configuration).
+- [ ] Complete `README.md`, `docs/installation.md`, `docs/recovery.md`, simulator screenshots, and known limitations.
+- [ ] Add a CI workflow (lint, build, tests) and version `0.1.0` after the final checklist.
 
-**Aceite:** reiniciar PC e fazer login ativa automaticamente o agente; Spotify é reconectado quando possível; falhas ficam visíveis; procedimento de desinstalação funciona.
+**Acceptance:** restarting the PC and logging in starts the agent automatically; Spotify reconnects when possible; failures are visible; the uninstall procedure works; and language consistency is verified.
 
-## 8. Plano de testes
+## 8. Test Plan
 
-### Testes automatizados mínimos
+### Minimum Automated Tests
 
-- Agente: estados Spotify, refresh token, 204/401/429, retry, timeout, deduplicação de mudanças, cache de capa.
-- Mídia: GIF inválido, dimensões incorretas, arquivo grande, ausência de frames, checksum, timing de frames.
-- Protocolo: payload inválido, modo desconhecido, token incorreto, conexão interrompida, uploads incompletos e versão incompatível.
-- Simulador: mudança `auto ↔ spotify ↔ gif`, UI 240 × 240 e atualização de progresso.
+- Agent: Spotify states, refresh token, `204`/`401`/`429`, retry, timeout, change deduplication, and cover cache.
+- Media: invalid GIF, wrong dimensions, oversized file, missing frames, checksum, and frame timing.
+- Protocol: invalid payload, unknown mode, wrong token, interrupted connection, incomplete uploads, and incompatible version.
+- Simulator: `auto ↔ spotify ↔ gif` changes, 240 × 240 UI, and progress updates.
 
-### Testes manuais com hardware real
+### Manual Tests on Real Hardware
 
-- Display inicia e renderiza cores/orientação corretamente.
-- GIF de 240 × 240 funciona em loop e sobrevive ao reboot.
-- Spotify atualiza faixa/capa sem piscadas excessivas.
-- PC suspende/desliga; relógio volta ao GIF se continuar alimentado.
-- Wi-Fi desliga/volta; agente reconecta sozinho.
-- Reiniciar dispositivo durante transferência não corrompe permanentemente configuração ou asset anterior.
-- 1–2 horas de execução contínua sem reset inesperado (aumentar duração no teste de release).
+- Display starts and renders colors/orientation correctly.
+- A 240 × 240 GIF loops and survives reboot.
+- Spotify updates track/cover without excessive flicker.
+- PC sleeps/shuts down; the clock returns to GIF if it remains powered.
+- Wi-Fi disconnects/returns; the agent reconnects automatically.
+- Restarting the device during transfer does not permanently corrupt configuration or the previous asset.
+- Run continuously for 1–2 hours without an unexpected reset (increase duration for release testing).
 
-## 9. Critérios gerais de qualidade
+## 9. General Quality Criteria
 
-- Firmware não pode conter credenciais Spotify.
-- Todos os endpoints mutáveis exigem autenticação local, com exceção de eventual fluxo de pareamento documentado.
-- UI do agente não é exposta em interfaces de rede externa por padrão.
-- Repositório não contém tokens, `client_secret`, senhas de Wi-Fi ou arquivos `.env` reais.
-- Dependências externas com licença compatível com MIT ou obrigações documentadas.
-- Não introduzir banco, container, cloud, autenticação multiusuário ou recursos não solicitados.
-- Código testável, builds reproduzíveis e documentação de recuperação.
+- Firmware must not contain Spotify credentials.
+- All mutating endpoints require local authentication, except for any documented pairing flow.
+- The agent UI is not exposed on external network interfaces by default.
+- The repository contains no tokens, `client_secret`, Wi-Fi passwords, or real `.env` files.
+- External dependencies have licenses compatible with MIT or documented obligations.
+- Do not add a database, container, cloud service, multi-user authentication, or unrequested features.
+- Keep code testable, builds reproducible, and recovery documentation available.
 
-## 10. Definição de pronto (MVP)
+### Project Language Policy
 
-- [ ] Na primeira inicialização, usuário consegue configurar Wi-Fi, parear relógio e conectar Spotify.
-- [ ] Spotify ativo mostra capa, artista, música e progresso.
-- [ ] Spotify pausado/sem reprodução ou agente indisponível mostra GIF em `auto`.
-- [ ] GIF personalizado ocupa 240 × 240 e roda em loop mesmo quando PC desliga (com relógio energizado).
-- [ ] Modos `auto`, `spotify` e `gif` podem ser selecionados e persistem.
-- [ ] Agente inicia no login do Windows 11 e do Fedora.
-- [ ] Documentação de instalação, troubleshooting, backup e recuperação concluída.
-- [ ] Sem credenciais em logs ou versionamento; testes automatizados e testes com hardware aprovados.
+English (en-US) is mandatory throughout the NeonByte project, including all current and future phases. This policy covers source code, identifiers, filenames and directories, comments, documentation, tests, configuration, logs, error messages, and UI text. Language consistency is a required acceptance criterion for every development phase.
 
-## 11. Instruções para GitHub Copilot (Agent Mode)
+## 10. MVP Definition of Done
 
-1. Leia **todo** este documento, `AGENTS.md` e os arquivos existentes antes de alterar código.
-2. Execute **somente a etapa explicitamente autorizada**. Não antecipe etapas.
-3. Antes de implementar, apresente: resumo da etapa, arquivos impactados, riscos e como será testada.
-4. Não invente comportamento de bibliotecas, endpoints, pinagem ou memória: confirme em documentação/código/hardware.
-5. Priorize solução pequena e funcional, com testes correspondentes.
-6. Ao final de cada etapa, execute testes/lint/build relevantes, documente resultados e pendências.
-7. Atualize o checklist deste arquivo **somente com itens realmente concluídos e verificados**.
-8. Não executar flash, OTA, erase, alteração de partição ou operação destrutiva sem autorização explícita do mantenedor.
-9. Pare ao concluir a etapa e solicite autorização para a próxima.
+- [ ] During first startup, the user can configure Wi-Fi, pair the clock, and connect Spotify.
+- [ ] Active Spotify playback shows the cover, artist, track, and progress.
+- [ ] Paused/no playback or an unavailable agent shows the GIF in `auto` mode.
+- [ ] A custom GIF fills 240 × 240 and loops when the PC is off (while the clock remains powered).
+- [ ] The `auto`, `spotify`, and `gif` modes can be selected and persist.
+- [ ] The agent starts at login on Windows 11 and Fedora.
+- [ ] Installation, troubleshooting, backup, and recovery documentation is complete.
+- [ ] No credentials appear in logs or version control; automated tests and hardware tests are approved.
 
-**Instrução ao agente de código:**
+## 11. Instructions for GitHub Copilot (Agent Mode)
 
-> Leia o `PLANNING.md` integralmente e execute somente a etapa explicitamente autorizada pelo mantenedor. A Etapa 1 está concluída. A Etapa 2 foi implementada; validação OAuth real ainda depende de credenciais. Não inicie a Etapa 3 sem autorização explícita.
+1. Read this entire document, `AGENTS.md`, and the existing files before changing code.
+2. Execute only the phase explicitly authorized. Do not advance to future phases.
+3. Before implementation, present a phase summary, affected files, risks, and test plan.
+4. Do not invent library behavior, endpoints, pinouts, or memory limits; confirm them in documentation, code, or on hardware.
+5. Prefer a small, functional solution with corresponding tests.
+6. At the end of each phase, run relevant tests/lint/build, document results, and note pending items.
+7. Update this file's checklist **only for items actually completed and verified**.
+8. Do not flash, run OTA, erase, change partitions, or perform destructive operations without explicit maintainer authorization.
+9. Stop after completing the phase and request approval before continuing.
 
-## 12. Registro de decisões
+**Instruction to the coding agent:**
 
-| Decisão | Escolha inicial | Revisar quando |
+> Read all of `PLANNING.md` and execute only the phase explicitly authorized by the maintainer. Phases 1, 2, and 3 are complete; real-account OAuth validation still depends on Spotify credentials. Do not start Phase 4 without explicit approval.
+
+## 12. Decision Log
+
+| Decision | Initial choice | Revisit when |
 |---|---|---|
-| Nome | NeonByte | — |
-| Licença | MIT | Antes de publicar dependências/arte de terceiros |
-| Agente | Node.js + TypeScript | Se requisitos mudarem |
-| Firmware | C++ + PlatformIO | Após validar chip real |
-| Comunicação | HTTP local + token | Se modelo de ameaça exigir criptografia |
-| Modos | `auto`, `spotify`, `gif` | Após MVP |
-| Polling Spotify | 15 s, ajustável | Após medir limites e latência |
-| GIF offline | Asset persistente no dispositivo | Após medir flash e performance |
-| Boot do agente | No login do usuário | Se houver necessidade de funcionar sem login |
-| Interface de configuração | `localhost:8787` | Conflito de porta ou segurança |
+| Name | NeonByte | — |
+| License | MIT | Before publishing third-party dependencies/artwork |
+| Agent | Node.js + TypeScript | If requirements change |
+| Firmware | C++ + PlatformIO | After the actual chip is validated |
+| Communication | Local HTTP + token | If the threat model requires encryption |
+| Modes | `auto`, `spotify`, `gif` | After MVP |
+| Spotify polling | 15 seconds, adjustable | After measuring limits and latency |
+| Offline GIF | Persistent asset on the device | After measuring flash and performance |
+| Agent startup | At user login | If operation without login is required |
+| Configuration interface | `localhost:8787` | Port conflict or security need |
 
 ---
 
-**Nota:** este planejamento orienta a implementação; decisões técnicas dependentes do hardware e regras atuais da API Spotify exigem confirmação durante as etapas correspondentes. A interface web original do relógio, por si só, não comprova compatibilidade com um firmware específico.
+**Note:** this plan guides implementation; technical decisions that depend on hardware and current Spotify API rules require confirmation during their corresponding phases. The clock's original web interface alone does not prove compatibility with any specific firmware.

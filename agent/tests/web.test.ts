@@ -186,7 +186,7 @@ test("validates GIF uploads and serves the converted fullscreen animation with i
       body: Buffer.from("bad gif"),
     });
     assert.equal(invalid.status, 422);
-    assert.match((await invalid.json() as { message: string }).message, /GIF inválido/i);
+    assert.match((await invalid.json() as { message: string }).message, /invalid GIF/i);
   } finally {
     await app.close();
   }

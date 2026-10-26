@@ -105,13 +105,13 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Buffer
 async function readJson(request: IncomingMessage, limit = JSON_LIMIT_BYTES): Promise<unknown> {
   const contentType = request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase();
   if (contentType !== "application/json") {
-    throw new Error("Envie os dados usando Content-Type application/json.");
+    throw new Error("Send data using Content-Type application/json.");
   }
   const body = await readBody(request, limit);
   try {
     return JSON.parse(body.toString("utf8")) as unknown;
   } catch {
-    throw new Error("O corpo da requisição contém JSON inválido.");
+    throw new Error("The request body contains invalid JSON.");
   }
 }
 
@@ -120,28 +120,28 @@ async function downloadSpotifyCover(url: string, fetchCover: typeof fetch): Prom
   try {
     source = new URL(url);
   } catch {
-    throw new Error("A capa Spotify atual não tem um endereço válido.");
+    throw new Error("The current Spotify cover does not have a valid URL.");
   }
   if (source.protocol !== "https:" || source.hostname !== "i.scdn.co" || source.port || source.username || source.password) {
-    throw new Error("A capa foi recusada porque não veio do host de imagens Spotify permitido.");
+    throw new Error("The cover was rejected because it did not come from an allowed Spotify image host.");
   }
 
   let result: Response;
   try {
     result = await fetchCover(source, { redirect: "error", signal: AbortSignal.timeout(10_000) });
   } catch {
-    throw new Error("Não foi possível carregar a capa Spotify. A prévia de texto continua disponível.");
+    throw new Error("Unable to load the Spotify cover. The text preview is still available.");
   }
   if (!result.ok) {
-    throw new Error("Spotify não disponibilizou a capa atual.");
+    throw new Error("Spotify did not provide the current cover.");
   }
   const contentType = result.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
   if (!new Set(["image/jpeg", "image/png", "image/webp", "image/avif"]).has(contentType)) {
-    throw new Error("O formato de capa retornado pelo Spotify não é compatível com a prévia.");
+    throw new Error("The cover format returned by Spotify is not supported by the preview.");
   }
   const declaredLength = Number(result.headers.get("content-length") ?? 0);
   if (declaredLength > COVER_SOURCE_LIMIT_BYTES || !result.body) {
-    throw new Error("A capa Spotify excede o limite de 2 MiB para a prévia.");
+    throw new Error("The Spotify cover exceeds the 2 MiB preview limit.");
   }
 
   const reader = result.body.getReader();
@@ -155,7 +155,7 @@ async function downloadSpotifyCover(url: string, fetchCover: typeof fetch): Prom
       length += bytes.length;
       if (length > COVER_SOURCE_LIMIT_BYTES) {
         await reader.cancel();
-        throw new Error("A capa Spotify excede o limite de 2 MiB para a prévia.");
+        throw new Error("The Spotify cover exceeds the 2 MiB preview limit.");
       }
       chunks.push(bytes);
     }
@@ -168,7 +168,7 @@ async function downloadSpotifyCover(url: string, fetchCover: typeof fetch): Prom
 async function serveStatic(pathname: string, response: ServerResponse): Promise<void> {
   const asset = PUBLIC_FILES[pathname];
   if (!asset) {
-    sendError(response, 404, "Página ou arquivo local não encontrado.");
+    sendError(response, 404, "Local page or file not found.");
     return;
   }
   try {
@@ -176,7 +176,7 @@ async function serveStatic(pathname: string, response: ServerResponse): Promise<
     response.writeHead(200, { ...securityHeaders(), "Content-Type": asset.type });
     response.end(content);
   } catch {
-    sendError(response, 500, "A interface local não está disponível. Recompile o agente e tente novamente.");
+    sendError(response, 500, "The local interface is unavailable. Rebuild the agent and try again.");
   }
 }
 
@@ -187,7 +187,7 @@ function snapshotIsConnected(snapshot: PlaybackSnapshot, spotifyConfigured: bool
 export async function startLocalWebApp(options: LocalWebAppOptions): Promise<LocalWebApp> {
   const configuredPort = options.port ?? 8787;
   if (!Number.isInteger(configuredPort) || configuredPort < 0 || configuredPort > 65535) {
-    throw new RangeError("A porta da interface local precisa estar entre 0 e 65535.");
+    throw new RangeError("The local interface port must be between 0 and 65535.");
   }
 
   let mode: DisplayMode = options.initialMode ?? "auto";
@@ -200,7 +200,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
       const address = server.address();
       const port = address && typeof address !== "string" ? address.port : configuredPort;
       if (!trustedHost(request.headers.host, port)) {
-        sendError(response, 403, "A interface aceita somente conexões de localhost.");
+        sendError(response, 403, "The interface accepts localhost connections only.");
         return;
       }
 
@@ -208,20 +208,20 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
       try {
         url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
       } catch {
-        sendError(response, 400, "O endereço local é inválido.");
+        sendError(response, 400, "The local URL is invalid.");
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/callback") {
         if (!pendingOAuth || !options.oauth) {
-          sendError(response, 400, "Não há uma autorização Spotify aguardando resposta. Inicie o fluxo novamente.");
+          sendError(response, 400, "No Spotify authorization is waiting for a response. Start the flow again.");
           return;
         }
         let callback: { code: string };
         try {
           callback = parseOAuthCallback(url, pendingOAuth.state);
         } catch {
-          sendError(response, 400, "A resposta Spotify não pôde ser validada. Inicie uma nova autorização.");
+          sendError(response, 400, "The Spotify response could not be validated. Start a new authorization.");
           return;
         }
         const verifier = pendingOAuth.codeVerifier;
@@ -275,7 +275,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
 
       if (request.method === "GET" && url.pathname === "/api/animation") {
         if (!animation) {
-          sendError(response, 404, "Envie um GIF para começar a prévia fullscreen.");
+          sendError(response, 404, "Upload a GIF to start the fullscreen preview.");
           return;
         }
         validateAnimation(animation.bytes, animation.sha256);
@@ -291,7 +291,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
 
       if (request.method === "GET" && url.pathname === "/api/cover") {
         if (!cover) {
-          sendError(response, 404, "Ainda não há capa convertida para esta sessão.");
+          sendError(response, 404, "No converted cover is available for this session yet.");
           return;
         }
         response.writeHead(200, {
@@ -307,7 +307,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
       if (request.method === "GET" && url.pathname === "/api/cover/source") {
         const coverUrl = options.poller.currentSnapshot.coverUrl;
         if (!coverUrl) {
-          sendError(response, 404, "Não há uma capa Spotify ativa para pré-visualizar.");
+          sendError(response, 404, "There is no active Spotify cover to preview.");
           return;
         }
         try {
@@ -319,28 +319,28 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           });
           response.end(source.bytes);
         } catch (error) {
-          sendError(response, 422, error instanceof Error ? error.message : "Não foi possível carregar a capa Spotify.");
+          sendError(response, 422, error instanceof Error ? error.message : "Unable to load the Spotify cover.");
         }
         return;
       }
 
       if (request.method !== "POST" || !url.pathname.startsWith("/api/")) {
-        sendError(response, 404, "Rota local não encontrada.");
+        sendError(response, 404, "Local route not found.");
         return;
       }
       if (!trustedOrigin(request.headers.origin, port)) {
-        sendError(response, 403, "A origem da solicitação não é autorizada para alterar a interface local.");
+        sendError(response, 403, "The request origin is not authorized to modify the local interface.");
         return;
       }
 
       if (url.pathname === "/api/auth/connect") {
         request.resume();
         if (!options.oauth || !options.spotifyConfigured) {
-          sendError(response, 503, "Configure SPOTIFY_CLIENT_ID e SPOTIFY_REDIRECT_URI em .env antes de conectar a conta.");
+          sendError(response, 503, "Set SPOTIFY_CLIENT_ID and SPOTIFY_REDIRECT_URI in .env before connecting the account.");
           return;
         }
         if (pendingOAuth) {
-          sendError(response, 409, "Já existe uma autorização Spotify aguardando resposta.");
+          sendError(response, 409, "A Spotify authorization is already waiting for a response.");
           return;
         }
         try {
@@ -353,7 +353,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           pendingOAuth = { state: authorization.state, codeVerifier: authorization.codeVerifier, timeout };
           sendJson(response, 200, { url: authorization.url });
         } catch {
-          sendError(response, 500, "Não foi possível iniciar a autorização Spotify. Confira a configuração local.");
+          sendError(response, 500, "Unable to start Spotify authorization. Check the local configuration.");
         }
         return;
       }
@@ -362,14 +362,14 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
         try {
           const payload = await readJson(request);
           if (typeof payload !== "object" || payload === null || !isDisplayMode((payload as { mode?: unknown }).mode)) {
-            sendError(response, 422, "Escolha um dos modos Auto, Spotify ou GIF.");
+            sendError(response, 422, "Select one of the Auto, Spotify, or GIF modes.");
             return;
           }
           mode = (payload as { mode: DisplayMode }).mode;
           response.writeHead(204, securityHeaders());
           response.end();
         } catch (error) {
-          sendError(response, error instanceof PayloadTooLargeError ? 413 : 400, error instanceof Error ? error.message : "Não foi possível alterar o modo.");
+          sendError(response, error instanceof PayloadTooLargeError ? 413 : 400, error instanceof Error ? error.message : "Unable to change the mode.");
         }
         return;
       }
@@ -378,27 +378,27 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
         try {
           const payload = await readJson(request);
           if (typeof payload !== "object" || payload === null || typeof (payload as { enabled?: unknown }).enabled !== "boolean") {
-            sendError(response, 422, "Informe se o modo de demonstração deve ser ativado ou desativado.");
+            sendError(response, 422, "Specify whether demo mode should be enabled or disabled.");
             return;
           }
           await options.setDemoEnabled((payload as { enabled: boolean }).enabled);
           await options.poller.pollOnce();
           sendJson(response, 200, { demoEnabled: options.getDemoEnabled() });
         } catch {
-          sendError(response, 400, "Não foi possível alternar os dados de demonstração.");
+          sendError(response, 400, "Unable to toggle demo data.");
         }
         return;
       }
 
       if (url.pathname === "/api/mock/playback") {
         if (!options.getDemoEnabled()) {
-          sendError(response, 409, "Ative os dados de demonstração antes de usar os controles mock.");
+          sendError(response, 409, "Enable demo data before using mock controls.");
           return;
         }
         try {
           const payload = await readJson(request);
           if (typeof payload !== "object" || payload === null || !isMockAction((payload as { action?: unknown }).action)) {
-            sendError(response, 422, "Ação mock inválida. Use play, pause, next ou offline.");
+            sendError(response, 422, "Invalid mock action. Use play, pause, next, or offline.");
             return;
           }
           const action = (payload as { action: MockPlaybackAction }).action;
@@ -406,14 +406,14 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           await options.poller.pollOnce();
           sendJson(response, 200, { snapshot: options.poller.currentSnapshot });
         } catch {
-          sendError(response, 400, "Não foi possível alterar a reprodução de demonstração.");
+          sendError(response, 400, "Unable to change demo playback.");
         }
         return;
       }
 
       if (url.pathname === "/api/animation") {
         if (request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== "image/gif") {
-          sendError(response, 415, "Envie um arquivo GIF com tipo image/gif.");
+          sendError(response, 415, "Send a GIF file with the image/gif media type.");
           request.resume();
           return;
         }
@@ -431,7 +431,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
             sha256: converted.sha256,
           });
         } catch (error) {
-          sendError(response, error instanceof PayloadTooLargeError ? 413 : 422, error instanceof Error ? error.message : "Não foi possível converter o GIF.");
+          sendError(response, error instanceof PayloadTooLargeError ? 413 : 422, error instanceof Error ? error.message : "Unable to convert the GIF.");
         }
         return;
       }
@@ -439,28 +439,28 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
       if (url.pathname === "/api/cover") {
         const contentType = request.headers["content-type"]?.toLowerCase();
         if (contentType !== "application/vnd.neonbyte.rgba; width=240; height=240") {
-          sendError(response, 415, "Envie pixels RGBA para uma capa de 240 × 240.");
+          sendError(response, 415, "Send RGBA pixels for a 240 × 240 cover.");
           request.resume();
           return;
         }
         try {
           const pixels = await readBody(request, COVER_PIXELS_BYTES);
           if (pixels.length !== COVER_PIXELS_BYTES) {
-            sendError(response, 422, "A capa precisa conter exatamente 240 × 240 pixels RGBA.");
+            sendError(response, 422, "The cover must contain exactly 240 × 240 RGBA pixels.");
             return;
           }
           cover = createCoverAsset(pixels, 240, 240);
           sendJson(response, 201, { width: 240, height: 240, sizeBytes: cover.bytes.length, sha256: cover.sha256 });
         } catch (error) {
-          sendError(response, error instanceof PayloadTooLargeError ? 413 : 400, error instanceof Error ? error.message : "Não foi possível converter a capa.");
+          sendError(response, error instanceof PayloadTooLargeError ? 413 : 400, error instanceof Error ? error.message : "Unable to convert the cover.");
         }
         return;
       }
 
-      sendError(response, 404, "Rota local não encontrada.");
+      sendError(response, 404, "Local route not found.");
     })().catch(() => {
       if (!response.headersSent) {
-        sendError(response, 500, "A solicitação local falhou sem alterar credenciais Spotify.");
+        sendError(response, 500, "The local request failed without changing Spotify credentials.");
       } else {
         response.destroy();
       }
@@ -477,7 +477,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
   const address = server.address();
   if (!address || typeof address === "string") {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    throw new Error("Não foi possível iniciar a interface local.");
+    throw new Error("Unable to start the local interface.");
   }
   const url = `http://localhost:${address.port}`;
 

@@ -54,8 +54,8 @@ test("converts a valid GIF that uses a local palette without a global color tabl
 });
 
 test("rejects invalid and over-limit GIF files with an actionable error", () => {
-  assert.throws(() => convertGifToAnimation(Buffer.from("not a gif")), /GIF inválido/i);
-  assert.throws(() => convertGifToAnimation(onePixelGif, { maxUploadBytes: 8 }), /limite.*bytes/i);
+  assert.throws(() => convertGifToAnimation(Buffer.from("not a gif")), /invalid GIF/i);
+  assert.throws(() => convertGifToAnimation(onePixelGif, { maxUploadBytes: 8 }), /\d+-byte limit/i);
 });
 
 test("preserves frame order and delays for a looping multi-frame GIF", () => {
@@ -78,7 +78,7 @@ test("restores the global GIF background color after disposal method 2", () => {
 test("rejects GIF frame descriptors before decompression when their bounds or total pixel budget is exceeded", () => {
   assert.throws(
     () => validateGifFrameDescriptors(1, 1, [{ left: 0, top: 0, width: 65_535, height: 65_535 }]),
-    /descritor.*limite/i,
+    /frame descriptor outside the screen bounds/i,
   );
   assert.throws(
     () => validateGifFrameDescriptors(2, 2, [
@@ -89,7 +89,7 @@ test("rejects GIF frame descriptors before decompression when their bounds or to
   );
   const frameOutsideLogicalScreen = Buffer.from(onePixelGif);
   frameOutsideLogicalScreen.writeUInt16LE(2, 32);
-  assert.throws(() => convertGifToAnimation(frameOutsideLogicalScreen), /descritor.*limite/i);
+  assert.throws(() => convertGifToAnimation(frameOutsideLogicalScreen), /frame descriptor outside the screen bounds/i);
 });
 
 test("converts a cropped 240 by 240 RGBA cover to RGB565 and validates its checksum", () => {
@@ -115,7 +115,7 @@ test("converts a cropped 240 by 240 RGBA cover to RGB565 and validates its check
 });
 
 test("rejects a cover with mismatched pixel dimensions or checksum", () => {
-  assert.throws(() => createCoverAsset(new Uint8Array(15), 2, 2), /pixels/i);
+  assert.throws(() => createCoverAsset(new Uint8Array(15), 2, 2), /pixel dimensions/i);
   const cover = createCoverAsset(new Uint8Array(240 * 240 * 4), 240, 240);
   assert.throws(() => validateCover(cover.bytes, "0".repeat(64)), /checksum/i);
 });

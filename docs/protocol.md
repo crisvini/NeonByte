@@ -1,47 +1,47 @@
-# Contrato HTTP local v1
+# Local HTTP v1 Contract
 
-**Estado:** especificação inicial; ainda não há servidor, cliente ou firmware implementado para o dispositivo. As rotas `/api/v1` descrevem o contrato pretendido, não endpoints existentes. As rotas `/api/*` da interface local do agente são privadas ao simulador e não fazem parte deste contrato.
+**Status:** initial specification; no device server, client, or firmware has been implemented. The `/api/v1` routes describe the intended contract, not existing endpoints. The agent's local interface routes under `/api/*` are private to the simulator and are not part of this contract.
 
-## Transporte e compatibilidade
+## Transport and Compatibility
 
-- Base HTTP local; host, porta do dispositivo e método de descoberta: PENDENTE.
-- Prefixo de rotas: /api/v1.
-- JSON usa UTF-8 e Content-Type: application/json.
-- A versão retornada por GET /api/v1/status deve ser v1. O cliente deve parar de enviar atualizações se a versão não for compatível.
-- Os schemas são fechados (additionalProperties: false). Alterações incompatíveis exigem uma nova versão do caminho.
-- HTTP local com token não cifra o tráfego. Usar somente em uma LAN confiável; não expor o dispositivo à Internet.
+- Local HTTP base; device host, port, and discovery method: PENDING.
+- Route prefix: `/api/v1`.
+- JSON uses UTF-8 and `Content-Type: application/json`.
+- The version returned by `GET /api/v1/status` must be `v1`. The client must stop sending updates if the version is incompatible.
+- Schemas are closed (`additionalProperties: false`). Breaking changes require a new path version.
+- Local HTTP with a token does not encrypt traffic. Use it only on a trusted LAN; do not expose the device to the Internet.
 
-## Autenticação
+## Authentication
 
-Todas as rotas mutáveis exigem Authorization: Bearer {token}: modo, Spotify, capa, animação e heartbeat. GET /api/v1/status é somente leitura e não exige token. Tokens não podem aparecer em logs, URLs ou respostas.
+All mutating routes require `Authorization: Bearer {token}`: mode, Spotify, cover, animation, and heartbeat. `GET /api/v1/status` is read-only and does not require a token. Tokens must not appear in logs, URLs, or responses.
 
-Geração, pareamento inicial, armazenamento seguro e recuperação do token: PENDENTE. Não há exceção de pareamento implementada.
+Token generation, initial pairing, secure storage, and recovery: PENDING. No pairing exception has been implemented.
 
-## Modos e seleção de tela
+## Display Modes and Scene Selection
 
-O modo persistido é exatamente um destes valores:
+The persisted mode is exactly one of these values:
 
-- **auto**: exibe Spotify somente quando há atualização recente do agente e isPlaying é verdadeiro; caso contrário, GIF.
-- **spotify**: permanece na tela Spotify; sem faixa ativa ou com dados/heartbeat vencidos, mostra um estado de espera discreto.
-- **gif**: exibe somente o GIF fullscreen.
+- **auto**: show Spotify only when the agent has sent a recent update and `isPlaying` is true; otherwise, show GIF.
+- **spotify**: stay on the Spotify screen; show a subtle waiting state when there is no active track or the data/heartbeat is stale.
+- **gif**: show only the fullscreen GIF.
 
-Interpretação inicial do timeout: heartbeat ausente por 45 segundos torna o agente indisponível. Esse estado faz auto voltar ao GIF; o modo manual spotify continua na tela de espera, conforme a matriz de modos do planejamento. O modo padrão é auto; a escolha manual persiste após reinicialização.
+Initial timeout interpretation: a missing heartbeat for 45 seconds makes the agent unavailable. In `auto` mode this returns to GIF; manual `spotify` mode stays on its waiting screen, as specified by the planning mode matrix. The default mode is `auto`; a manual selection persists across restarts.
 
-O intervalo de polling Spotify sugerido é 15 segundos e será configurável no agente. A decisão de manter spotify em espera quando o heartbeat expira concilia a matriz de modos com o timeout geral do planejamento; deve ser revista se o mantenedor desejar que o timeout sobreponha também o modo manual.
+The suggested Spotify polling interval is 15 seconds and will be configurable in the agent. Keeping `spotify` on its waiting screen after heartbeat expiration reconciles the mode matrix with the planning timeout behavior; revisit this if the maintainer wants the timeout to override manual mode as well.
 
-| Modo | Agente recente e faixa tocando | Sem faixa, pausado ou agente vencido |
+| Mode | Recent agent update and track playing | No track, paused, or agent stale |
 |---|---|---|
-| auto | Spotify Now Playing | GIF fullscreen |
-| spotify | Spotify Now Playing | Tela Spotify em espera |
-| gif | GIF fullscreen | GIF fullscreen |
+| auto | Spotify Now Playing | Fullscreen GIF |
+| spotify | Spotify Now Playing | Spotify waiting screen |
+| gif | Fullscreen GIF | Fullscreen GIF |
 
-activeScene representa uma das duas telas, spotify ou gif; o estado de espera pertence à tela Spotify e não cria uma terceira tela.
+`activeScene` represents one of the two screens, `spotify` or `gif`; the waiting state belongs to the Spotify screen and does not create a third screen.
 
-## Modelo Spotify
+## Spotify Model
 
-PUT /api/v1/spotify recebe o objeto definido em [now-playing.schema.json](../contracts/v1/now-playing.schema.json):
+`PUT /api/v1/spotify` accepts the object defined by [now-playing.schema.json](../contracts/v1/now-playing.schema.json):
 
-```json
+~~~json
 {
   "trackId": "example-track-id",
   "title": "Example Track",
@@ -51,44 +51,44 @@ PUT /api/v1/spotify recebe o objeto definido em [now-playing.schema.json](../con
   "progressMs": 42000,
   "sampledAtUnixMs": 1790000000000
 }
-```
+~~~
 
-progressMs deve ser limitado a durationMs pelo agente. O firmware avança o progresso localmente entre atualizações e corrige o valor ao receber outro timestamp. Os limites iniciais de texto são 256 caracteres para trackId, title e artist; devem ser mantidos alinhados entre schemas, agente e firmware.
+The agent must clamp `progressMs` to `durationMs`. The firmware advances progress locally between updates and corrects it when it receives another timestamp. Initial text limits are 256 characters for `trackId`, `title`, and `artist`; keep them aligned across schemas, agent, and firmware.
 
-## Rotas
+## Routes
 
-| Método | Rota | Corpo/headers | Sucesso |
+| Method | Route | Body/headers | Success |
 |---|---|---|---|
-| GET | /api/v1/status | Sem corpo | 200 e objeto conforme [status.schema.json](../contracts/v1/status.schema.json). |
-| PUT | /api/v1/mode | JSON conforme [mode.schema.json](../contracts/v1/mode.schema.json) | 204; modo persistido. |
-| PUT | /api/v1/spotify | JSON conforme [now-playing.schema.json](../contracts/v1/now-playing.schema.json) | 204; estado atualizado. |
-| PUT | /api/v1/cover | Bytes binários, X-Track-Id e X-Content-SHA256 | 204 após validação e gravação. Formato de imagem e limite de bytes: PENDENTE. |
-| PUT | /api/v1/animation | Bytes binários e X-Content-SHA256 | 204 após validação e gravação. Codec, versão de formato e limite de bytes: PENDENTE. |
-| POST | /api/v1/heartbeat | Sem corpo | 204; registra a presença no momento da recepção. |
+| GET | /api/v1/status | No body | 200 and an object matching [status.schema.json](../contracts/v1/status.schema.json). |
+| PUT | /api/v1/mode | JSON matching [mode.schema.json](../contracts/v1/mode.schema.json) | 204; mode persisted. |
+| PUT | /api/v1/spotify | JSON matching [now-playing.schema.json](../contracts/v1/now-playing.schema.json) | 204; state updated. |
+| PUT | /api/v1/cover | Binary bytes, X-Track-Id, and X-Content-SHA256 | 204 after validation and storage. Image format and byte limit: PENDING. |
+| PUT | /api/v1/animation | Binary bytes and X-Content-SHA256 | 204 after validation and storage. Codec, format version, and byte limit: PENDING. |
+| POST | /api/v1/heartbeat | No body | 204; records presence when received. |
 
-O formato da capa e da animação depende do formato de pixels, armazenamento, RAM e desempenho confirmados para o hardware. Até essa decisão, as rotas binárias são envelopes propostos e não estão prontas para interoperabilidade. X-Content-SHA256 é SHA-256 hexadecimal minúsculo do corpo completo. Uploads devem ser validados antes de substituir o asset funcional anterior.
+The cover and animation formats depend on the pixel format, storage, RAM, and performance confirmed for the hardware. Until then, the binary routes are proposed envelopes and are not ready for interoperability. `X-Content-SHA256` is the lowercase hexadecimal SHA-256 of the complete body. Validate uploads before replacing the working asset.
 
-Uma capa recebida antes dos metadados pode ser armazenada pela chave X-Track-Id, mas só pode aparecer junto da faixa com o mesmo trackId. Uma capa de faixa anterior não deve ser mostrada como se pertencesse à faixa atual.
+A cover received before metadata may be stored under the `X-Track-Id` key, but it may only be shown with a track whose `trackId` matches. Do not show a previous track's cover as if it belonged to the current track.
 
-## Erros HTTP
+## HTTP Errors
 
-Erros JSON seguem [error.schema.json](../contracts/v1/error.schema.json). O campo message deve ser acionável e não pode conter tokens ou outros segredos.
+JSON errors follow [error.schema.json](../contracts/v1/error.schema.json). The `message` field must be actionable and must not contain tokens or other secrets.
 
-| HTTP | Código estável | Uso |
+| HTTP | Stable code | Use |
 |---|---|---|
-| 400 | invalid_request | JSON, parâmetro ou header ausente/malformado. |
-| 401 | unauthorized | Token ausente ou inválido em rota mutável. |
-| 404 | not_found | Rota ou recurso desconhecido. |
-| 409 | conflict | Conflito com o estado atual ou upload concorrente. |
-| 413 | payload_too_large | Corpo excede o limite configurado; limite numérico: PENDENTE. |
-| 415 | unsupported_media_type | Tipo/formato não suportado. |
-| 422 | invalid_content | Conteúdo, checksum ou semântica inválida. |
-| 500 | internal_error | Falha interna sem detalhes sensíveis. |
+| 400 | invalid_request | Invalid, missing, or malformed JSON, parameter, or header. |
+| 401 | unauthorized | Missing or invalid token on a mutating route. |
+| 404 | not_found | Unknown route or resource. |
+| 409 | conflict | Conflict with current state or concurrent upload. |
+| 413 | payload_too_large | Body exceeds the configured limit; numeric limit: PENDING. |
+| 415 | unsupported_media_type | Unsupported media type or format. |
+| 422 | invalid_content | Invalid content, checksum, or semantics. |
+| 500 | internal_error | Internal failure without sensitive details. |
 
-## Segurança e limites pendentes
+## Security and Pending Limits
 
-- Não há TLS no desenho inicial; restringir o tráfego à rede local confiável.
-- Definir pareamento, geração e armazenamento do token antes de implementar rotas mutáveis.
-- Definir porta, limites de corpo e formatos binários com evidência de hardware antes de implementar firmware ou integração.
-- Rejeitar modo desconhecido, payload inválido, checksum incorreto e upload incompleto; preservar o último asset válido.
-- O protocolo não inclui comandos para controlar reprodução Spotify.
+- The initial design has no TLS; restrict traffic to a trusted local network.
+- Define pairing, token generation, and token storage before implementing mutating routes.
+- Define the port, body limits, and binary formats with hardware evidence before implementing firmware or integration.
+- Reject unknown modes, invalid payloads, bad checksums, and incomplete uploads; preserve the last valid asset.
+- The protocol does not include commands to control Spotify playback.

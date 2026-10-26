@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:neonbyte:contracts:v1:now-playing",
-  "title": "Estado de reprodução Spotify",
+  "title": "Spotify playback state",
   "type": "object",
   "properties": {
     "trackId": {

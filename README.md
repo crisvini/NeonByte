@@ -1,67 +1,67 @@
 # NeonByte
 
-NeonByte é um projeto open-source planejado para um display Wi-Fi JUZIPi SD PRO e um agente desktop que consulta o Spotify. O dispositivo terá duas telas: Spotify Now Playing e GIF fullscreen. A unidade de hardware ainda não foi identificada.
+NeonByte is an open-source project planned for a JUZIPi SD PRO Wi-Fi display and a desktop agent that reads Spotify playback. The device is intended to have two screens: Spotify Now Playing and fullscreen GIF. The specific hardware unit has not yet been identified.
 
-## Estado atual
+## Current Status
 
-As **Etapas 1, 2 e 3 estão concluídas**. O agente Spotify em Node.js/TypeScript usa OAuth PKCE, polling e estado compatível com o contrato v1. A interface local inclui simulador responsivo 240 × 240, visualização de Spotify e GIF em loop, modos de tela, upload e dados de demonstração. A validação de OAuth com uma conta real depende de credenciais Spotify configuradas. O relógio físico, firmware e sincronização com dispositivo ainda não estão implementados; nenhum firmware foi compilado ou gravado.
+**Phases 1, 2, and 3 are complete.** The Node.js/TypeScript Spotify agent uses OAuth PKCE, polling, and state compatible with the v1 contract. The local interface includes a responsive 240 × 240 simulator, Spotify and looping GIF previews, display modes, uploads, and demo data. Real-account OAuth validation still requires configured Spotify credentials. The physical clock, firmware, and device synchronization have not been implemented; no firmware has been compiled or flashed.
 
-A resolução de 240 × 240 é uma expectativa do planejamento, não uma medição desta unidade. Veja [investigação de hardware](docs/hardware.md) antes de qualquer trabalho que dependa da placa.
+The 240 × 240 resolution is a planning expectation, not a measurement of this unit. See [hardware investigation](docs/hardware.md) before any work that depends on the board.
 
-## Modos de tela planejados
+## Planned Display Modes
 
-| Modo | Com reprodução ativa e agente conectado | Sem reprodução ou agente indisponível |
+| Mode | With active playback and a connected agent | Without playback or when the agent is unavailable |
 |---|---|---|
-| **auto** | Spotify Now Playing | GIF fullscreen |
-| **spotify** | Spotify Now Playing | Tela Spotify em espera |
-| **gif** | GIF fullscreen | GIF fullscreen |
+| **auto** | Spotify Now Playing | Fullscreen GIF |
+| **spotify** | Spotify Now Playing | Spotify waiting screen |
+| **gif** | Fullscreen GIF | Fullscreen GIF |
 
-O simulador aplica os modos à prévia local; o modo escolhido fica guardado no navegador. O agente consulta e normaliza a reprodução. Persistência no dispositivo e integração com o relógio ainda não estão implementadas.
+The simulator applies the modes to its local preview; the selected mode is stored in the browser. The agent reads and normalizes playback. Persistence on the device and clock integration have not been implemented.
 
-## Estrutura
+## Repository Structure
 
-```text
+~~~text
 .
-├── agent/                 # Agente Spotify, painel e simulador Node.js/TypeScript
-├── assets/samples/        # Amostras futuras, sem assets incluídos
-├── contracts/v1/          # Schemas e exemplos dos contratos
-├── docs/                  # Hardware, protocolo, desenvolvimento e pendências
-├── firmware/              # Estrutura reservada; hardware ainda não confirmado
-├── simulator/             # Local reservado; simulador servido pelo agente em agent/src/web
-├── tests/                 # Testes dos contratos v1
+├── agent/                 # Spotify agent, dashboard, and Node.js/TypeScript simulator
+├── assets/samples/        # Reserved for future samples; no assets included
+├── contracts/v1/          # Contract schemas and examples
+├── docs/                  # Hardware, protocol, development, and pending items
+├── firmware/              # Reserved structure; hardware not yet confirmed
+├── simulator/             # Reserved location; simulator is served by agent/src/web
+├── tests/                 # v1 contract tests
 ├── AGENTS.md
 ├── PLANNING.md
 └── README.md
-```
+~~~
 
-## Validações
+## Validation
 
-Requer Node.js 22 ou superior. No Fedora, uma sessão Secret Service (por exemplo GNOME Keyring ou KWallet) precisa estar disponível para persistir o refresh token. No Windows, o agente usa o Credential Manager.
+Node.js 22 or later is required. On Fedora, a Secret Service session (for example, GNOME Keyring or KWallet) must be available to persist the refresh token. On Windows, the agent uses Credential Manager.
 
-```sh
+~~~sh
 npm ci
 npm ci --prefix agent
 npm run lint
 npm test
-# ou
+# or
 npm run check
-```
+~~~
 
-`npm run check` também verifica os tipos e executa os testes do agente. Para autorizar e iniciar o agente, copie `.env.example` para `.env`, preencha `SPOTIFY_CLIENT_ID`, registre o redirect URI exato no Spotify Developer Dashboard e execute:
+`npm run check` also checks language consistency, verifies types, and runs the agent tests. To authorize and start the agent, copy `.env.example` to `.env`, set `SPOTIFY_CLIENT_ID`, register the exact redirect URI in the Spotify Developer Dashboard, and run:
 
-```sh
+~~~sh
 npm --prefix agent run build
 npm --prefix agent run start
-```
+~~~
 
-Abra [http://localhost:8787](http://localhost:8787), conecte o Spotify pelo botão e escolha um modo. Sem Client ID válido, o agente inicia com dados mock; os controles permitem simular play, pausa, próxima faixa e indisponibilidade. O comando `auth` continua disponível se preferir autorizar sem abrir a interface. O refresh token fica no cofre seguro do sistema; tokens não são escritos em `.env` nem nos logs. `SPOTIFY_POLL_INTERVAL_MS` configura o intervalo (15 segundos por padrão). Veja [desenvolvimento](docs/development.md) e [instalação](docs/installation.md) para detalhes.
+Open [http://localhost:8787](http://localhost:8787), connect Spotify with the button, and choose a mode. Without a valid Client ID, the agent starts with mock data; the controls can simulate play, pause, next track, and unavailability. The `auth` command remains available if you prefer to authorize without opening the interface. The refresh token is stored in the system credential manager; tokens are not written to `.env` or logs. `SPOTIFY_POLL_INTERVAL_MS` configures the polling interval (15 seconds by default). See [development](docs/development.md) and [installation](docs/installation.md) for details.
 
-## Documentação
+## Documentation
 
-- [Planejamento e limites das etapas](PLANNING.md)
-- [Instruções para agentes de código](AGENTS.md)
-- [Hardware e incógnitas](docs/hardware.md)
-- [Contrato HTTP v1](docs/protocol.md)
-- [Desenvolvimento](docs/development.md)
-- [Instalação](docs/installation.md)
-- [Recuperação](docs/recovery.md)
+- [Planning and phase boundaries](PLANNING.md)
+- [Instructions for coding agents](AGENTS.md)
+- [Hardware and unknowns](docs/hardware.md)
+- [HTTP v1 contract](docs/protocol.md)
+- [Development](docs/development.md)
+- [Installation](docs/installation.md)
+- [Recovery](docs/recovery.md)

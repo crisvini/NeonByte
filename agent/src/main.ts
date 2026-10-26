@@ -26,7 +26,7 @@ function configuredClientId(): string | null {
 function requiredClientId(): string {
   const clientId = configuredClientId();
   if (!clientId) {
-    throw new SpotifyOAuthError("Configure SPOTIFY_CLIENT_ID no arquivo .env antes de autorizar o Spotify.");
+    throw new SpotifyOAuthError("Set SPOTIFY_CLIENT_ID in .env before authorizing Spotify.");
   }
   return clientId;
 }
@@ -52,14 +52,14 @@ async function authorizeSpotify(): Promise<void> {
   });
 
   try {
-    logger.info("Abra este endereço no navegador para autorizar a leitura da reprodução:");
+    logger.info("Open this URL in a browser to authorize playback access:");
     console.info(authorization.url);
     const callback = await listener.waitForCallback();
     await oauth.exchangeAuthorizationCode({
       code: callback.code,
       codeVerifier: authorization.codeVerifier,
     });
-    logger.info("Spotify autorizado. O refresh token foi salvo no cofre seguro do sistema.");
+    logger.info("Spotify authorized. The refresh token was saved in the system credential manager.");
   } finally {
     await listener.close();
   }
@@ -91,10 +91,10 @@ function configuredWebPort(): number {
   const redirectPort = Number(new URL(redirectUri()).port);
   const configuredPort = Number(process.env["NEONBYTE_PORT"] ?? redirectPort);
   if (!Number.isInteger(configuredPort) || configuredPort < 1 || configuredPort > 65535) {
-    throw new Error("NEONBYTE_PORT deve ser uma porta entre 1 e 65535.");
+    throw new Error("NEONBYTE_PORT must be a port between 1 and 65535.");
   }
   if (configuredPort !== redirectPort) {
-    throw new Error("NEONBYTE_PORT precisa corresponder à porta de SPOTIFY_REDIRECT_URI para o callback OAuth local.");
+    throw new Error("NEONBYTE_PORT must match the port in SPOTIFY_REDIRECT_URI for the local OAuth callback.");
   }
   return configuredPort;
 }
@@ -102,7 +102,7 @@ function configuredWebPort(): number {
 function configuredDisplayMode(): DisplayMode {
   const mode = process.env["NEONBYTE_MODE"] ?? "auto";
   if (mode !== "auto" && mode !== "spotify" && mode !== "gif") {
-    throw new Error("NEONBYTE_MODE deve ser auto, spotify ou gif.");
+    throw new Error("NEONBYTE_MODE must be auto, spotify, or gif.");
   }
   return mode;
 }
@@ -112,13 +112,13 @@ async function runAgent(): Promise<void> {
   const requestTimeoutMs = Number(process.env["SPOTIFY_REQUEST_TIMEOUT_MS"] ?? "10000");
   const reconnectMaxMs = Number(process.env["SPOTIFY_RECONNECT_MAX_INTERVAL_MS"] ?? "60000");
   if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 1000) {
-    throw new Error("SPOTIFY_POLL_INTERVAL_MS deve ser pelo menos 1000.");
+    throw new Error("SPOTIFY_POLL_INTERVAL_MS must be at least 1000.");
   }
   if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs < 1000) {
-    throw new Error("SPOTIFY_REQUEST_TIMEOUT_MS deve ser pelo menos 1000.");
+    throw new Error("SPOTIFY_REQUEST_TIMEOUT_MS must be at least 1000.");
   }
   if (!Number.isFinite(reconnectMaxMs) || reconnectMaxMs < 1000) {
-    throw new Error("SPOTIFY_RECONNECT_MAX_INTERVAL_MS deve ser pelo menos 1000.");
+    throw new Error("SPOTIFY_RECONNECT_MAX_INTERVAL_MS must be at least 1000.");
   }
 
   const clientId = configuredClientId();
@@ -140,15 +140,15 @@ async function runAgent(): Promise<void> {
   });
   poller.subscribe((snapshot) => {
     if (snapshot.status === "unavailable") {
-      logger.warn(`Estado Spotify indisponível (${snapshot.unavailableReason ?? "api_error"}).`);
+      logger.warn(`Spotify state unavailable (${snapshot.unavailableReason ?? "api_error"}).`);
       return;
     }
-    logger.info(`Estado Spotify atualizado: ${snapshot.status}.`);
+    logger.info(`Spotify state updated: ${snapshot.status}.`);
   });
 
   const agentTimeoutMs = Number(process.env["NEONBYTE_AGENT_TIMEOUT_MS"] ?? "45000");
   if (!Number.isFinite(agentTimeoutMs) || agentTimeoutMs < 1000) {
-    throw new Error("NEONBYTE_AGENT_TIMEOUT_MS deve ser pelo menos 1000.");
+    throw new Error("NEONBYTE_AGENT_TIMEOUT_MS must be at least 1000.");
   }
   const webApp = await startLocalWebApp({
     poller,
@@ -171,8 +171,8 @@ async function runAgent(): Promise<void> {
     agentTimeoutMs,
   });
 
-  logger.info(`Interface local disponível em ${webApp.url}.`);
-  logger.info(`Agente iniciado. Intervalo de consulta: ${pollIntervalMs} ms.${demoEnabled ? " Dados de demonstração ativos." : ""}`);
+  logger.info(`Local interface available at ${webApp.url}.`);
+  logger.info(`Agent started. Polling interval: ${pollIntervalMs} ms.${demoEnabled ? " Demo data active." : ""}`);
   poller.start();
   await new Promise<void>((resolve) => {
     const stop = () => {
@@ -194,12 +194,12 @@ async function main(): Promise<void> {
     return;
   }
   if (command && command !== "run") {
-    throw new Error("Comando desconhecido. Use 'auth' para autorizar ou 'run' para iniciar o agente.");
+    throw new Error("Unknown command. Use 'auth' to authorize or 'run' to start the agent.");
   }
   await runAgent();
 }
 
 main().catch((error: unknown) => {
-  logger.error(error instanceof Error ? error.message : "Falha inesperada no agente.");
+  logger.error(error instanceof Error ? error.message : "Unexpected agent failure.");
   process.exitCode = 1;
 });

@@ -1,7 +1,7 @@
-# Recuperação do dispositivo
+# Device Recovery
 
-**Estado:** PENDENTE; nenhum procedimento de backup, restore ou recuperação foi verificado para a unidade deste projeto.
+**Status:** PENDING; no backup, restore, or recovery procedure has been verified for this project's unit.
 
-Antes de qualquer gravação futura, será necessário confirmar a revisão exata, obter uma cópia do firmware original, identificar a interface de recuperação e testar a restauração em procedimento autorizado.
+Before any future flash, confirm the exact revision, obtain a copy of the original firmware, identify the recovery interface, and test the restore procedure with authorization.
 
-Não use um binário, layout de partições, pinagem ou instrução de outra unidade JUZIPi SD PRO por semelhança de nome. Não execute flash, OTA, erase ou alteração de partições com base neste documento. Consulte [investigação de hardware](hardware.md) para a lista de evidências ainda necessárias.
+Do not use a binary, partition layout, pinout, or instructions for another JUZIPi SD PRO unit based on a similar product name. Do not flash, run OTA, erase, or change partitions based on this document. See [hardware investigation](hardware.md) for the outstanding evidence requirements.

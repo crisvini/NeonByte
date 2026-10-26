@@ -1,89 +1,89 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en-US">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#10101a">
-    <title>NeonByte · Simulador local</title>
+    <title>NeonByte · Local Simulator</title>
     <link rel="stylesheet" href="/styles.css">
     <script src="/app.js" defer></script>
   </head>
   <body>
     <main class="app-shell">
       <header class="topbar">
-        <a class="brand" href="/" aria-label="NeonByte início">
+        <a class="brand" href="/" aria-label="NeonByte home">
           <span class="brand-mark" aria-hidden="true">N</span>
-          <span><strong>NeonByte</strong><small>SIMULADOR LOCAL</small></span>
+          <span><strong>NeonByte</strong><small>LOCAL SIMULATOR</small></span>
         </a>
-        <div class="agent-status"><span class="status-dot" id="agent-dot"></span><span id="agent-label">Iniciando agente…</span></div>
+        <div class="agent-status"><span class="status-dot" id="agent-dot"></span><span id="agent-label">Starting agent…</span></div>
       </header>
 
       <section class="intro">
         <div>
           <p class="eyebrow">DISPLAY 240 × 240</p>
-          <h1>Seu display, em tempo real.</h1>
-          <p class="lede">Conecte o Spotify, envie uma animação e veja as duas cenas no simulador local.</p>
+          <h1>Your display, in real time.</h1>
+          <p class="lede">Connect Spotify, upload an animation, and preview both scenes in the local simulator.</p>
         </div>
-        <div class="device-pill"><span class="device-icon" aria-hidden="true">◉</span><span><strong>Relógio</strong><small id="device-status">Simulação sem dispositivo</small></span></div>
+        <div class="device-pill"><span class="device-icon" aria-hidden="true">◉</span><span><strong>Clock</strong><small id="device-status">Simulation without a device</small></span></div>
       </section>
 
-      <section class="workspace" aria-label="Simulador e controles">
+      <section class="workspace" aria-label="Simulator and controls">
         <article class="card preview-card">
           <div class="card-heading">
-            <div><p class="eyebrow">PRÉVIA AO VIVO</p><h2>Tela simulada</h2></div>
+            <div><p class="eyebrow">LIVE PREVIEW</p><h2>Simulated screen</h2></div>
             <span class="scene-chip" id="scene-label">GIF FULLSCREEN</span>
           </div>
           <div class="display-stage">
-            <div class="display-bezel"><canvas id="display" width="240" height="240" role="img" aria-label="Prévia de tela 240 por 240"></canvas></div>
+            <div class="display-bezel"><canvas id="display" width="240" height="240" role="img" aria-label="240 by 240 screen preview"></canvas></div>
           </div>
-          <div class="preview-footer"><span class="live-indicator"><span></span>Renderização local</span><span>240 × 240 px</span></div>
+          <div class="preview-footer"><span class="live-indicator"><span></span>Local rendering</span><span>240 × 240 px</span></div>
         </article>
 
         <div class="control-column">
           <article class="card mode-card">
-            <div class="card-heading compact"><div><p class="eyebrow">CENA</p><h2>Modo de exibição</h2></div></div>
-            <div class="mode-switch" role="group" aria-label="Modo de exibição">
+            <div class="card-heading compact"><div><p class="eyebrow">SCENE</p><h2>Display mode</h2></div></div>
+            <div class="mode-switch" role="group" aria-label="Display mode">
               <button type="button" data-mode="auto" aria-pressed="true">Auto</button>
               <button type="button" data-mode="spotify" aria-pressed="false">Spotify</button>
               <button type="button" data-mode="gif" aria-pressed="false">GIF</button>
             </div>
-            <p class="mode-help" id="mode-help">Spotify quando estiver tocando; GIF nos outros momentos.</p>
+            <p class="mode-help" id="mode-help">Spotify while playing; GIF otherwise.</p>
           </article>
 
           <article class="card spotify-card">
             <div class="card-heading compact">
-              <div><p class="eyebrow">CONTA E PRÉVIA</p><h2>Spotify</h2></div>
-              <span class="connection-badge" id="spotify-badge">Não conectado</span>
+              <div><p class="eyebrow">ACCOUNT & PREVIEW</p><h2>Spotify</h2></div>
+              <span class="connection-badge" id="spotify-badge">Not connected</span>
             </div>
-            <p class="card-copy">A autorização usa o fluxo PKCE configurado neste agente.</p>
-            <button class="button button-spotify" type="button" id="connect-spotify"><span aria-hidden="true">↗</span> Conectar Spotify</button>
+            <p class="card-copy">Authorization uses the PKCE flow configured for this agent.</p>
+            <button class="button button-spotify" type="button" id="connect-spotify"><span aria-hidden="true">↗</span> Connect Spotify</button>
             <div class="demo-panel">
-              <div class="demo-heading"><div><strong>Dados de demonstração</strong><small>Teste sem conta ou dispositivo</small></div><button class="demo-toggle" id="demo-toggle" type="button" aria-pressed="false"><span class="toggle-knob"></span><span class="sr-only">Ativar dados de demonstração</span></button></div>
+              <div class="demo-heading"><div><strong>Demo data</strong><small>Test without an account or device</small></div><button class="demo-toggle" id="demo-toggle" type="button" aria-pressed="false"><span class="toggle-knob"></span><span class="sr-only">Enable demo data</span></button></div>
               <div class="demo-controls" id="demo-controls" hidden>
-                <button type="button" data-action="play" aria-label="Reproduzir mock">▶</button>
-                <button type="button" data-action="pause" aria-label="Pausar mock">Ⅱ</button>
-                <button type="button" data-action="next" aria-label="Próxima faixa mock">↻</button>
-                <button type="button" data-action="offline" aria-label="Simular agente offline">⌁</button>
-                <span id="demo-message">Mock pronto</span>
+                <button type="button" data-action="play" aria-label="Play mock">▶</button>
+                <button type="button" data-action="pause" aria-label="Pause mock">Ⅱ</button>
+                <button type="button" data-action="next" aria-label="Next mock track">↻</button>
+                <button type="button" data-action="offline" aria-label="Simulate agent offline">⌁</button>
+                <span id="demo-message">Mock ready</span>
               </div>
             </div>
           </article>
 
           <article class="card gif-card">
-            <div class="card-heading compact"><div><p class="eyebrow">ANIMAÇÃO PERSONALIZADA</p><h2>Seu GIF</h2></div><span class="file-limit">até 8 MB</span></div>
+            <div class="card-heading compact"><div><p class="eyebrow">CUSTOM ANIMATION</p><h2>Your GIF</h2></div><span class="file-limit">up to 8 MB</span></div>
             <label class="upload-zone" for="gif-file">
               <span class="upload-icon" aria-hidden="true">↑</span>
-              <strong>Escolher arquivo GIF</strong>
-              <span>Prévia em loop, preenchendo a tela</span>
+              <strong>Choose GIF file</strong>
+              <span>Looping preview that fills the screen</span>
             </label>
             <input id="gif-file" type="file" accept="image/gif,.gif" hidden>
-            <p class="upload-status" id="upload-status" aria-live="polite">Nenhum GIF enviado nesta sessão.</p>
+            <p class="upload-status" id="upload-status" aria-live="polite">No GIF uploaded in this session.</p>
           </article>
         </div>
       </section>
 
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
-      <footer class="page-footer"><span>O simulador não valida o hardware físico.</span><span>NeonByte · Interface local em 127.0.0.1</span></footer>
+      <footer class="page-footer"><span>The simulator does not validate the physical hardware.</span><span>NeonByte · Local interface at 127.0.0.1</span></footer>
     </main>
   </body>
 </html>

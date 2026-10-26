@@ -23,11 +23,11 @@ function validateLoopbackUri(value: string): URL {
   try {
     redirect = new URL(value);
   } catch {
-    throw new SpotifyOAuthError("O callback OAuth precisa usar 127.0.0.1.");
+    throw new SpotifyOAuthError("The OAuth callback must use 127.0.0.1.");
   }
 
   if (redirect.protocol !== "http:" || redirect.hostname !== "127.0.0.1" || redirect.pathname !== "/callback") {
-    throw new SpotifyOAuthError("O callback OAuth precisa usar http://127.0.0.1:<porta>/callback.");
+    throw new SpotifyOAuthError("The OAuth callback must use http://127.0.0.1:<port>/callback.");
   }
   return redirect;
 }
@@ -41,17 +41,17 @@ function sameState(expected: string, actual: string): boolean {
 export function parseOAuthCallback(url: URL, expectedState: string): OAuthCallbackResult {
   const state = url.searchParams.get("state") ?? "";
   if (!sameState(expectedState, state)) {
-    throw new SpotifyOAuthError("A resposta OAuth não passou na validação de estado. Inicie uma nova autorização.");
+    throw new SpotifyOAuthError("The OAuth response failed state validation. Start a new authorization.");
   }
 
   const providerError = url.searchParams.get("error");
   if (providerError) {
-    throw new SpotifyOAuthError("A autorização Spotify foi cancelada ou recusada.");
+    throw new SpotifyOAuthError("Spotify authorization was canceled or denied.");
   }
 
   const code = url.searchParams.get("code");
   if (!code) {
-    throw new SpotifyOAuthError("Spotify não retornou um código de autorização.");
+    throw new SpotifyOAuthError("Spotify did not return an authorization code.");
   }
   return { code };
 }
@@ -60,7 +60,7 @@ export async function startOAuthCallbackServer(options: OAuthCallbackOptions): P
   const redirect = validateLoopbackUri(options.redirectUri);
   const configuredPort = Number(redirect.port);
   if (!Number.isInteger(configuredPort) || configuredPort < 0 || configuredPort > 65535) {
-    throw new SpotifyOAuthError("A porta do callback OAuth é inválida.");
+    throw new SpotifyOAuthError("The OAuth callback port is invalid.");
   }
 
   let resolveResult: (result: OAuthCallbackResult) => void = () => undefined;
@@ -94,30 +94,30 @@ export async function startOAuthCallbackServer(options: OAuthCallbackOptions): P
     try {
       incoming = new URL(request.url ?? "/", redirect.origin);
     } catch {
-      response.writeHead(400).end("Callback inválido.");
+      response.writeHead(400).end("Invalid callback.");
       return;
     }
 
     if (request.method !== "GET" || incoming.pathname !== redirect.pathname) {
-      response.writeHead(404).end("Rota não encontrada.");
+      response.writeHead(404).end("Route not found.");
       return;
     }
 
     try {
       const result = parseOAuthCallback(incoming, options.expectedState);
       response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" })
-        .end("Autorização concluída. Você pode fechar esta janela.");
+        .end("Authorization complete. You can close this window.");
       finish(result);
     } catch (error) {
       response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" })
-        .end("Não foi possível concluir a autorização. Inicie o fluxo novamente.");
-      finish(undefined, error instanceof Error ? error : new SpotifyOAuthError("Falha no callback OAuth."));
+        .end("Unable to complete authorization. Start the flow again.");
+      finish(undefined, error instanceof Error ? error : new SpotifyOAuthError("OAuth callback failed."));
     }
   });
 
   try {
     await new Promise<void>((resolve, reject) => {
-      server.once("error", () => reject(new SpotifyOAuthError("Não foi possível abrir o callback local em 127.0.0.1.")));
+      server.once("error", () => reject(new SpotifyOAuthError("Unable to open the local callback on 127.0.0.1.")));
       server.listen(configuredPort, "127.0.0.1", () => resolve());
     });
   } catch (error) {
@@ -128,13 +128,13 @@ export async function startOAuthCallbackServer(options: OAuthCallbackOptions): P
   const address = server.address();
   if (!address || typeof address === "string") {
     server.close();
-    throw new SpotifyOAuthError("Não foi possível iniciar o callback local.");
+    throw new SpotifyOAuthError("Unable to start the local callback.");
   }
 
   const listenerRedirect = new URL(redirect.toString());
   listenerRedirect.port = String(address.port);
   timeout = setTimeout(() => {
-    finish(undefined, new SpotifyOAuthError("Tempo esgotado aguardando autorização Spotify."));
+    finish(undefined, new SpotifyOAuthError("Timed out while waiting for Spotify authorization."));
   }, options.timeoutMs ?? 5 * 60_000);
 
   return {
@@ -142,7 +142,7 @@ export async function startOAuthCallbackServer(options: OAuthCallbackOptions): P
     waitForCallback: () => resultPromise,
     close: async () => {
       if (!settled) {
-        finish(undefined, new SpotifyOAuthError("O callback OAuth foi encerrado."));
+        finish(undefined, new SpotifyOAuthError("The OAuth callback was closed."));
       }
       if (server.listening) {
         await new Promise<void>((resolve) => server.close(() => resolve()));

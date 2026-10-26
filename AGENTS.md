@@ -1,17 +1,34 @@
-# Instruções para agentes de código
+# Instructions for Coding Agents
 
-1. Leia todo o PLANNING.md, este arquivo e a documentação relacionada antes de alterar o projeto.
-2. Execute somente a etapa explicitamente autorizada pelo mantenedor. Não antecipe etapas futuras.
-3. Trate hardware, pinagem, memória, flash, partições, OTA e recuperação sem evidência como PENDENTE. Não deduza compatibilidade pelo nome comercial.
-4. Não compile para uma placa presumida nem execute flash, OTA, erase, alteração de partições ou qualquer operação no dispositivo sem autorização explícita.
-5. Nunca versione tokens, segredos, senhas, arquivos .env reais ou credenciais Spotify. Use .env.example somente para nomes e placeholders não secretos.
-6. Mantenha os contratos em contracts/v1/ alinhados com docs/protocol.md; atualize os exemplos e testes quando um contrato mudar.
-7. Rode npm run check para validar Markdown e contratos antes de concluir uma etapa.
-8. Marque no PLANNING.md somente tarefas concluídas e verificadas. Ao chegar ao limite da etapa autorizada, pare e peça autorização antes de continuar.
+1. Read all of `PLANNING.md`, this file, and related documentation before changing the project.
+2. Execute only the phase explicitly authorized by the maintainer. Do not advance to future phases.
+3. Treat hardware, pinout, memory, flash, partitions, OTA, and recovery as PENDING when unsupported by evidence. Do not infer compatibility from a product name.
+4. Do not compile for an assumed board or perform flash, OTA, erase, partition changes, or any device operation without explicit authorization.
+5. Never commit tokens, secrets, passwords, real `.env` files, or Spotify credentials. Use `.env.example` only for non-secret names and placeholders.
+6. Keep the contracts in `contracts/v1/` aligned with `docs/protocol.md`; update examples and tests when a contract changes.
+7. Run `npm run check` to validate Markdown and contracts before completing a phase.
+8. Mark tasks in `PLANNING.md` complete only after they are verified. Stop at the authorized phase boundary and request approval before continuing.
 
-## Convenções iniciais
+## Conventions
 
-- UTF-8 e finais de linha LF.
-- Markdown com títulos hierárquicos, listas com hífen e blocos de código cercados.
-- Não adicione dependências de runtime sem necessidade documentada.
-- Código de agente, firmware e simulador segue sem implementação até a autorização de sua etapa.
+### Language and Naming Conventions
+
+These conventions apply to every future development phase, refactoring, bug fix, and contribution.
+
+1. Write all source code in English.
+2. Use descriptive English names for all identifiers.
+3. Use English for all filenames and directory names.
+4. Write all comments, documentation, and test descriptions in English.
+5. Write all logs, error messages, and UI text in English.
+6. Use American English (`en-US`) consistently.
+7. Prefer `camelCase` for variables and functions, `PascalCase` for classes and types, and `UPPER_SNAKE_CASE` for constants where appropriate.
+8. Follow the naming conventions of the existing framework and ecosystem.
+9. Do not introduce Portuguese or mixed-language content.
+10. Verify compliance with these rules before completing any development task.
+
+### Initial Conventions
+
+- Use UTF-8 encoding and LF line endings.
+- Format Markdown with hierarchical headings, hyphenated lists, and fenced code blocks.
+- Do not add runtime dependencies without a documented need.
+- Do not implement agent, firmware, or simulator code until its phase is authorized.

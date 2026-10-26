@@ -52,7 +52,7 @@ function validateRedirectUri(value: string): URL {
   try {
     redirect = new URL(value);
   } catch {
-    throw new SpotifyOAuthError("SPOTIFY_REDIRECT_URI deve ser um callback HTTP em 127.0.0.1.");
+    throw new SpotifyOAuthError("SPOTIFY_REDIRECT_URI must be an HTTP callback on 127.0.0.1.");
   }
 
   if (
@@ -67,7 +67,7 @@ function validateRedirectUri(value: string): URL {
     redirect.hash.length > 0
   ) {
     throw new SpotifyOAuthError(
-      "SPOTIFY_REDIRECT_URI deve usar http://127.0.0.1:<porta>/callback, conforme as regras atuais do Spotify.",
+      "SPOTIFY_REDIRECT_URI must use http://127.0.0.1:<port>/callback, as required by current Spotify rules.",
     );
   }
 
@@ -76,7 +76,7 @@ function validateRedirectUri(value: string): URL {
 
 function parseTokenResponse(value: unknown): SpotifyTokenResponse {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new SpotifyOAuthError("Spotify retornou uma resposta de autorização inválida.");
+    throw new SpotifyOAuthError("Spotify returned an invalid authorization response.");
   }
   return value as SpotifyTokenResponse;
 }
@@ -88,7 +88,7 @@ async function responseJson(response: Response): Promise<SpotifyTokenResponse> {
     if (error instanceof SpotifyOAuthError) {
       throw error;
     }
-    throw new SpotifyOAuthError("Spotify retornou uma resposta de autorização inválida.");
+    throw new SpotifyOAuthError("Spotify returned an invalid authorization response.");
   }
 }
 
@@ -105,7 +105,7 @@ export class SpotifyOAuthClient implements AccessTokenProvider {
 
   constructor(options: SpotifyOAuthClientOptions) {
     if (!options.clientId.trim()) {
-      throw new SpotifyOAuthError("SPOTIFY_CLIENT_ID é obrigatório.");
+      throw new SpotifyOAuthError("SPOTIFY_CLIENT_ID is required.");
     }
 
     validateRedirectUri(options.redirectUri);
@@ -146,7 +146,7 @@ export class SpotifyOAuthClient implements AccessTokenProvider {
     });
 
     if (typeof response.refresh_token !== "string" || response.refresh_token.length === 0) {
-      throw new SpotifyOAuthError("Spotify não forneceu um refresh token; repita a autorização.");
+      throw new SpotifyOAuthError("Spotify did not provide a refresh token; authorize again.");
     }
 
     await this.tokenStore.set(response.refresh_token);
@@ -216,7 +216,7 @@ export class SpotifyOAuthClient implements AccessTokenProvider {
       if (parameters["grant_type"] === "refresh_token" && payload.error === "invalid_grant") {
         throw new InvalidRefreshTokenResponseError();
       }
-      throw new SpotifyOAuthError("Spotify recusou a autorização. Confira as configurações e tente novamente.");
+      throw new SpotifyOAuthError("Spotify denied authorization. Check your settings and try again.");
     }
     return payload;
   }
@@ -229,7 +229,7 @@ export class SpotifyOAuthClient implements AccessTokenProvider {
       !Number.isFinite(response.expires_in) ||
       response.expires_in <= 0
     ) {
-      throw new SpotifyOAuthError("Spotify retornou uma resposta de autorização inválida.");
+      throw new SpotifyOAuthError("Spotify returned an invalid authorization response.");
     }
 
     this.accessToken = {

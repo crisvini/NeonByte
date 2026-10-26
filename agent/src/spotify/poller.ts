@@ -90,7 +90,7 @@ export class PlaybackPoller {
 
   constructor(options: PlaybackPollerOptions) {
     if (!Number.isFinite(options.pollIntervalMs) || options.pollIntervalMs < 1000) {
-      throw new RangeError("O intervalo de polling deve ser de pelo menos 1000 ms.");
+      throw new RangeError("The polling interval must be at least 1000 ms.");
     }
     this.provider = options.provider;
     this.pollIntervalMs = Math.trunc(options.pollIntervalMs);
@@ -158,8 +158,8 @@ export class PlaybackPoller {
         unavailableReason: unavailableReason(error),
       });
       this.logger.warn(error instanceof RateLimitedError
-        ? "Spotify limitou as consultas; o agente aguardará antes de tentar novamente."
-        : "Consulta Spotify indisponível; o agente tentará reconectar.");
+        ? "Spotify rate-limited requests; the agent will wait before retrying."
+        : "Spotify polling is unavailable; the agent will try to reconnect.");
     } finally {
       this.polling = false;
     }
@@ -243,7 +243,7 @@ export class PlaybackPoller {
       try {
         listener(next);
       } catch {
-        this.logger.error("Um consumidor local falhou ao receber o estado Spotify.");
+        this.logger.error("A local consumer failed while receiving Spotify state.");
       }
     }
   }

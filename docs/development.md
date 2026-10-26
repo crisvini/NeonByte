@@ -1,53 +1,53 @@
-# Desenvolvimento
+# Development
 
-## Estado do repositório
+## Repository Status
 
-Etapas 1 a 3: documentação, contrato v1, agente Spotify e interface local com simulador 240 × 240. A interface usa o estado do agente e pode funcionar com conta Spotify ou dados de demonstração, sem dispositivo conectado. `firmware/` continua reservado; resolução, cores, orientação e desempenho reais da unidade permanecem PENDENTE.
+Phases 1 through 3 are complete: documentation, the v1 contract, the Spotify agent, and the local interface with a 240 × 240 simulator. The interface uses the agent's state and works with either a Spotify account or demo data, without a connected device. `firmware/` remains reserved; the unit's actual resolution, colors, orientation, and performance are PENDING.
 
-## Requisitos e comandos atuais
+## Current Requirements and Commands
 
-- Node.js 22 ou superior para as ferramentas de lint e teste.
-- npm compatível com a versão do Node.js.
-- `npm ci` instala o lint e as ferramentas de contrato da raiz.
-- `npm ci --prefix agent` instala as dependências do agente, do cofre seguro do sistema e do decodificador GIF.
-- npm run lint verifica arquivos Markdown.
-- npm test executa testes de contrato com o test runner nativo do Node.js.
-- `npm --prefix agent run build` compila o agente TypeScript e copia os arquivos estáticos do painel.
-- `npm --prefix agent test` executa testes unitários e de integração com fetch e providers simulados.
-- npm run check executa lint, testes de contrato, build TypeScript e testes do agente; make check é um atalho equivalente.
+- Node.js 22 or later for linting and testing tools.
+- npm compatible with the installed Node.js version.
+- `npm ci` installs the root lint and contract tools.
+- `npm ci --prefix agent` installs the agent, native credential-store, and GIF decoder dependencies.
+- `npm run lint` checks Markdown files.
+- `npm run language:check` checks for high-confidence Portuguese content in project text and source files.
+- `npm test` runs contract tests with the native Node.js test runner.
+- `npm --prefix agent run build` compiles the TypeScript agent and copies static dashboard files.
+- `npm --prefix agent test` runs unit and integration tests with mocked fetch and providers.
+- `npm run check` runs lint, language checks, contract tests, the TypeScript build, type checks, and agent tests; `make check` is an equivalent shortcut.
 
-Os testes de agente cobrem PKCE, callback loopback, refresh, normalização, respostas 204/401/429, reconexão, cache, simulador, modos, upload, conversão de mídia e limites/checksums. Não fazem chamadas à Spotify Web API nem validam uma conta real ou hardware.
+Agent tests cover PKCE, the loopback callback, refresh, normalization, 204/401/429 responses, reconnects, caching, the simulator, display modes, uploads, media conversion, limits, and checksums. They do not call the Spotify Web API or validate a real account or hardware.
 
-## Interface local e simulador
+## Local Interface and Simulator
 
-Com `.env` configurado (ou sem um Client ID Spotify válido para iniciar a demonstração), execute `npm --prefix agent run build` e `npm --prefix agent run start`. Abra [http://localhost:8787](http://localhost:8787). O servidor se vincula somente a `127.0.0.1`; `NEONBYTE_PORT` precisa corresponder à porta de `SPOTIFY_REDIRECT_URI` para que o callback OAuth volte ao mesmo servidor. O painel permite conectar Spotify com o PKCE existente, escolher `auto`, `spotify` e `gif`, simular play/pausa/troca/offline e enviar um GIF.
+With `.env` configured (or without a valid Spotify Client ID to start the demo), run `npm --prefix agent run build` and `npm --prefix agent run start`. Open [http://localhost:8787](http://localhost:8787). The server binds only to `127.0.0.1`; `NEONBYTE_PORT` must match the port in `SPOTIFY_REDIRECT_URI` so the OAuth callback returns to the same server. The dashboard can connect Spotify, select `auto`, `spotify`, or `gif`, simulate play/pause/track changes/offline state, and upload a GIF.
 
-O simulador conserva a composição lógica em 240 × 240 e amplia o canvas com CSS responsivo. `auto` seleciona Spotify somente quando o estado recente do agente confirma reprodução. O modo manual Spotify mostra espera sem faixa; o modo GIF e o fallback de `auto` ocupam o quadro todo com a animação. O estado do relógio é sempre “simulação sem dispositivo”; a Etapa 3 não conecta a unidade física.
+The simulator keeps its logical composition at 240 × 240 and scales the canvas responsively with CSS. `auto` selects Spotify only when the agent's recent state confirms playback. Manual Spotify mode shows a waiting state without a track; GIF mode and the `auto` fallback fill the entire frame with the animation. The clock status always reads “simulation without a device”; Phase 3 does not connect to the physical unit.
 
-### Formato intermediário de mídia do simulador
+### Simulator Media Intermediate Format
 
-O agente usa `gifuct-js` 2.1.2 (MIT) para ler os quadros do GIF. O formato de prévia é experimental e não constitui um contrato v1 nem um codec confirmado para o hardware:
+The agent uses `gifuct-js` 2.1.2 (MIT) to read GIF frames. The preview format is experimental and is not a v1 contract or a hardware-confirmed codec:
 
-- `NBIF` (animação): bytes `NBIF`, versão `1` (u8), largura e altura `240` (u16 little-endian), quantidade de quadros (u16 little-endian); em seguida, cada quadro contém atraso em milissegundos (u16 little-endian) e 240 × 240 pixels RGB565 little-endian.
-- `NBIC` (capa): bytes `NBIC`, versão `1` (u8), largura e altura `240` (u16 little-endian), seguidos por 240 × 240 pixels RGB565 little-endian.
-- SHA-256 em hexadecimal minúsculo cobre o arquivo intermediário completo, incluindo cabeçalho e temporizações.
-- GIF: máximo de 8 MiB, 20 quadros, 1.048.576 pixels por dimensão lógica ou descritor de quadro, 4.194.304 pixels somados nos descritores e 30 segundos de duração total. Os descritores são limitados antes da descompressão. Quadro com atraso menor que 20 ms usa 20 ms; atraso zero usa 100 ms. A política de escala é `cover`, com corte central. O descarte GIF de tipo 2 restaura a cor global de fundo, mantendo transparência quando o índice de fundo coincide com o índice transparente.
-- Capa: o navegador decodifica a imagem para RGBA, recorta ao centro para 240 × 240 e o agente converte os pixels para RGB565.
+- `NBIF` (animation): bytes `NBIF`, version `1` (u8), width and height `240` (u16 little-endian), frame count (u16 little-endian); then each frame contains a delay in milliseconds (u16 little-endian) followed by 240 × 240 RGB565 pixels in little-endian order.
+- `NBIC` (cover): bytes `NBIC`, version `1` (u8), width and height `240` (u16 little-endian), followed by 240 × 240 RGB565 pixels in little-endian order.
+- The lowercase hexadecimal SHA-256 covers the complete intermediate file, including its header and frame timings.
+- GIF limits: 8 MiB, 20 frames, 1,048,576 pixels per logical dimension or frame descriptor, 4,194,304 pixels total across descriptors, and 30 seconds of total duration. Descriptors are limited before decompression. A frame delay below 20 ms is set to 20 ms; a zero delay is set to 100 ms. The scaling policy is `cover` with a centered crop. GIF disposal method 2 restores the global background color while preserving transparency when the background index matches the transparent index.
 
-GIF e capa convertidos ficam em memória durante a sessão local e são descartados quando o agente encerra. Os limites e o formato existem para a prévia e precisam ser revistos com medições de flash, RAM e velocidade antes de qualquer integração ao firmware. O pacote decodificador está documentado em [gifuct-js](https://github.com/matt-way/gifuct-js).
+Converted GIFs and covers remain in memory for the local session and are discarded when the agent exits. The limits and format exist for the preview and must be reviewed against measured flash, RAM, and speed before any firmware integration. The decoder package is documented at [gifuct-js](https://github.com/matt-way/gifuct-js).
 
-## Convenções
+## Conventions
 
-- UTF-8, LF e nomes de arquivos em kebab-case para documentos.
-- Manter os schemas e exemplos de contracts/v1/ alinhados com docs/protocol.md.
-- O agente guarda refresh tokens pelo cofre nativo do sistema, sem fallback para arquivos locais. No Linux, o adaptador exige Secret Service para persistência entre reinicializações.
-- A dependência de runtime `@napi-rs/keyring` 1.3.0 é MIT; o upstream publica avisos das bibliotecas embutidas, incluindo `libdbus` (AFL-2.1 ou GPL-2.0-or-later no binário Linux). Conferir os avisos upstream antes de redistribuir binários.
-- O agente consulta somente `GET /me/player/currently-playing`, usando o escopo `user-read-currently-playing`.
-- `PlaybackPoller.currentSnapshot` e `subscribe()` formam a interface local em processo para futuros consumidores; ela não abre porta de rede e não transporta tokens.
-- A URL da capa Spotify permanece como metadado interno do agente. O painel baixa a imagem somente do host de mídia permitido e a converte para a prévia; envio ao dispositivo fica para etapas posteriores.
-- `gifuct-js` 2.1.2 é MIT; o asset vetorial original de demonstração segue a licença MIT do repositório. Os arquivos de licença do pacote permanecem no `agent/node_modules` após a instalação.
-- A linguagem e a configuração de build do firmware dependem da identificação do hardware.
+- Use UTF-8, LF, and kebab-case filenames for documentation.
+- Keep schemas and examples in `contracts/v1/` aligned with `docs/protocol.md`.
+- The agent stores refresh tokens in the operating system's native credential manager and has no fallback to local files. On Linux, the adapter requires Secret Service for persistence across restarts.
+- The `@napi-rs/keyring` 1.3.0 runtime dependency is MIT-licensed; upstream publishes notices for bundled libraries, including `libdbus` (AFL-2.1 or GPL-2.0-or-later in the Linux binary). Review upstream notices before redistributing binaries.
+- The agent calls only `GET /me/player/currently-playing` with the `user-read-currently-playing` scope.
+- `PlaybackPoller.currentSnapshot` and `subscribe()` form the in-process local interface for future consumers; it does not open a network port or transport tokens.
+- The Spotify cover URL remains internal agent metadata. The dashboard fetches the image only from the permitted media host and converts it for the preview; sending it to the device is for a later phase.
+- `gifuct-js` 2.1.2 is MIT-licensed; the original demo vector asset is covered by this repository's MIT license. The package's license files remain in `agent/node_modules` after installation.
+- Firmware language and build configuration depend on hardware identification.
 
-## Próximas etapas
+## Next Phases
 
-O agente usa Node.js + TypeScript; firmware em C++/PlatformIO, com alvo ainda não confirmado. A integração com o relógio depende da autorização da etapa seguinte e da validação do hardware descrita em [hardware.md](hardware.md). Os comandos para instalar, autorizar e iniciar o agente estão em [installation.md](installation.md).
+The agent uses Node.js and TypeScript; firmware is planned for C++ and PlatformIO, with the target not yet confirmed. Clock integration depends on approval for the next phase and hardware validation described in [hardware.md](hardware.md). Installation, authorization, and startup commands are in [installation.md](installation.md).
