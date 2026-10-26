@@ -20,14 +20,17 @@ enum class ActiveScene : std::uint8_t {
     gif,
 };
 
-struct FixedText {
-    std::array<char, MAX_TEXT_UTF8_BYTES> bytes{};
+template<std::size_t Capacity>
+struct BoundedText {
+    std::array<char, Capacity> bytes{};
     std::uint16_t length = 0;
 
     std::string_view view() const {
         return {bytes.data(), length};
     }
 };
+
+using FixedText = BoundedText<MAX_TEXT_UTF8_BYTES>;
 
 struct NowPlaying {
     FixedText trackId;

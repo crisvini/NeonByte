@@ -1,6 +1,6 @@
 # NeonByte — Implementation Plan
 
-> **Status:** Phases 1, 2, and 3 are complete; OAuth validation with a real account is pending Spotify credentials. The Phase 4 hardware-independent subset is complete; physical hardware validation and recovery remain pending, and board-specific development awaits evidence and explicit approval · **Intended license:** MIT · **Target device:** JUZIPi SD PRO (hardware identification pending)
+> **Status:** Phases 1, 2, and 3 are complete; OAuth validation with a real account is pending Spotify credentials. Phase 4 includes locally compiled ESP8266 adapters authorized on 2026-10-26; display/flash/boot validation and Wi-Fi-only installation/recovery remain pending · **Intended license:** MIT · **Target device:** JUZIPi SD PRO (ESP-12F / ESP8266 visually confirmed; remaining hardware identification pending)
 >
 > **Primary rule:** implement phases sequentially; do not flash firmware until the hardware is validated and recovery is documented.
 
@@ -24,12 +24,12 @@ Build **NeonByte**, an open-source project consisting of custom firmware for a s
 
 - **Do not assume** the chip, SPI pinout, LCD driver, backlight, orientation, flash size, partition scheme, file system, or OTA layout from the device's commercial name alone.
 - The expected display is **240 × 240**; validate resolution, rotation, and colors on the actual hardware.
-- Confirm a reliable way to back up and restore the original firmware and recover the device (for example, a serial connection and bootloader mode) before flashing.
+- Confirm a reliable Wi-Fi-only way to back up and restore the original firmware and recover after a failed boot before installation. Physical programming, UART, soldering, and USB-serial are out of scope.
 - Investigate RAM, storage, maximum firmware size, drawing speed, and flash wear limits.
 - Confirm current Spotify Web API requirements (scopes, app mode, rate-limit rules, and credentials) in the official documentation during implementation.
 - Verify licenses for libraries, fonts, and assets added to the project, including attribution requirements.
 
-**Blocking milestone:** without technical evidence to identify and recover the device, keep development in the simulator; do not guess hardware settings.
+**Blocking milestone:** installation remains blocked without validated hardware and independent Wi-Fi-only recovery. The maintainer explicitly authorized local Phase 4 ESP8266 compilation with documented provisional hardware assumptions; that authorization does not permit device operations.
 
 ## 3. Proposed Architecture
 
@@ -237,7 +237,7 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 
 ### Phase 4 — Custom Firmware and Hardware Validation
 
-**Required block before flashing:** confirm the chip, pinout, power, display, resolution, backlight, flash, partitions, bootloader, serial interface, original backup, and recovery procedure. If any critical item cannot be confirmed, do not flash.
+**Required block before flashing:** confirm the chip, pinout, power, display, resolution, backlight, flash, linked layout, bootloader, original full backup, and independent Wi-Fi-only recovery procedure. The module is now visually confirmed; other critical items remain PENDING. Serial and physical programming are out of scope. If any critical item cannot be confirmed, do not flash.
 
 **Deliverables:** compilable PlatformIO project, scenes, network, storage, implemented API, and bench tests.
 
@@ -245,12 +245,20 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 
 **Core review (2026-10-26):** the [review report](docs/firmware-core-review.md) records fixes for metadata that stayed active under continued heartbeats and rejection of valid JSON whitespace. The expanded 31-test native suite, AddressSanitizer/UndefinedBehaviorSanitizer run, and complete repository checks passed. Host stack measurements are documented as integration constraints; target memory, hardware validation, recovery, uploads, and all board-specific work remain **PENDING**. No later phase is authorized by this review.
 
+**ESP8266 integration authorization (2026-10-26):** the maintainer visually confirmed ESP-12F / ESP8266 and authorized local firmware integration and compilation, with Wi-Fi as the exclusive communication/update method. The [integration report](docs/esp8266-integration.md) records artifact/resource evidence. No device was contacted or modified. The default native environment is preserved. Provisional 4 MB/DIO/4m3m assumptions do not validate the installed hardware. Display activation and OTA remain disabled in the review artifact; the enabled validation environment is also compilation-only.
+
 - [x] Create a C++17 PlatformIO native test environment without selecting a device board.
 - [x] Implement host-tested scene modes, Spotify progress correction, and heartbeat fallback.
 - [x] Implement transport-independent validation and handling for the v1 JSON status, mode, Spotify, and heartbeat routes.
 - [x] Define display, storage, clock, authentication, and network interfaces with native mocks.
 - [x] Stream the existing version 1 RGB565 animation format from storage in caller-sized chunks.
 - [x] Document host memory costs, resource limits, protocol compatibility, and remaining hardware dependencies.
+
+- [x] Add pinned, locally compilable ESP8266 profiles while retaining native tests and blocking PlatformIO device-operation targets.
+- [x] Bind the core to the ESP8266 clock, cooperative Wi-Fi retry/protected provisioning, and bounded HTTP v1 implementation; validate compilation and portable logic.
+- [x] Implement candidate/readback/atomic replacement for configuration and mode, staged SHA-256 media uploads, track-bound covers, and row-streamed playback; verify portable failure cases.
+- [x] Implement compile-gated device-hosted firmware OTA with exact size, SHA-256, image checks, and staging bounds; compile the enabled code without deploying it.
+- [x] Evaluate local binary size, static RAM, stack frames, filesystem geometry, stock image format, and the nominal 512 KiB stock guard; document unverified physical behavior.
 
 - [ ] Document verified hardware and prepare a testable backup/restore procedure.
 - [ ] Configure the board, framework, flags, and partition scheme based on evidence.
@@ -350,7 +358,7 @@ English (en-US) is mandatory throughout the NeonByte project, including all curr
 
 **Instruction to the coding agent:**
 
-> Read all of `PLANNING.md` and execute only the phase explicitly authorized by the maintainer. Phases 1, 2, and 3 are complete; real-account OAuth validation still depends on Spotify credentials. The Phase 4 hardware-independent subset is complete. Do not begin board-specific Phase 4 work until the hardware and recovery blockers are resolved and the maintainer approves it.
+> Read all of `PLANNING.md` and execute only the phase explicitly authorized by the maintainer. Phases 1, 2, and 3 are complete; real-account OAuth validation still depends on Spotify credentials. Phase 4 local ESP8266 integration is authorized and compile-validated with provisional assumptions. Safe Wi-Fi-only first installation and independent boot recovery are BLOCKED. Preserve all physical validation tasks as pending. Do not contact, upload to, or modify the device, and do not begin Phase 5 without separate authorization.
 
 ## 12. Decision Log
 

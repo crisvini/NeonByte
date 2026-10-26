@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-26. **Scope:** static investigation of `SDPro_V1.0.6_20260525_174828.bin`. No firmware was executed, compiled for a device, uploaded, or sent to a device. No device endpoints were contacted. Hardware validation and recovery remain **PENDING**.
 
-**Subsequent Phase 4 update:** the hardware-independent C++ core now has a PlatformIO native test environment. No device board target has been selected or built, and no device endpoint or physical unit has been accessed.
+**Subsequent Phase 4 update:** the maintainer visually confirmed ESP-12F / ESP8266 and authorized local integration. Native and provisional ESP8266 targets have now been built; see the [integration comparison](esp8266-integration.md). Statements below describe the earlier static investigation. No device endpoint has been contacted or unit modified; Wi-Fi-only installation/recovery remain blocked.
 
 ## Assessment
 

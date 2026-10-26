@@ -1,10 +1,10 @@
 # Local HTTP v1 Contract
 
-**Status:** initial v1 specification. A hardware-independent C++ handler now implements the JSON status, mode, Spotify, and heartbeat behavior for host tests. There is still no network-stack binding, device server, or agent client. The agent's local interface routes under `/api/*` are private to the simulator and are not part of this contract.
+**Status:** the native core and provisional ESP8266 runtime implement v1. The runtime has compiled locally; no device endpoint has been contacted or deployed. The agent client remains Phase 5 work. The agent's simulator routes under `/api/*` are private to the local interface. Hardware compatibility and installation are PENDING.
 
 ## Transport and Compatibility
 
-- Local HTTP base; device host, port, and discovery method: PENDING.
+- ESP8266 runtime: local HTTP on port 80; station address comes from DHCP. Setup/reconfiguration AP uses `192.168.4.1`. Discovery is not implemented.
 - Route prefix: `/api/v1`.
 - JSON uses UTF-8 and `Content-Type: application/json`.
 - The version returned by `GET /api/v1/status` must be `v1`. The client must stop sending updates if the version is incompatible.
@@ -15,7 +15,7 @@
 
 All mutating routes require `Authorization: Bearer {token}`: mode, Spotify, cover, animation, and heartbeat. `GET /api/v1/status` is read-only and does not require a token. Tokens must not appear in logs, URLs, or responses.
 
-Token generation, initial pairing, secure storage, and recovery: PENDING. No pairing exception has been implemented.
+The runtime generates a random 64-hex-character token and stores it in its namespaced configuration file. A separately generated WPA2 AP password and the token are shown locally only during initial setup with an enabled, validated display. No unauthenticated pairing exception or reset route exists. The token remains plaintext in device flash; pairing on real hardware and recovery remain PENDING. See [firmware development](firmware-development.md).
 
 ## Display Modes and Scene Selection
 
@@ -27,7 +27,7 @@ The persisted mode is exactly one of these values:
 
 Initial timeout interpretation: a missing heartbeat for 45 seconds makes the agent unavailable. In `auto` mode this returns to GIF; manual `spotify` mode stays on its waiting screen, as specified by the planning mode matrix. The default mode is `auto`; a manual selection persists across restarts.
 
-The native firmware also expires Spotify metadata independently using the same timeout, even when heartbeats continue. Its age includes the nonnegative Unix sample age at receipt plus monotonic elapsed time since receipt; exactly 45 seconds remains fresh. Expired metadata selects GIF in `auto` and the waiting state in `spotify`. Fresh playback samples must therefore arrive within the timeout. Heartbeats record presence only. Unix clock synchronization remains PENDING; see the [core review](firmware-core-review.md) for clock and integration limitations.
+The native firmware also expires Spotify metadata independently using the same timeout, even when heartbeats continue. Its age includes the nonnegative Unix sample age at receipt plus monotonic elapsed time since receipt; exactly 45 seconds remains fresh. Expired metadata selects GIF in `auto` and the waiting state in `spotify`. Fresh playback samples must therefore arrive within the timeout. Heartbeats record presence only. The ESP8266 adapter attempts SNTP; until Unix time is known, receipt freshness uses monotonic time and cannot reliably distinguish replayed old samples. The [core review](firmware-core-review.md) explains the underlying clock limitations.
 
 The suggested Spotify polling interval is 15 seconds and will be configurable in the agent. Keeping `spotify` on its waiting screen after heartbeat expiration reconciles the mode matrix with the planning timeout behavior; revisit this if the maintainer wants the timeout to override manual mode as well.
 
@@ -64,11 +64,16 @@ The agent must clamp `progressMs` to `durationMs`. The firmware advances progres
 | GET | /api/v1/status | No body | 200 and an object matching [status.schema.json](../contracts/v1/status.schema.json). |
 | PUT | /api/v1/mode | JSON matching [mode.schema.json](../contracts/v1/mode.schema.json) | 204; mode persisted. |
 | PUT | /api/v1/spotify | JSON matching [now-playing.schema.json](../contracts/v1/now-playing.schema.json) | 204; state updated. |
-| PUT | /api/v1/cover | Binary bytes, X-Track-Id, and X-Content-SHA256 | 204 after validation and storage. Image format and byte limit: PENDING. |
-| PUT | /api/v1/animation | Binary bytes and X-Content-SHA256 | 204 after validation and storage. Codec, format version, and byte limit: PENDING. |
+| PUT | /api/v1/cover | Binary bytes, X-Track-Id, and X-Content-SHA256 | 204 after validation and storage. NBIC v1, exactly 115,209 bytes. |
+| PUT | /api/v1/animation | Binary bytes and X-Content-SHA256 | 204 after validation and storage. NBIF v1, at most 2,304,051 bytes and available atomic staging space. |
 | POST | /api/v1/heartbeat | No body | 204; records presence when received. |
 
-The cover and animation formats depend on the pixel format, storage, RAM, and performance confirmed for the hardware. Until then, the binary routes are proposed envelopes and are not ready for interoperability. `X-Content-SHA256` is the lowercase hexadecimal SHA-256 of the complete body. Validate uploads before replacing the working asset.
+The ESP8266 profile accepts `application/octet-stream`, an exact nonzero `Content-Length`, and `X-Content-SHA256`: lowercase hexadecimal SHA-256 of the complete body. These limits describe the local implementation, not measured hardware performance. It rejects chunked transfers, `Expect`, duplicate sensitive headers, and incomplete input. Uploads use candidate files; checksum/format validation occurs after close and before atomic rename. Failed uploads preserve the installed asset.
+
+- Cover body: `NBIC`, version `1` (u8), width `240` and height `240` (u16 little-endian), followed by 115,200 little-endian RGB565 bytes. Example header bytes: `4e 42 49 43 01 f0 00 f0 00`.
+- `X-Track-Id` encodes the UTF-8 track ID with percent escapes, as produced by `encodeURIComponent`. For example, `track%2Fexample` identifies `track/example`; `+` is literal. Decoding must produce 1–256 Unicode code points. A 4,096-byte header budget accommodates the maximally percent-encoded 1,024-byte field and ordinary required headers.
+- Animation body: `NBIF`, version `1` (u8), width/height `240` (u16 little-endian), frame count `1–20` (u16 little-endian), then each frame's u16 little-endian delay and 115,200 RGB565 bytes. Example one-frame header: `4e 42 49 46 01 f0 00 f0 00 01 00`. Delays must be at least 20 ms and total duration at most 30,000 ms. File length must exactly match the frame count.
+- Free space must hold the candidate alongside the installed asset, its private metadata, and a 32 KiB reserve. The effective upload limit is therefore often below the format maximum. No format or limit claims a validated FPS or physical flash capacity.
 
 A cover received before metadata may be stored under the `X-Track-Id` key, but it may only be shown with a track whose `trackId` matches. Do not show a previous track's cover as if it belonged to the current track.
 
@@ -82,21 +87,29 @@ JSON errors follow [error.schema.json](../contracts/v1/error.schema.json). The `
 | 401 | unauthorized | Missing or invalid token on a mutating route. |
 | 404 | not_found | Unknown route or resource. |
 | 409 | conflict | Conflict with current state or concurrent upload. |
-| 413 | payload_too_large | Body exceeds the configured limit; numeric limit: PENDING. |
+| 413 | payload_too_large | Body exceeds the configured limit; 12,288 bytes for JSON, 512 bytes for configuration, and the binary limits above; headers have a separate 4,096-byte cap. |
 | 415 | unsupported_media_type | Unsupported media type or format. |
 | 422 | invalid_content | Invalid content, checksum, or semantics. |
 | 500 | internal_error | Internal failure without sensitive details. |
 
-## Security and Pending Limits
+## ESP8266 Configuration and Future OTA Extensions
 
-- The initial design has no TLS; restrict traffic to a trusted local network.
-- Define pairing, token generation, and token storage before implementing mutating routes.
-- Define the port, body limits, and binary formats with hardware evidence before implementing firmware or integration.
-- Reject unknown modes, invalid payloads, bad checksums, and incomplete uploads; preserve the last valid asset.
-- The protocol does not include commands to control Spotify playback.
+These device-hosted extensions do not change the existing JSON schemas or agent behavior. They are not stock SD PRO endpoints. Both require `Authorization: Bearer {token}`; tokens, passwords, and request bodies must never be echoed.
 
-## Hardware-Independent Firmware Status
+| Method | Route | Body/headers | Success |
+|---|---|---|---|
+| PUT | /api/v1/config | `application/x-www-form-urlencoded`, at most 512 bytes; exactly `ssid=<encoded>&password=<encoded>` in that order | 204 after verified persistent replacement; station connection is attempted asynchronously. |
+| PUT | /api/v1/firmware | `application/octet-stream`, exact length, X-Content-SHA256 | 204 after validation and successful firmware staging; a restart is scheduled. |
 
-The C++ handler in [firmware development](firmware-development.md) preserves the existing v1 paths, JSON fields, mode values, status fields, and error codes. The JSON schemas and examples are unchanged. The handler checks the existing bearer-authentication requirement through an injected authenticator; token pairing and provisioning are not implemented.
+SSID length is 1–32 decoded bytes. Wi-Fi passwords are empty for open networks, 8–63 printable bytes, or 64 hexadecimal characters. Form `+` means space; percent escapes must be well formed and cannot decode to NUL/control bytes. Stored credentials are not returned. There is no default or hardcoded Wi-Fi password or pairing token.
 
-The handler currently returns `415 unsupported_media_type` for the cover and animation routes because upload size limits, hardware storage behavior, and safe asset replacement remain pending. This response uses an existing v1 error code and does not change the route envelope or checksum header contract. No device endpoint is available until a hardware network adapter is implemented and validated.
+Firmware OTA is **disabled** in the provisional artifact (`409 conflict`). An enabled future build accepts only an uncompressed combined DIO/40 MHz/4 MB ESP8266 eboot/application image, at most 524,288 bytes and within runtime staging space. It validates segment bounds/checksums, modern Arduino length/CRC, and the complete staged-file SHA-256 before `Update.begin(exactSize, U_FLASH)`. Modern checksum validation accounts for elf2bin's post-checksum metadata patch. `Update.end(false)` rejects incomplete firmware. Filesystem updates and formatting are absent. Compressed, signed/trailing, old-stock-CRC, and other-profile images are unsupported by this route.
+
+Firmware maintenance can pause rendering during complete image validation and flash staging. Animation SHA-256 runs in 512-byte steps across loop iterations. The connection has a 5-second inactivity timeout and 60-second total deadline; local finalization retains the total deadline. One connection is handled at a time, responses close the connection, and a pending successful OTA prevents further mutations before restart.
+
+## Security and Validation Limits
+
+- HTTP bearer authentication does not encrypt traffic or authenticate a publisher. Restrict use to a trusted LAN; no public Internet exposure, signature enforcement, or anti-downgrade policy is provided.
+- The C++ JSON schemas/examples are unchanged. Portable tests cover validation, authentication, media layout, strict framing, transactional writes, bounded hashing, image corruption, and failure preservation.
+- Target adapters have compiled but have not been exercised on hardware. Pairing, transfer behavior over Wi-Fi, filesystem durability, runtime memory, sustained responsiveness, and boot compatibility remain PENDING.
+- OTA is an application service, not rollback or recovery after a failed boot. [Wi-Fi-only installation and recovery are blocked](recovery.md). No device operation is authorized by this specification.

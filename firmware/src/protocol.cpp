@@ -27,12 +27,12 @@ public:
             return false;
         }
         do {
-            FixedText key{};
+            BoundedText<32> key{};
             if (!readKey(key) || key.view() != "mode" || (seen & 1U) != 0) {
                 return false;
             }
             seen |= 1U;
-            FixedText value{};
+            BoundedText<8> value{};
             if (!parseString(value)) {
                 return false;
             }
@@ -56,7 +56,7 @@ public:
             return false;
         }
         do {
-            FixedText key{};
+            BoundedText<32> key{};
             if (!readKey(key)) {
                 return false;
             }
@@ -107,7 +107,7 @@ private:
         return true;
     }
 
-    bool readKey(FixedText& key) {
+    bool readKey(BoundedText<32>& key) {
         skipWhitespace();
         if (!parseString(key)) {
             return false;
@@ -155,7 +155,8 @@ private:
         return true;
     }
 
-    bool appendCodePoint(FixedText& target, std::uint32_t codePoint, std::size_t& codePointCount) {
+    template<std::size_t Capacity>
+    bool appendCodePoint(BoundedText<Capacity>& target, std::uint32_t codePoint, std::size_t& codePointCount) {
         if (++codePointCount > MAX_TEXT_CODE_POINTS) {
             return false;
         }
@@ -203,7 +204,8 @@ private:
         return true;
     }
 
-    bool parseString(FixedText& output) {
+    template<std::size_t Capacity>
+    bool parseString(BoundedText<Capacity>& output) {
         output.length = 0;
         if (!consume('"')) {
             return false;
@@ -530,29 +532,54 @@ bool isJsonContentType(std::string_view contentType) {
 
 HttpResponse statusResponse(const SceneManager& scenes, const Storage& storage,
                             std::string_view firmwareVersion, std::string_view ipAddress) {
-    if (firmwareVersion.empty() || ipAddress.empty() ||
-        !validUtf8WithLimit(firmwareVersion, 64) || !validUtf8WithLimit(ipAddress, 64)) {
-        return errorResponse(500, "internal_error", "Device status is unavailable.");
-    }
     HttpResponse response{};
-    response.statusCode = 200;
     response.contentType = JSON_CONTENT_TYPE;
     ResponseWriter writer(response);
-    writer.append("{\"protocolVersion\":\"v1\",\"firmwareVersion\":");
-    writer.appendQuoted(firmwareVersion);
-    writer.append(",\"ip\":");
-    writer.appendQuoted(ipAddress);
-    writer.append(",\"freeStorageBytes\":");
-    writer.appendUnsigned(storage.freeBytes());
-    writer.append(",\"mode\":");
-    writer.appendQuoted(modeName(scenes.mode()));
-    writer.append(",\"activeScene\":");
-    writer.appendQuoted(sceneName(scenes.currentState().activeScene));
-    writer.append("}");
+    if (firmwareVersion.empty() || ipAddress.empty() ||
+        !validUtf8WithLimit(firmwareVersion, 64) || !validUtf8WithLimit(ipAddress, 64)) {
+        response.statusCode = 500;
+        writer.append("{\"code\":\"internal_error\",\"message\":\"Device status is unavailable.\"}");
+    } else {
+        response.statusCode = 200;
+        writer.append("{\"protocolVersion\":\"v1\",\"firmwareVersion\":");
+        writer.appendQuoted(firmwareVersion);
+        writer.append(",\"ip\":");
+        writer.appendQuoted(ipAddress);
+        writer.append(",\"freeStorageBytes\":");
+        writer.appendUnsigned(storage.freeBytes());
+        writer.append(",\"mode\":");
+        writer.appendQuoted(modeName(scenes.mode()));
+        writer.append(",\"activeScene\":");
+        writer.appendQuoted(sceneName(scenes.currentState().activeScene));
+        writer.append("}");
+    }
     return response;
 }
 
 } // namespace
+
+bool isValidTrackId(std::string_view text) {
+    return !text.empty() && validUtf8WithLimit(text,MAX_TEXT_CODE_POINTS);
+}
+bool decodeTrackId(std::string_view encoded, FixedText& text) {
+    text.length = 0;
+    const auto hex = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c-'0';
+        if (c >= 'A' && c <= 'F') return c-'A'+10;
+        if (c >= 'a' && c <= 'f') return c-'a'+10;
+        return -1;
+    };
+    for (std::size_t i=0;i<encoded.size();++i) {
+        char value = encoded[i];
+        if (value == '%') {
+            if (i+2 >= encoded.size() || hex(encoded[i+1]) < 0 || hex(encoded[i+2]) < 0) return false;
+            value = static_cast<char>((hex(encoded[i+1])<<4) | hex(encoded[i+2])); i += 2;
+        }
+        if (text.length == text.bytes.size()) return false;
+        text.bytes[text.length++] = value;
+    }
+    return isValidTrackId(text.view());
+}
 
 ProtocolHandler::ProtocolHandler(SceneManager& scenes, Storage& storage, RequestAuthenticator& authenticator)
     : scenes_(scenes), storage_(storage), authenticator_(authenticator) {}
@@ -627,12 +654,12 @@ HttpResponse ProtocolHandler::handle(const HttpRequest& request, DeviceInfo devi
         if (!isJsonContentType(request.contentType)) {
             return errorResponse(415, "unsupported_media_type", "The Spotify route requires application/json.");
         }
-        NowPlaying track{};
+        pendingTrack_ = {};
         JsonParser parser(request.body);
-        if (!parser.parseNowPlaying(track)) {
+        if (!parser.parseNowPlaying(pendingTrack_)) {
             return errorResponse(400, "invalid_request", "The Spotify request does not match its v1 schema.");
         }
-        scenes_.updateNowPlaying(track);
+        scenes_.updateNowPlaying(pendingTrack_);
         return noContent(204);
     }
 

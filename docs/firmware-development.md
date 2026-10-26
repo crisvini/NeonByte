@@ -1,56 +1,55 @@
 # Firmware Development
 
-**Status:** the hardware-independent Phase 4 subset has a PlatformIO native test environment and host-tested C++ components. The project unit, board target, network server, physical display, and recovery path remain unverified.
+**Status:** Phase 4 has a native C++17 core and locally compilable ESP8266 runtime adapters. The maintainer confirmed an ESP-12F / ESP8266 module; remaining hardware and Wi-Fi-only installation/recovery gates are unresolved. No device operation has been performed. See the [integration report](esp8266-integration.md) for measured artifact sizes and limitations.
 
-## Native Project
+## Local Validation
 
-The `firmware/` directory contains C++17 core code, public interfaces, and a PlatformIO native test environment. The default PlatformIO environment is `native`; it does not select or build a device board.
-
-Run the native tests from the repository root:
+PlatformIO remains defaulted to `native`. Use `uv tool run --from platformio pio` in place of `pio` when PlatformIO is not on PATH.
 
 ~~~sh
 pio test -d firmware -e native
+pio run -d firmware -e esp8266-provisional
+pio run -d firmware -e esp8266-integration-check
+npm run check
+python3 firmware/scripts/inspect_image.py firmware/.pio/build/esp8266-integration-check/firmware.bin
 ~~~
 
-The test suite uses Unity as a development-only test framework. The firmware core has no runtime library dependencies. Native fakes cover the clock, storage, display renderer, request authentication, and network request/response boundary.
+Run PlatformIO jobs sequentially: native test preparation may clean other environment build directories. No upload, filesystem-image, erase, monitor, UART, or device-discovery command is part of this workflow. The pre-build guard rejects deployment-related targets in the ESP8266 profiles. It is a local safeguard, not protection against manually invoking other tools.
 
-## Implemented Components
+## Core and Runtime Structure
 
-- `SceneManager` loads and saves `auto`, `spotify`, and `gif` through the storage interface. It selects only the `spotify` and `gif` scenes, shows the Spotify waiting state in manual Spotify mode, and returns `auto` to GIF when the 45-second heartbeat or playback metadata expires, or playback is paused. Continuing heartbeats do not extend metadata freshness; sample age at receipt and subsequent monotonic elapsed time share the same timeout.
-- Playback progress is clamped to the track duration. On receipt, the manager uses `sampledAtUnixMs` and the clock's Unix time to correct sampling delay, then advances with monotonic time while playback is active.
-- `ProtocolHandler` validates the existing v1 JSON fields, types, closed-object rules, and text limits. It creates the documented status and error responses without depending on an HTTP library. `NetworkOperations` passes a request to the handler and sends its response.
-- `BearerTokenAuthenticator` checks the `Bearer` scheme and a token supplied by its caller. The token view must remain valid for the authenticator's lifetime. Pairing, token creation, storage, and recovery remain pending.
-- `AnimationReader` reads the existing `NBIF` version 1 RGB565 animation header and timing entries, then reads pixel bytes from storage by caller-requested chunks. It does not allocate or retain a complete frame.
-- `DisplayRenderer`, `Storage`, `Clock`, and `NetworkOperations` define the hardware-facing boundaries. No board adapter is included.
+- `SceneManager` retains the existing two-scene behavior, 45-second independent heartbeat/metadata expiry, manual modes, timestamp correction, and monotonic progress.
+- `ProtocolHandler` preserves the JSON schemas and uses a retained transactional `NowPlaying` scratch value. Bounded key/mode text buffers remove the previous full-field stack allocations. Calls are serialized; the handler is not reentrant.
+- `HttpHeaders`, `Transfer`, `HashJob`, `AtomicFileBackend`, image validators, and Wi-Fi form parsing are portable and native-tested. They cover strict framing, exact counts, failed writes/readback, SHA comparison, bounded hashing, and image checks.
+- `esp8266/main.cpp` binds the core to an extended monotonic clock, optional SNTP Unix time, nonblocking station retries, protected AP provisioning/reconfiguration, and a cooperative loop.
+- `esp8266/http_server.cpp` serves a single HTTP/1.1 connection on port 80 with bounded headers/body buffers, authentication before storage/body allocation, incremental binary writes, and incremental staged-file SHA-256.
+- `esp8266/storage.cpp` disables LittleFS autoformat, persists only `/neonbyte/` files, reads candidates after close before promoting settings, and atomically renames verified media. No stock settings migration is attempted.
+- `esp8266/display.cpp` uses the provisional ST7789 profile. Animation and cover pixels stream in 480-byte rows. Covers are decimated from 240 × 240 to 144 × 144; text and progress use the remaining area. The built-in font substitutes `?` for unsupported Unicode glyphs and truncates long lines.
 
-## Protocol Compatibility and Limits
+## Configuration and Network Behavior
 
-The JSON schemas and examples in `contracts/v1/` are unchanged. The handler uses the same `/api/v1` paths, request field names, `auto`/`spotify`/`gif` values, `v1` status value, and error codes. It accepts exact nonnegative JSON integer values up to `UINT64_MAX`, including decimal or exponent notation whose mathematical value is an integer. Values above that implementation bound are rejected even though the schemas do not define a numeric maximum; realistic Spotify timing values fit the bound. Text length is counted in Unicode code points, matching the schema's `maxLength` rules.
+First startup requires a compatible, already provisioned LittleFS volume. There is deliberately no automatic format or filesystem installer. A missing/unmountable volume fails closed. A corrupt existing configuration also fails closed rather than replacing its token or credentials.
 
-The host handler supports `GET /api/v1/status`, `PUT /api/v1/mode`, `PUT /api/v1/spotify`, and `POST /api/v1/heartbeat`. Every mutating route passes through the injected authenticator. There is no network-stack binding or live device endpoint yet.
+When configuration is absent, SDK random values generate a 64-hex-character pairing token and independent 16-hex-character WPA2 AP password. They are persisted with a version and SHA-256 corruption check. The enabled display shows them locally during initial setup. They never appear in logs, HTTP responses, URLs, build settings, or source-controlled credential files.
 
-The current handler returns the existing `415 unsupported_media_type` error for `PUT /api/v1/cover` and `PUT /api/v1/animation`. The route envelopes and `X-Content-SHA256` requirement remain unchanged, but firmware upload validation is deferred until the target's storage limits and safe replacement behavior are known. The animation reader validates the file layout and frame timing; it does not calculate SHA-256 or install an uploaded asset.
+The setup AP is named `NeonByte-<chip-id>`; its address uses the ESP8266 AP default, `192.168.4.1`. Authenticated `PUT /api/v1/config` accepts a small URL-encoded Wi-Fi form. All mutations, including configuration and OTA, require the bearer token. The station retries every 30 seconds without a blocking connection wait. Initial setup keeps the protected AP available until the station connects. After 60 seconds disconnected, a configured device offers the same protected AP while continuing offline rendering. A paired user must retain its random password and token to repair Wi-Fi; no unauthenticated reset endpoint is provided.
 
-`HttpRequest.body` is a non-owning view. The handler does not copy the complete request body, but the network adapter must bound and buffer JSON input before calling it. The numeric request-body limit is still **PENDING**. Pairing, the device IP/port, binary upload limits, asset checksums, atomic writes, and network reconnection are also **PENDING**.
+The default review build disables display GPIO activation, so initial setup secrets are unavailable in that artifact. This is an intentional installation blocker. The enabled validation build is for compilation only; physically validating display/pairing is still pending.
 
-## Memory and Resource Requirements
+SNTP uses `pool.ntp.org` and `time.nist.gov`; rendering does not require either. Until time is known, Unix time is zero and metadata freshness relies on monotonic receipt age. Old-sample replay cannot reliably be detected without a synchronized clock. Monotonic milliseconds extend the 32-bit `millis()` rollover while the loop continues running.
 
-- A single 240 × 240 RGB565 frame contains 115,200 pixel bytes. `AnimationReader` stores only its small metadata and uses an 11-byte header buffer plus two-byte timing reads. Pixel reads use the destination buffer provided by the caller; the 256-byte chunk in the unit test is only a test choice, not a hardware recommendation.
-- The existing agent format allows up to 20 frames and 30 seconds. At the fixed display dimensions, 20 full frames require up to 2,304,051 bytes including the 11-byte header and per-frame delays. The available flash and filesystem space on the project unit remain **PENDING**.
-- Three UTF-8 text fields reserve up to 1,024 bytes each to represent the contract's maximum 256 Unicode code points. A `NowPlaying` value therefore uses about 3.1 KiB, before alignment and other fields. The scene manager retains one value; a Spotify request is parsed into a temporary value before it replaces the current state.
-- A protocol response reserves 1,024 bytes. The request parser uses a fixed text-key buffer and does not allocate a second copy of the JSON body. The [core review](firmware-core-review.md) records host object sizes and compiler stack reports, including a 4,352-byte handler frame with GCC 11.4.0 on x86-64 at `-Os`. Actual stack use depends on compiler and network adapter and has not been measured on hardware.
-- The native mock stores complete animation fixtures in host memory. That test allocation is not used by `AnimationReader` on a device.
-- Display buffers, network buffers, filesystem metadata, firmware image size, free RAM, animation frame rate, and maximum safe transfer size have not been measured. No board memory or flash budget is claimed.
+## Storage and Playback
 
-## Remaining Hardware Dependencies
+The linked LittleFS range matches the old artifact's addresses, without demonstrating compatible installed contents. Assets and settings are namespaced. Temporary media files are discarded at boot; installed assets are left intact. Settings are written to a candidate, flushed/closed, reopened, checked byte-for-byte, and renamed only on success. Runtime filesystem faults beyond the modeled failures still require physical validation.
 
-Keep the following items **PENDING** until supported by evidence for the project unit:
+Cover files store a fixed private track-ID prefix together with the NBIC body, so the image and track association change in one rename. Only a matching current track is displayed. Animation files remain the existing NBIF v1 format. Uploads validate exact layout, dimensions, timing, complete staged-file SHA-256, and free-space reserve before replacement. Replacement never removes the installed file first. Same-loop serialization and an asset revision restart playback from frame zero after a successful replacement.
 
-- MCU/module, PCB revision, power input, boot straps, accessible serial interface, and display controller.
-- GPIO mapping, display initialization, orientation, color order, inversion, backlight behavior, and measured rendering speed.
-- Flash capacity, partition layout, filesystem geometry, usable storage, upload limit, and interrupted-write recovery.
-- Memory and stack measurements with the chosen network and display adapters, plus sustained animation performance.
-- Pairing and token provisioning, network server configuration, reconnect behavior, and whether the adapter can service requests without delaying rendering.
-- Full-flash backup, restore, and recovery validation on an identical spare or sacrificial unit.
+Animation timing is measured from the start of frame drawing. If drawing exceeds a frame delay, the loop proceeds as quickly as possible rather than waiting an additional full delay; no measured FPS is claimed. Missing/invalid animation data leaves a black fullscreen GIF scene. Each loop handles up to 512 network/hash bytes and one display row. Firmware validation/copy and filesystem operations can still pause application rendering; OTA is a maintenance operation, not seamless animation playback.
 
-Do not add a device board target, compile for an assumed board, flash, use OTA, erase, change partitions, or communicate with the physical device until the hardware and recovery gates in [the hardware investigation](hardware.md) and [the recovery runbook](recovery.md) are satisfied and board-specific work is approved.
+## Security and Resource Limits
+
+Local bearer HTTP is restricted by design to a trusted LAN; it is unencrypted and provides no publisher signature or anti-downgrade policy. Wi-Fi secrets and the pairing token are plaintext in device flash, outside the repository. ESP8266 storage is not claimed to protect them against physical access. No Spotify credentials are stored on the device.
+
+Headers are capped at 4,096 bytes, JSON at 12,288 bytes, and configuration at 512 bytes. These are explicit implementation bounds, not physical measurements. Binary transfers use at most 512 bytes per loop. The single connection has a 5-second inactivity timeout and 60-second total deadline; local hashing suspends network inactivity checks but retains the total deadline. Unsupported transfer encoding, `Expect`, duplicate sensitive headers, ambiguous framing, and incomplete transfers fail without asset promotion. Connections close after one response.
+
+The image inspector is offline only. A small image, valid checksums, successful linking, native tests, or a matching stock filesystem address does not establish boot compatibility, display compatibility, storage durability, or recovery. Keep Phase 4 physical acceptance and all deployment blockers open.

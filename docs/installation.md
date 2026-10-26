@@ -1,6 +1,6 @@
 # Installation
 
-**Status:** the Spotify agent and local interface with simulator are available; startup at login and firmware remain PENDING.
+**Status:** the Spotify agent and local interface with simulator are available; startup at login and firmware installation remain PENDING.
 
 ## Spotify Agent (Windows 11 and Fedora)
 

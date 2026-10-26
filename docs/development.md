@@ -2,7 +2,7 @@
 
 ## Repository Status
 
-Phases 1 through 3 are complete: documentation, the v1 contract, the Spotify agent, and the local interface with a 240 × 240 simulator. The interface uses the agent's state and works with either a Spotify account or demo data, without a connected device. `firmware/` remains reserved; the unit's actual resolution, colors, orientation, and performance are PENDING.
+Phases 1 through 3 are complete: documentation, the v1 contract, the Spotify agent, and the local interface with a 240 × 240 simulator. The interface uses the agent's state and works with either a Spotify account or demo data, without a connected device. `firmware/` contains a native core and provisional ESP8266 build profiles. The module is visually confirmed as ESP-12F / ESP8266; actual display settings, performance, flash capacity, and recovery remain PENDING. See [firmware development](firmware-development.md).
 
 ## Current Requirements and Commands
 
@@ -27,7 +27,7 @@ The simulator keeps its logical composition at 240 × 240 and scales the canvas 
 
 ### Simulator Media Intermediate Format
 
-The agent uses `gifuct-js` 2.1.2 (MIT) to read GIF frames. The preview format is experimental and is not a v1 contract or a hardware-confirmed codec:
+The agent uses `gifuct-js` 2.1.2 (MIT) to read GIF frames. The preview format is now accepted by the provisional firmware v1 binary routes, with hardware performance still unverified:
 
 - `NBIF` (animation): bytes `NBIF`, version `1` (u8), width and height `240` (u16 little-endian), frame count (u16 little-endian); then each frame contains a delay in milliseconds (u16 little-endian) followed by 240 × 240 RGB565 pixels in little-endian order.
 - `NBIC` (cover): bytes `NBIC`, version `1` (u8), width and height `240` (u16 little-endian), followed by 240 × 240 RGB565 pixels in little-endian order.
@@ -50,4 +50,4 @@ Converted GIFs and covers remain in memory for the local session and are discard
 
 ## Next Phases
 
-The agent uses Node.js and TypeScript; firmware is planned for C++ and PlatformIO, with the target not yet confirmed. Clock integration depends on approval for the next phase and hardware validation described in [hardware.md](hardware.md). Installation, authorization, and startup commands are in [installation.md](installation.md).
+The agent uses Node.js and TypeScript; firmware is planned for C++ and PlatformIO, with the MCU family confirmed as ESP8266. Clock integration depends on approval for the next phase and hardware validation described in [hardware.md](hardware.md). Installation, authorization, and startup commands are in [installation.md](installation.md).

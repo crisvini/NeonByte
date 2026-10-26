@@ -1,10 +1,10 @@
 # NeonByte
 
-NeonByte is an open-source project planned for a JUZIPi SD PRO Wi-Fi display and a desktop agent that reads Spotify playback. The device is intended to have two screens: Spotify Now Playing and fullscreen GIF. The specific hardware unit has not yet been identified.
+NeonByte is an open-source project planned for a JUZIPi SD PRO Wi-Fi display and a desktop agent that reads Spotify playback. The device is intended to have two screens: Spotify Now Playing and fullscreen GIF. The maintainer visually confirmed an ESP-12F / ESP8266 module; display, flash, and boot compatibility remain unverified.
 
 ## Current Status
 
-**Phases 1, 2, and 3 are complete.** The Node.js/TypeScript Spotify agent uses OAuth PKCE, polling, and state compatible with the v1 contract. The local interface includes a responsive 240 × 240 simulator, Spotify and looping GIF previews, display modes, uploads, and demo data. Real-account OAuth validation still requires configured Spotify credentials. The physical clock, firmware, and device synchronization have not been implemented; no firmware has been compiled or flashed.
+**Phases 1, 2, and 3 are complete.** The Node.js/TypeScript Spotify agent uses OAuth PKCE, polling, and state compatible with the v1 contract. The local interface includes a responsive 240 × 240 simulator, Spotify and looping GIF previews, display modes, uploads, and demo data. Real-account OAuth validation still requires configured Spotify credentials. Phase 4 now includes the native C++ core and locally compiled ESP8266 runtime adapters. Device synchronization remains Phase 5 work. No device has been contacted, flashed, or updated; Wi-Fi-only installation and recovery are blocked. See the [integration report](docs/esp8266-integration.md).
 
 The 240 × 240 resolution is a planning expectation, not a measurement of this unit. See [hardware investigation](docs/hardware.md) before any work that depends on the board.
 
@@ -16,7 +16,7 @@ The 240 × 240 resolution is a planning expectation, not a measurement of this u
 | **spotify** | Spotify Now Playing | Spotify waiting screen |
 | **gif** | Fullscreen GIF | Fullscreen GIF |
 
-The simulator applies the modes to its local preview; the selected mode is stored in the browser. The agent reads and normalizes playback. Persistence on the device and clock integration have not been implemented.
+The simulator applies the modes to its local preview; the selected mode is stored in the browser. The agent reads and normalizes playback. Firmware persistence and runtime adapters are implemented and compile-validated; physical behavior and end-to-end integration remain pending.
 
 ## Repository Structure
 
@@ -26,7 +26,7 @@ The simulator applies the modes to its local preview; the selected mode is store
 ├── assets/samples/        # Reserved for future samples; no assets included
 ├── contracts/v1/          # Contract schemas and examples
 ├── docs/                  # Hardware, protocol, development, and pending items
-├── firmware/              # Reserved structure; hardware not yet confirmed
+├── firmware/              # Native core and provisional ESP8266 integration
 ├── simulator/             # Reserved location; simulator is served by agent/src/web
 ├── tests/                 # v1 contract tests
 ├── AGENTS.md
