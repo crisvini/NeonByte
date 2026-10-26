@@ -247,6 +247,8 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 
 **ESP8266 integration authorization (2026-10-26):** the maintainer visually confirmed ESP-12F / ESP8266 and authorized local firmware integration and compilation, with Wi-Fi as the exclusive communication/update method. The [integration report](docs/esp8266-integration.md) records artifact/resource evidence. No device was contacted or modified. The default native environment is preserved. Provisional 4 MB/DIO/4m3m assumptions do not validate the installed hardware. Display activation and OTA remain disabled in the review artifact; the enabled validation environment is also compilation-only.
 
+**Stock OTA research (2026-10-26):** the [Wi-Fi-only installation report](docs/stock-ota-installation-research.md) compares SmartClock AI and Mini-Display source/release evidence. NeonByte fits the nominal stock size guard and shares the published Mini-Display bootstrap's boot region; direct OTA is the proposed candidate, pending first-boot/provisioning changes and existing hardware, full-backup, and independent Wi-Fi-only recovery gates. Research does not authorize installation implementation or device operations; all physical acceptance tasks remain open.
+
 - [x] Create a C++17 PlatformIO native test environment without selecting a device board.
 - [x] Implement host-tested scene modes, Spotify progress correction, and heartbeat fallback.
 - [x] Implement transport-independent validation and handling for the v1 JSON status, mode, Spotify, and heartbeat routes.

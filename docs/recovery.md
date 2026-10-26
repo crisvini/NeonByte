@@ -24,6 +24,8 @@ It does not provide a stock-to-NeonByte bootstrap, full backup, rollback image, 
 
 Configuration readback and atomic rename protect against representative interrupted or failed writes. They cannot recover a corrupted/unmountable filesystem. Such failures intentionally leave networking unavailable rather than format or replace stock data. This limitation matters under the Wi-Fi-only requirement.
 
+The [stock OTA installation research](stock-ota-installation-research.md) documents direct installation and temporary bootstrap examples. Neither supplies independent Wi-Fi boot recovery, and the examined Mini-Display bootstrap changes EEPROM and formats its new filesystem. The existing preservation/recovery gate remains unchanged.
+
 ## Required Evidence Before Deployment
 
 - Confirm the installed flash capacity, layout, stock version, board/display profile, and image boot compatibility.
