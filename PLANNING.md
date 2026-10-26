@@ -1,6 +1,6 @@
 # NeonByte — Plano de implementação
 
-> **Status:** Etapa 1 concluída, aguardando autorização para a Etapa 2 · **Licença pretendida:** MIT · **Dispositivo-alvo:** JUZIPi SD PRO (identificação de hardware pendente)
+> **Status:** Etapas 1 e 2 implementadas; validação OAuth com conta real pendente de credenciais Spotify. A Etapa 3 aguarda autorização explícita · **Licença pretendida:** MIT · **Dispositivo-alvo:** JUZIPi SD PRO (identificação de hardware pendente)
 >
 > **Regra principal:** implementar as fases sequencialmente; nenhuma gravação de firmware até validar o hardware e documentar recuperação.
 
@@ -208,14 +208,14 @@ Cada etapa contém **entrega, tarefas, testes, aceite e dependências**. Só ava
 
 **Entregáveis:** aplicação Node.js + TypeScript executável, autenticação, leitura e normalização do estado de reprodução.
 
-- [ ] Configurar projeto TS, testes unitários, logs e tratamento de erros.
-- [ ] Implementar OAuth Spotify Authorization Code + PKCE, callback em loopback e armazenamento seguro de refresh token.
-- [ ] Consultar reprodução atual com o menor escopo aplicável, tratar `204`, `401`, `429`/`Retry-After`, offline e token expirado.
-- [ ] Implementar polling configurável (valor inicial 15 s), comparador para não reenviar informações idênticas e cache de metadados.
-- [ ] Criar adaptador mock para desenvolver sem conta Spotify e sem chamadas externas em testes.
-- [ ] Expor estado interno ao simulador por interface local definida e testada (sem expor credenciais).
+- [x] Configurar projeto TS, testes unitários, logs e tratamento de erros.
+- [x] Implementar OAuth Spotify Authorization Code + PKCE, callback em loopback e armazenamento seguro de refresh token.
+- [x] Consultar reprodução atual com o menor escopo aplicável, tratar `204`, `401`, `429`/`Retry-After`, offline e token expirado.
+- [x] Implementar polling configurável (valor inicial 15 s), comparador para não reenviar informações idênticas e cache de metadados.
+- [x] Criar adaptador mock para desenvolver sem conta Spotify e sem chamadas externas em testes.
+- [x] Expor estado interno ao simulador por interface local definida e testada (sem expor credenciais).
 
-**Aceite:** autenticação real validada quando credenciais estiverem disponíveis; mock reproduz play/pause/troca; testes passam; segredos não aparecem em logs.
+**Aceite:** fluxos OAuth e refresh cobertos por testes com mocks; validação de autenticação real pendente até configurar uma conta Spotify; mock reproduz play/pause/troca; testes passam; segredos não são enviados ao logger.
 
 ### Etapa 3 — Simulador e interface local (sem flash)
 
@@ -328,9 +328,9 @@ Cada etapa contém **entrega, tarefas, testes, aceite e dependências**. Só ava
 8. Não executar flash, OTA, erase, alteração de partição ou operação destrutiva sem autorização explícita do mantenedor.
 9. Pare ao concluir a etapa e solicite autorização para a próxima.
 
-**Primeira instrução ao Copilot:**
+**Instrução ao agente de código:**
 
-> Leia o `PLANNING.md` integralmente e execute **apenas a Etapa 1**. Crie a base do repositório, documentação e contratos. Registre as incógnitas do hardware sem presumir suas respostas. Ao finalizar, apresente o que foi criado, testes executados e pendências; não inicie a Etapa 2.
+> Leia o `PLANNING.md` integralmente e execute somente a etapa explicitamente autorizada pelo mantenedor. A Etapa 1 está concluída. A Etapa 2 foi implementada; validação OAuth real ainda depende de credenciais. Não inicie a Etapa 3 sem autorização explícita.
 
 ## 12. Registro de decisões
 

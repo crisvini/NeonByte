@@ -7,7 +7,7 @@
   "scripts": {
     "lint": "markdownlint-cli2",
     "test": "node --test",
-    "check": "npm run lint && npm test"
+    "check": "npm run lint && npm test && npm --prefix agent run check"
   },
   "devDependencies": {
     "markdownlint-cli2": "0.24.0"
