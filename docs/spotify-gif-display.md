@@ -44,6 +44,39 @@ Browser fonts and Unicode glyph support already differed from the physical
 Progress bars and playback times are removed from both views. Protocol v1 retains
 duration/progress/timestamps and existing correction logic for compatibility.
 
+## Current Spotify Marquee Layout
+
+The later marquee revision supersedes the earlier font-size, two-line truncation,
+and preview-font details above. The cover remains 176 by 176 at (32, 4). The
+physical title and artist use the built-in 2x font, with one line each at y=190
+and y=211. The cover ends at y=180, leaving 10 pixels before the title; the
+artist begins 5 pixels below the title's 16-pixel glyph cell. The corresponding
+browser preview uses 16px text at the same coordinates and colors. Both views
+have no progress bar or playback time.
+
+Metadata values accepted by protocol v1 are kept in full, up to its 256-code-point
+limit; unsupported physical glyphs continue to display as `?`. Text wider than
+the 224-pixel inset width waits 1.5 seconds, then moves left by 3 pixels every
+125 ms. Title and artist maintain independent positions and timers. A 24-pixel
+gap separates repeated copies, so each pass returns to its starting position
+without a full-screen redraw, pauses, and starts again. Track changes reset both
+fields; a change to only one field resets only that field.
+
+The LCD updates only the active 20-pixel text strip during movement. It draws
+visible glyphs from fixed 256-byte metadata buffers and keeps the existing
+480-byte pixel buffer; it allocates no full-screen framebuffer or dynamic text
+storage. The Windows preview clips the moving field to the same 240 by 20 region
+and advances it from the browser animation-frame timestamp. Its font metrics
+remain browser-dependent, while placement, timing, speed, colors, and looping
+match the LCD.
+
+Native and preview tests cover short/static text, long title and artist fields,
+independent movement, the initial and end pauses, track-change reset, complete
+tail visibility, and unchanged cover pixels during movement. These checks do not
+measure physical display latency, panel scanout flicker, runtime heap/stack
+margin, or HTTP/Wi-Fi responsiveness. Those hardware measurements remain
+**PENDING**.
+
 ## Auto and Installed GIF Preservation
 
 Scene selection, manual modes and the independent 45-second heartbeat and metadata

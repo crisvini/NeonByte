@@ -6,13 +6,22 @@ import vm from "node:vm";
 async function preview() {
   const rectangles: number[][] = [];
   const covers: number[][] = [];
-  const texts: Array<{ value: string; x: number; y: number; font: string }> = [];
+  const texts: Array<{ value: string; x: number; y: number; font: string; clip: number[] | null }> = [];
+  const clipStack: Array<number[] | null> = [];
+  let pathClip: number[] | null = null;
+  let activeClip: number[] | null = null;
   const context = {
     font: "", fillStyle: "", textAlign: "", textBaseline: "",
     fillRect: (...args: number[]) => rectangles.push(args),
-    fillText(value: string, x: number, y: number) { texts.push({ value, x, y, font: this.font }); },
-    measureText: (value: string) => ({ width: [...value].length * 6 }),
-    save() {}, restore() {}, beginPath() {}, roundRect() {}, clip() {},
+    fillText(value: string, x: number, y: number) {
+      texts.push({ value, x, y, font: this.font, clip: activeClip ? [...activeClip] : null });
+    },
+    measureText: (value: string) => ({ width: [...value].length * 8 }),
+    save() { clipStack.push(activeClip ? [...activeClip] : null); },
+    restore() { activeClip = clipStack.pop() ?? null; },
+    beginPath() { pathClip = null; },
+    rect(x: number, y: number, width: number, height: number) { pathClip = [x, y, width, height]; },
+    roundRect() {}, clip() { if (pathClip) activeClip = [...pathClip]; },
     drawImage: (...args: unknown[]) => covers.push(args.slice(-4) as number[]),
   };
   const makeElement = () => ({
@@ -43,17 +52,18 @@ async function preview() {
   return { rectangles, covers, texts, element, run: (script: string) => vm.runInContext(script, sandbox) };
 }
 
-test("Spotify preview enlarges the cover, keeps font sizes and omits progress and time", async () => {
+test("Spotify preview keeps one larger-font line per field and omits progress and time", async () => {
   const display = await preview();
   display.run(`status = { snapshot: { status: "playing", nowPlaying: {
     trackId: "track", title: "Title", artist: "Artist", isPlaying: true,
     durationMs: 180000, progressMs: 1000, sampledAtUnixMs: 1000
   } } }; coverImage = { naturalWidth: 240, naturalHeight: 240 }; drawSpotify(1000);`);
   assert.deepEqual(display.covers, [[32, 4, 176, 176]]);
-  assert.equal(display.texts[0]?.font, "600 12px system-ui, sans-serif");
-  assert.equal(display.texts[1]?.font, "10px system-ui, sans-serif");
+  assert.equal(display.texts[0]?.font, "600 16px system-ui, sans-serif");
+  assert.equal(display.texts[1]?.font, "16px system-ui, sans-serif");
   assert.deepEqual(display.texts.map((text) => text.value), ["Title", "Artist"]);
   assert.deepEqual(display.rectangles, [[0, 0, 240, 240]]);
+  assert.deepEqual(display.texts.map(({ x, y }) => [x, y]), [[8, 190], [8, 211]]);
   const previous = display.texts.length;
   display.run("status.snapshot.nowPlaying.progressMs = 20000; drawSpotify(20000);");
   assert.equal(display.texts.length, previous);
@@ -76,17 +86,61 @@ test("dashboard retains the converted storage warning across status refreshes", 
   assert.equal(label.classes.get("error"), false);
 });
 
-test("Spotify preview uses two bounded lines per long name and safe Unicode truncation", async () => {
+test("Spotify preview scrolls a long title after a pause without redrawing the cover or artist", async () => {
   const display = await preview();
   display.run(`status = { snapshot: { status: "playing", nowPlaying: {
-    title: "🎵".repeat(100), artist: "A".repeat(100)
+    trackId: "track", title: "T".repeat(50), artist: "Artist"
   } } }; coverImage = { naturalWidth: 240, naturalHeight: 240 }; drawSpotify(1000);`);
-  assert.equal(display.texts.length, 4);
-  for (const text of display.texts) {
-    assert.ok([...text.value].length * 6 <= 224);
-    assert.ok(text.y >= 188 && text.y + (text.font.startsWith("600") ? 12 : 10) <= 240);
-    assert.equal(Buffer.from(text.value, "utf8").toString("utf8"), text.value);
-  }
-  assert.match(display.texts[1]!.value, /…$/);
-  assert.match(display.texts[3]!.value, /…$/);
+  display.run("drawSpotify(2499); drawSpotify(2500);");
+  assert.equal(display.texts.length, 2);
+  display.run("drawSpotify(2625);");
+  assert.equal(display.texts.length, 3);
+  assert.deepEqual(display.texts.slice(2).map(({ value, x, y, clip }) => ({ value, x, y, clip })), [
+    { value: "T".repeat(50), x: 5, y: 190, clip: [0, 190, 240, 20] },
+  ]);
+  assert.deepEqual(display.covers, [[32, 4, 176, 176]]);
+  assert.deepEqual(display.rectangles.slice(1), [[0, 190, 240, 20]]);
+});
+
+test("Spotify preview scrolls a long artist independently from a static title", async () => {
+  const display = await preview();
+  display.run(`status = { snapshot: { status: "playing", nowPlaying: {
+    trackId: "track", title: "Title", artist: "A".repeat(40)
+  } } }; coverImage = { naturalWidth: 240, naturalHeight: 240 }; drawSpotify(0);
+  drawSpotify(1500); drawSpotify(1625);`);
+  assert.equal(display.texts.length, 3);
+  assert.deepEqual(display.texts.slice(2).map(({ value, x, y }) => ({ value, x, y })), [
+    { value: "A".repeat(40), x: 5, y: 211 },
+  ]);
+  assert.deepEqual(display.texts.slice(0, 1).map(({ value, x, y }) => ({ value, x, y })), [
+    { value: "Title", x: 8, y: 190 },
+  ]);
+});
+
+test("Spotify preview resets both marquee positions and delay when the track changes", async () => {
+  const display = await preview();
+  display.run(`status = { snapshot: { status: "playing", nowPlaying: {
+    trackId: "first", title: "T".repeat(50), artist: "A".repeat(40)
+  } } }; coverImage = { naturalWidth: 240, naturalHeight: 240 }; drawSpotify(0);
+  drawSpotify(1500); drawSpotify(1625); status.snapshot.nowPlaying.trackId = "second"; drawSpotify(2000);
+  drawSpotify(3499); drawSpotify(3500);`);
+  const resetLines = display.texts.slice(-2);
+  assert.deepEqual(resetLines.map(({ x, y }) => [x, y]), [[8, 190], [8, 211]]);
+  const resetCount = display.texts.length;
+  display.run("drawSpotify(3625);");
+  assert.deepEqual(display.texts.slice(resetCount).map(({ x, y }) => [x, y]), [[5, 190], [5, 211]]);
+});
+
+test("Spotify preview pauses at the loop boundary before smoothly starting the next pass", async () => {
+  const display = await preview();
+  display.run(`status = { snapshot: { status: "playing", nowPlaying: {
+    trackId: "track", title: "T".repeat(40), artist: "Short"
+  } } }; coverImage = { naturalWidth: 240, naturalHeight: 240 }; drawSpotify(0); drawSpotify(1500);
+  for (let step = 1; step <= 115; step += 1) drawSpotify(1500 + step * 125);`);
+  assert.equal(display.texts.at(-1)?.x, 8);
+  const loopCount = display.texts.length;
+  display.run("drawSpotify(17374); drawSpotify(17375);");
+  assert.equal(display.texts.length, loopCount);
+  display.run("drawSpotify(17500);");
+  assert.equal(display.texts.at(-1)?.x, 5);
 });

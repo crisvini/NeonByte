@@ -281,6 +281,8 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 
 **LCD color Stage 1 evidence-driven correction (2026-10-27):** the maintainer reported that the pre-correction `lcd-red-240.gif` showed pure/dark/medium red as blue and pure blue as red, with green, gray, white, and black correct. This confirms the plan's symmetric RGB/BGR signature. The source now sends MADCTL `0x00` instead of `0x08`; rotation 2, offsets 0/0, inversion, SPI mode/frequency and RGB565 conversion remain unchanged. The native suite passed 82/82, compatibility probes reject both old `0x08` and stale `0xC8`, the RGB565/SPI probe and image validators passed, and repository/offline checks passed. A private candidate was built with the exact existing recovery identity, which remained byte-identical and is present in the binary/ELF. Its restricted non-secret manifest is outside Git. No clock or OTA operation occurred. Post-correction visual acceptance and the Phase 4 LCD hardware checkbox remain **PENDING**.
 
+**Spotify marquee layout revision:** the maintainer authorized an offline change to the Spotify LCD layout and Windows preview. The display keeps the 176 × 176 cover, uses a larger font with one line per field, and scrolls long title and artist values independently. Native and preview regressions cover timing, track changes, the full text tail, and text-only redraws. Rotation 2, RGB MADCTL `0x00`, scene selection, GIF playback, recovery, Wi-Fi, and OTA code are preserved. No board build, device access, or OTA was performed. Physical flicker, runtime resource margin, and HTTP/Wi-Fi responsiveness remain **PENDING**.
+
 - [x] Connect the desktop agent components to the existing native firmware core through loopback HTTP v1 without a board build.
 - [x] Verify offline playback/artwork/progress, scene switching, expiry, simulated storage/restarts, and mocked provisioning/maintenance failures.
 - [x] Run native and agent regressions, sanitizer checks, repository validation, and synthetic deployment-guard checks; document defects and remaining hardware gaps.
@@ -305,7 +307,7 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 - [x] Implement compile-gated device-hosted firmware OTA with exact size, SHA-256, image checks, and staging bounds; compile the enabled code without deploying it.
 - [x] Evaluate local binary size, static RAM, stack frames, filesystem geometry, stock image format, and the nominal 512 KiB stock guard; document unverified physical behavior.
 
-- [x] Verify the authorized 176 × 176 Spotify layout, unchanged font sizes, longer bounded metadata, content-based redraw and installed-GIF fallback through native regressions.
+- [x] Verify the 176 × 176 Spotify layout, larger one-line metadata, independent marquee timing, content-only redraw, and installed-GIF fallback through native and preview regressions.
 - [x] Clarify original GIF versus converted RGB565 limits and verify actionable insufficient-staging-space feedback without interrupting heartbeats.
 - [x] Verify software color packing and SPI byte order, prepare controlled color fixtures, preserve rotation/colors/HTTP/recovery, and produce the authorized private rebuild with unchanged existing credentials; physical color validation remains pending.
 
