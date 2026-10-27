@@ -101,14 +101,14 @@ void testDisplayInitializationUsesBoundedSpiAndRetainsProvisionalProfile() {
     TEST_ASSERT_TRUE(display_test::panelState.inverted);
 }
 
-void testDisplayHalfTurnRetainsBgrWithoutOverridingRotation() {
+void testDisplayHalfTurnUsesRgbWithoutOverridingRotation() {
     display_test::panelState = {};
     PersistentStorage storage;
     DeviceDisplay display(storage);
     display.begin();
     TEST_ASSERT_EQUAL_UINT8(2, display_test::panelState.rotation);
-    // BGR stays selected, with neither axis mirrored and no axis exchange.
-    TEST_ASSERT_EQUAL_HEX8(0x08, display_test::panelState.madctl);
+    // RGB is selected; rotation, offsets, and axis orientation stay unchanged.
+    TEST_ASSERT_EQUAL_HEX8(0x00, display_test::panelState.madctl);
 }
 
 void setText(FixedText& target, std::string_view value) {
@@ -275,7 +275,7 @@ int main() {
     RUN_TEST(testGifFrameDelayAndLoopingUseDeviceDisplayTick);
     RUN_TEST(testSlowFrameRenderingDoesNotAddASecondFullDelay);
     RUN_TEST(testDisplayInitializationUsesBoundedSpiAndRetainsProvisionalProfile);
-    RUN_TEST(testDisplayHalfTurnRetainsBgrWithoutOverridingRotation);
+    RUN_TEST(testDisplayHalfTurnUsesRgbWithoutOverridingRotation);
     RUN_TEST(testSpotifyStreamsLargerCoverAndDoesNotRedrawOnProgress);
     RUN_TEST(testSpotifyMetadataChangesInvalidateOnlyTheirOwnField);
     RUN_TEST(testSpotifyLongUnicodeMetadataIsBoundedWithoutIncreasingFont);

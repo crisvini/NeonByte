@@ -4,7 +4,9 @@
 tests, controlled color fixtures and a private rebuild using the exact existing
 recovery identity. No device access or OTA is included. The maintainer identifies
 the current 180-degree orientation as validated; this change preserves it.
-Other physical acceptance and backup/recovery gates remain pending.
+Other physical acceptance and backup/recovery gates remain pending. A later
+pre-correction color-chart observation is recorded below; the corrected candidate
+still needs visual confirmation.
 
 ## Spotify Composition and Invalidation
 
@@ -94,19 +96,20 @@ There is a preexisting dependency-resolution discrepancy: the configuration
 declares GFX 1.11.11 and BusIO 1.17.0, but both the previous private build's cached
 libraries and the local integration environment contain GFX 1.13.0 and BusIO
 1.17.4. Their actual source versions are recorded for this investigation. The
-private rebuild reuses byte-identical dependency files; no library or color
-configuration change is used as a speculative fix.
+private rebuild reuses the exact existing dependency files. The only
+evidence-driven color change is the MADCTL RGB/BGR bit described below.
 
-Initialization still selects Adafruit rotation 2, MADCTL `0x08`, inversion enabled,
+Initialization selects Adafruit rotation 2, MADCTL `0x00`, inversion enabled,
 SPI mode 3 and 20 MHz. The dependency probe verifies the larger address window,
 240 by 240 bounds and offsets 0/0. The controller documentation assigns MADCTL
-bit 3 to RGB/BGR order; it does not identify this unit's required panel setting.
+bit 3 to RGB/BGR order; the physical chart supplied the unit-specific evidence
+for clearing it.
 See the [ST7789 controller datasheet](https://newhavendisplay.com/content/datasheets/ST7789V.pdf).
 
-No channel-packing defect explaining the reported purple reds was reproduced
-offline. BGR choice, panel inversion behavior, gamma and physical transport remain
-candidates requiring controlled observation. The existing settings are preserved;
-physical color fidelity remains **PENDING**.
+No channel-packing defect was reproduced offline. The maintainer's later physical
+chart result supports the previous BGR selection as the cause of red/blue exchange.
+Inversion, gamma and physical transport were not changed. Visual confirmation
+after applying the RGB setting remains **PENDING**.
 
 ## Controlled Color Fixtures
 
@@ -123,13 +126,13 @@ expected SPI bytes and SHA-256. Eight vertical strips, each 30 pixels wide, are
 red, green, blue, white, black, cyan, magenta and yellow from left to right.
 The generator performs no device request.
 
-A future separately authorized hardware test should first compare the same
-unchanged chart as a cover and fullscreen animation, recording primary colors,
-neutral white/black and the existing orientation. Matching host values with
-incorrect physical channels would narrow the investigation beyond conversion.
-Only then compare one controlled setting at a time, preserving rotation 2 and
-all geometry bits; do not combine byte order, BGR and inversion changes.
-No such test was performed in this task.
+The maintainer's pre-correction physical test used `lcd-red-240.gif` and reported
+the observations below. This confirms a symmetric red/blue exchange with the
+other controls intact; it does not verify the corrected candidate. After manual
+installation, compare the same chart as a cover and fullscreen animation,
+including primary colors, neutral white/black and the existing orientation.
+Keep rotation 2 and all geometry bits; do not combine byte order or inversion
+changes with the MADCTL correction. Post-correction observation remains pending.
 
 ## Stage 1 Offline Color Execution
 
@@ -142,7 +145,7 @@ values match the generator manifest and independent `sha256sum` output:
 | `primary-colors.nbic` | 115,209 | `d3f4b6b29ca9f1fa613ff6cabbe2b73ffd07dee34799d8e16e40f9534dabb908` |
 | `primary-colors.nbif` | 115,213 | `53a6d6793c8920700c7c582bc825483d66464a8deeb5fb718ffff355c09af113` |
 
-| Patch | RGB565 | NBIC/NBIF bytes | SPI bytes | LCD appearance |
+| Patch | RGB565 | NBIC/NBIF bytes | SPI bytes | Post-correction LCD appearance |
 |---|---|---|---|---|
 | Red | `0xF800` | `00 F8` | `F8 00` | PENDING |
 | Green | `0x07E0` | `E0 07` | `07 E0` | PENDING |
@@ -155,8 +158,8 @@ values match the generator manifest and independent `sha256sum` output:
 
 All eight software patches retain their expected RGB565 words and little-endian
 NBIC/NBIF bytes through both cover and decoded GIF conversion. The host SPI
-trace emits the expected high byte first for every word. Physical appearance
-has not been observed; each patch remains **PENDING** on the LCD.
+trace emits the expected high byte first for every word. The table records only
+post-correction appearances, which remain **PENDING**.
 
 The probes used the existing cached sources without upgrading dependencies.
 `firmware/platformio.ini` declares ST7735/ST7789 1.11.0, GFX 1.11.11, and
@@ -173,29 +176,30 @@ write path. Reviewed dependency source hashes:
 | `SPI.cpp` | Arduino ESP8266 3.1.2 | `4fe5c75f4a892bafefda3239f1e6cf447d20c7c6defaac231ebfe3b7bfab1c01` |
 
 Both GFX versions passed the eight-color wire-byte probe, including its
-byte-reversal mutation check. The compatibility probe confirms 20 MHz
-initialization/drawing requests, rotation 2, MADCTL `0x08`, offsets 0/0, and
-the full-screen, corner, and 176 by 176 cover windows. It now also changes the
-adapter to stale MADCTL `0xC8` in a host-only mutation and confirms the trace
-assertion rejects it. The focused media tests passed 10/10; the native display
-suite passed 11/11 in a direct host build, both normally and with
-AddressSanitizer/UndefinedBehaviorSanitizer. The PlatformIO CLI is unavailable
-in this environment, so `pio test -d firmware -e native` could not be run.
+byte-reversal mutation check. The current compatibility probe confirms 20 MHz
+initialization/drawing requests, rotation 2, MADCTL `0x00`, offsets 0/0, and
+the full-screen, corner, and 176 by 176 cover windows. Host mutations to both
+the prior BGR value `0x08` and stale mirrored value `0xC8` are rejected.
 
-`npm run check` passed Markdown validation on 39 files, the language check, 9
-root tests with one Windows-only skip, the TypeScript build/typecheck, and all
-62 agent tests. `npm run test:offline` passed all 20 scenarios. No ESP8266
-target compilation or firmware image generation was run.
+`npm run check` and `npm run test:offline` passed in the initial offline run.
+The PlatformIO native suite subsequently passed 82/82 after the MADCTL update.
 
-The reported red-to-blue symptom, with green and blue described as apparently
-correct, does not establish the plan's symmetric red/blue-swap signature. The
-offline cover, GIF, and SPI boundaries match their expected values, but none
-observes panel scanout. MADCTL therefore remains `0x08`; no source-level cause
-or color correction is claimed. Physical comparison of the unchanged chart in
-both display paths, neutral and secondary colors, the asymmetric orientation
-reference, borders, current layout, and flicker remains pending. Before any
-full-screen animation test, retain the original GIF/NBIF and its checksum and
-obtain separate authorization for restoration.
+**Maintainer-supplied pre-correction physical evidence:** in `lcd-red-240.gif`,
+`#FF0000`, `#7B292B`, and `#B53030` appeared blue; `#0000FF` appeared red;
+`#00FF00`, `#808080`, `#FFFFFF`, and `#000000` appeared correct. This matches
+the symmetric RGB/BGR exchange signature while preserving green and neutral
+controls. The source now sends MADCTL `0x00` instead of `0x08`. The RGB565
+conversion in the agent is unchanged.
+
+**Post-correction state:** host validation confirms MADCTL `0x00`, rotation 2,
+offsets 0/0, inversion, SPI mode 3/20 MHz and the existing address windows.
+Native tests reject the old `0x08` and stale `0xC8` settings. A private candidate
+is prepared using the exact existing recovery identity; its confidential
+manifest retains path, size and SHA-256. The maintainer has not yet observed the
+corrected candidate on the LCD. Confirm red, green, blue, gray, white, black,
+secondary colors, orientation, borders, Spotify layout and flicker after manual
+installation. Keep the original GIF/NBIF and checksum before any test that
+replaces the installed animation.
 
 ## Offline Verification and Private Artifact
 

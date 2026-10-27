@@ -25,8 +25,8 @@ An [independent hardware-tested SD PRO project](https://github.com/piotrkochan/h
 | CS | Unconnected, permanently selected | PENDING |
 | DC / reset | GPIO0 / GPIO2 | PENDING; both have boot strap implications |
 | Backlight | GPIO5, active-low | PENDING; no button GPIO is used |
-| SPI / colors | Mode 3, MADCTL BGR bit set (`0x08`), inversion enabled; 20 MHz requested from the first initialization command | [Offline tests](ota-compatibility-corrections.md) cover the requested frequency and byte path. `0x08` is the current software profile, not a confirmed panel color order. Physical color accuracy and timing remain PENDING |
-| Rotation / offsets | Rotation 2 (180 degrees); MADCTL `0x08` (BGR); column/row offsets 0/0 | Maintainer reported the previous profile displayed text upside down. The [offline correction](display-orientation-correction.md) verifies commands and address windows; corrected physical output remains PENDING |
+| SPI / colors | Mode 3, MADCTL RGB/BGR bit clear (`0x00`), inversion enabled; 20 MHz requested from the first initialization command | [Offline tests](ota-compatibility-corrections.md) cover the requested frequency and byte path. The maintainer's pre-correction chart showed red/blue exchange with neutral colors intact, supporting the one-bit correction. Post-correction color fidelity and timing remain PENDING |
+| Rotation / offsets | Rotation 2 (180 degrees); MADCTL `0x00` (RGB); column/row offsets 0/0 | The [orientation correction](display-orientation-correction.md) verifies commands and address windows; this color-only update preserves them. Post-correction physical color output remains PENDING |
 | Filesystem | LittleFS `0x100000–0x3FA000`, block 8,192 bytes | Matches the researched stock artifact's linked geometry; installed compatibility PENDING |
 | Boot / updates | Arduino 3.1.2 eboot combined image | Different from the old stock boot image; acceptance and startup PENDING |
 

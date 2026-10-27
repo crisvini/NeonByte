@@ -40,7 +40,7 @@ def runProbe(directory, name, source):
     return json.loads(result.stdout)
 
 
-def probeDisplay(directory, repository, library, adapterSourceOverride=None):
+def probeDisplay(directory, repository, library, adapterSourceOverride=None, expectedMadctl=0x00):
     properties = (library / "library.properties").read_text()
     if "version=1.11.0\n" not in properties:
         raise ValueError("This probe requires Adafruit ST7735/ST7789 1.11.0")
@@ -138,7 +138,7 @@ int main() {
     assert(display.panel_.commands == expected);
     for (auto frequency : display.panel_.frequencies) assert(frequency <= 20000000);
     assert(display.panel_.rotation == 2);
-    assert(display.panel_.madctl == 0x08 && display.panel_._xstart == 0 && display.panel_._ystart == 0);
+    assert(display.panel_.madctl == 0x00 && display.panel_._xstart == 0 && display.panel_._ystart == 0);
     display.panel_.setAddrWindow(0,0,240,240);
     assert(display.panel_.windowWords == std::vector<uint32_t>({0x000000ef,0x000000ef}));
     display.panel_.windowWords.clear();
@@ -161,24 +161,56 @@ int main() {
                 display.panel_.rotation, display.panel_.madctl, display.panel_._xstart, display.panel_._ystart);
 }
 '''
+    source = source.replace(
+        "display.panel_.madctl == 0x00",
+        f"display.panel_.madctl == 0x{expectedMadctl:02x}",
+        1,
+    )
     return runProbe(directory, "display-probe", source)
 
 
-def probeStaleMadctlMutation(directory, repository, library):
+def probeIncorrectMadctlMutations(directory, repository, library, currentTrace):
     adapterSource = (repository / "firmware/src/esp8266/display.cpp").read_text()
-    currentSetting = "const std::uint8_t bgr = 0x08;"
+    currentSetting = "const std::uint8_t madctl = 0x00;"
     if adapterSource.count(currentSetting) != 1:
-        raise ValueError("Expected one current MADCTL color-order setting")
-    mutatedSource = adapterSource.replace(currentSetting, "const std::uint8_t bgr = 0xc8;", 1)
-    mutationDirectory = directory / "stale-madctl-mutation"
-    mutationDirectory.mkdir()
-    try:
-        probeDisplay(mutationDirectory, repository, library, mutatedSource)
-    except RuntimeError as error:
-        if "display.panel_.madctl == 0x08" not in str(error):
-            raise
-        return True
-    raise AssertionError("The stale MADCTL 0xc8 mutation was accepted")
+        raise ValueError("Expected one current RGB MADCTL color-order setting")
+    rejected = []
+    previousSettingTrace = None
+    for label, wrongSetting in (
+        ("legacy-bgr", "const std::uint8_t madctl = 0x08;"),
+        ("stale-mirrored-bgr", "const std::uint8_t madctl = 0xc8;"),
+    ):
+        mutationDirectory = directory / f"{label}-madctl-mutation"
+        mutationDirectory.mkdir()
+        mutatedSource = adapterSource.replace(currentSetting, wrongSetting, 1)
+        if label == "legacy-bgr":
+            legacyTraceDirectory = directory / "legacy-bgr-trace"
+            legacyTraceDirectory.mkdir()
+            previousSettingTrace = probeDisplay(
+                legacyTraceDirectory, repository, library, mutatedSource, expectedMadctl=0x08
+            )
+        try:
+            probeDisplay(mutationDirectory, repository, library, mutatedSource)
+        except RuntimeError as error:
+            if "display.panel_.madctl == 0x00" not in str(error):
+                raise
+            rejected.append(label)
+        else:
+            raise AssertionError(f"The incorrect MADCTL {wrongSetting} mutation was accepted")
+    if len(rejected) != 2:
+        raise AssertionError("Expected both incorrect MADCTL mutations to be rejected")
+    if previousSettingTrace is None or currentTrace["madctl"] ^ previousSettingTrace["madctl"] != 0x08:
+        raise AssertionError("The pre/post MADCTL trace bytes must differ only by bit 0x08")
+    unchangedTraceFields = set(currentTrace) - {"madctl"}
+    if any(currentTrace[field] != previousSettingTrace.get(field) for field in unchangedTraceFields):
+        raise AssertionError("The pre/post MADCTL traces changed another checked display setting")
+    return {
+        "incorrectValuesRejected": rejected,
+        "before": previousSettingTrace["madctl"],
+        "after": currentTrace["madctl"],
+        "xor": currentTrace["madctl"] ^ previousSettingTrace["madctl"],
+        "otherTraceFieldsUnchanged": True,
+    }
 
 
 def probeAccessPoint(directory, framework):
@@ -464,8 +496,8 @@ def main():
         result = {
             "evidence": "Extracted function bodies with host I/O doubles; no hardware validation",
             "display": display,
-            "staleMadctlMutationDetected": probeStaleMadctlMutation(
-                directory, repository, args.display_library
+            "madctlMutationTrace": probeIncorrectMadctlMutations(
+                directory, repository, args.display_library, display
             ),
             "accessPoint": probeAccessPoint(directory, args.framework),
             "accessPointAdapter": probeAccessPointAdapter(directory, repository),

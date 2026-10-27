@@ -23,6 +23,14 @@ BGR while leaving MX, MY and MV clear. Both logical dimensions remain 240. Pins,
 scene rendering and startup policy are unchanged. No display-library patch,
 partition change or deployment-guard change is needed.
 
+**Subsequent Stage 1 color correction (2026-10-27):** the maintainer later
+reported a controlled test of `lcd-red-240.gif`: the three red patches appeared
+blue, pure blue appeared red, and green, gray, white, and black appeared
+correctly. This supports a symmetric RGB/BGR exchange. The current MADCTL value
+is therefore `0x00`; rotation 2, offsets 0/0, inversion, SPI mode/frequency,
+and geometry remain unchanged. The corrected candidate has not yet been viewed
+on the LCD, so post-correction color acceptance remains **PENDING**.
+
 ## Offline Regression Coverage
 
 The native display test and the probe using the pinned driver's actual method
