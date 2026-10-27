@@ -35,3 +35,12 @@ test("device request deadlines and rejected remote responses produce safe errors
     fetchDevice: async (_input, init) => init?.method === "GET" ? new Response(JSON.stringify(status)) : new Response(token, { status: 401 }) });
   await assert.rejects(rejected.heartbeat(), (error: Error) => !error.message.includes(token) && /communication failed/.test(error.message));
 });
+
+test("device client rejects public and hostname destinations before sending credentials", () => {
+  for (const address of ["http://example.com", "http://8.8.8.8", "http://169.254.169.254", "http://[::ffff:8.8.8.8]", "http://192.168.1.1.example.com"]) {
+    assert.throws(() => new DeviceClient({ baseUrl: address, token: "test-secret" }), /local|private/i);
+  }
+  for (const address of ["http://127.0.0.1:1", "http://10.1.2.3", "http://172.16.0.1", "http://192.168.1.2", "http://[::1]"]) {
+    assert.doesNotThrow(() => new DeviceClient({ baseUrl: address, token: "test-secret" }));
+  }
+});

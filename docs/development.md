@@ -52,3 +52,8 @@ Converted GIFs and covers remain in memory for the local session and are discard
 ## Next Phases
 
 The agent uses Node.js and TypeScript; firmware is planned for C++ and PlatformIO, with the MCU family confirmed as ESP8266. Clock integration depends on approval for the next phase and hardware validation described in [hardware.md](hardware.md). Installation, authorization, and startup commands are in [installation.md](installation.md).
+
+- `sharp` 0.35.5 is required to decode compressed Spotify artwork without an
+  open browser; the existing converter produces the firmware asset. Sharp is
+  Apache-2.0 licensed and its bundled libvips and image libraries carry their own
+  licenses and notices, which must be reviewed before distribution.

@@ -105,6 +105,11 @@ function updateStatusText() {
   document.querySelector("#upload-status").textContent = animation.available
     ? `GIF ready · ${animation.frameCount} frames · ${formatBytes(animation.sizeBytes)} · ${animation.sha256.slice(0, 12)}…`
     : "No GIF uploaded in this session.";
+  const transfer = device.animation;
+  if (animation.available && transfer && transfer.state !== "none") {
+    const messages = { queued: "Queued for device", uploading: "Uploading to device", retrying: "Device transfer failed; retrying", complete: "Installed on device" };
+    document.querySelector("#upload-status").textContent += ` · ${messages[transfer.state]}${transfer.attempts ? ` (attempt ${transfer.attempts})` : ""}`;
+  }
   document.querySelector("#upload-status").classList.remove("error");
 }
 

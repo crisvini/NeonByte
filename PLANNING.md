@@ -302,6 +302,9 @@ physical acceptance criteria are verified.
 - [x] Configure the address and pairing credential in the local dashboard, with device connectivity disabled until explicitly enabled.
 - [x] Store device settings and credentials in the system credential manager and exclude the token from dashboard responses and logs.
 - [x] Test configuration, startup restoration, reconnect, address changes, and shutdown using the native host harness and local tests.
+- [x] Synchronize dashboard modes, decoded Spotify artwork, and validated GIFs with the native host using protocol v1.
+- [x] Report GIF transfer stages and attempts, retry failed replacements, and suppress duplicate successful uploads in the same session.
+- [x] Reject public, hostname, and link-local device destinations before transmitting a pairing token.
 
 - [ ] Implement the agent HTTP client for v1 endpoints.
 - [ ] Pair and configure the device IP/hostname; handle IP changes.

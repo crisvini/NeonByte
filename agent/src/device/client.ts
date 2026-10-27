@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import type { MediaAsset } from "../media/animation.js";
 import { validateAnimation, validateCover } from "../media/animation.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
@@ -26,6 +27,13 @@ function validStatus(value: unknown): value is DeviceStatus {
     typeof status["activeScene"] === "string" && ["spotify", "gif"].includes(status["activeScene"]);
 }
 
+function isPrivateDeviceAddress(hostname: string): boolean {
+  if (hostname === "[::1]") return true;
+  if (isIP(hostname) !== 4) return false;
+  const [a, b] = hostname.split(".").map(Number);
+  return a === 127 || a === 10 || (a === 172 && b !== undefined && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
 export class DeviceClient {
   private readonly baseUrl: URL;
   private readonly token: string;
@@ -36,7 +44,7 @@ export class DeviceClient {
   constructor(options: { baseUrl: string; token: string; fetchDevice?: typeof fetch; timeoutMs?: number }) {
     this.baseUrl = new URL(options.baseUrl);
     if (this.baseUrl.protocol !== "http:" || this.baseUrl.username || this.baseUrl.password ||
-        this.baseUrl.pathname !== "/" || this.baseUrl.search || this.baseUrl.hash) {
+        this.baseUrl.pathname !== "/" || this.baseUrl.search || this.baseUrl.hash || !isPrivateDeviceAddress(this.baseUrl.hostname)) {
       throw new Error("Use a local HTTP origin for the device.");
     }
     if (!options.token || /[\r\n]/.test(options.token)) throw new Error("Provide a valid device pairing token.");

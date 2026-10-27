@@ -117,7 +117,7 @@ async function readJson(request: IncomingMessage, limit = JSON_LIMIT_BYTES): Pro
   }
 }
 
-async function downloadSpotifyCover(url: string, fetchCover: typeof fetch): Promise<{ bytes: Buffer; contentType: string }> {
+export async function downloadSpotifyCover(url: string, fetchCover: typeof fetch): Promise<{ bytes: Buffer; contentType: string }> {
   let source: URL;
   try {
     source = new URL(url);
@@ -270,7 +270,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           } : { available: false },
           cover: cover ? { available: true, sizeBytes: cover.bytes.length, sha256: cover.sha256 } : { available: false },
           protocolVersion: "v1",
-          device: options.device?.status ?? { address: "", enabled: false, paired: false, connection: "disabled" },
+          device: options.device?.status ?? { address: "", enabled: false, paired: false, connection: "disabled", animation: { state: "none", attempts: 0 } },
           deviceConnected: options.device?.status.connection === "connected",
         });
         return;
@@ -388,6 +388,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
             return;
           }
           mode = (payload as { mode: DisplayMode }).mode;
+          options.device?.setMode(mode);
           response.writeHead(204, securityHeaders());
           response.end();
         } catch (error) {
@@ -444,6 +445,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           const converted = convertGifToAnimation(input);
           validateAnimation(converted.bytes, converted.sha256);
           animation = converted;
+          options.device?.setAnimation(converted);
           sendJson(response, 201, {
             width: 240,
             height: 240,

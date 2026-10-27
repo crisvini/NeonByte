@@ -1,3 +1,8 @@
+import sharp from "sharp";
+import { readFile } from "node:fs/promises";
+import { createCoverAsset, type MediaAsset } from "../media/animation.js";
+import { downloadSpotifyCover } from "../web/server.js";
+import type { DisplayMode } from "../web/scene.js";
 import { DeviceClient, DeviceSynchronizer } from "./client.js";
 import { DeviceScheduler, type DeviceConnectionStatus } from "./scheduler.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
@@ -8,7 +13,9 @@ export interface DeviceConfigStore {
   set(config: DeviceConfig): Promise<void>;
 }
 export interface DeviceSettings { address: string; token?: string; enabled: boolean }
-export interface DeviceView { address: string; enabled: boolean; paired: boolean; connection: DeviceConnectionStatus }
+export interface DeviceView { address: string; enabled: boolean; paired: boolean; connection: DeviceConnectionStatus;
+  animation: { state: "none" | "queued" | "uploading" | "retrying" | "complete"; attempts: number } }
+
 
 /** The address and pairing token share one credential-manager entry. */
 export class SystemDeviceConfigStore implements DeviceConfigStore {
@@ -41,12 +48,33 @@ export class DeviceIntegration {
   private scheduler: DeviceScheduler | null = null;
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
+  private desiredMode: DisplayMode | null = null;
+  private animation: MediaAsset | null = null;
+  private animationState: DeviceView["animation"] = { state: "none", attempts: 0 };
+  private animationSent: string | null = null;
 
-  constructor(private readonly options: { store: DeviceConfigStore; poller: PlaybackPoller; intervalMs: number; fetchDevice?: typeof fetch }) {}
+  constructor(private readonly options: { store: DeviceConfigStore; poller: PlaybackPoller; intervalMs: number; fetchDevice?: typeof fetch; fetchCover?: typeof fetch }) {}
 
   get status(): DeviceView {
     return { address: this.config?.address ?? "", enabled: this.config?.enabled ?? false,
-      paired: Boolean(this.config?.token), connection: this.scheduler?.status ?? "disabled" };
+      paired: Boolean(this.config?.token), connection: this.scheduler?.status ?? "disabled", animation: { ...this.animationState } };
+  }
+
+  setMode(mode: DisplayMode): void { this.desiredMode = mode; }
+
+  setAnimation(asset: MediaAsset): void {
+    if (this.animation?.sha256 === asset.sha256) return;
+    this.animation = asset;
+    this.animationSent = null;
+    this.animationState = { state: "queued", attempts: 0 };
+  }
+
+  private async loadCover(url: string): Promise<MediaAsset> {
+    const bytes = url === "/demo-cover.svg"
+      ? await readFile(new URL("../web/public/demo-cover.svg", import.meta.url))
+      : (await downloadSpotifyCover(url, this.options.fetchCover ?? fetch)).bytes;
+    const decoded = await sharp(bytes, { limitInputPixels: 16_000_000 }).resize(240, 240, { fit: "cover" }).ensureAlpha().raw().toBuffer();
+    return createCoverAsset(decoded, 240, 240);
   }
 
   private serialize(action: () => Promise<void>): Promise<void> {
@@ -82,6 +110,8 @@ export class DeviceIntegration {
       try { await this.options.store.set(config); }
       catch { this.config = previous ? { ...previous, enabled: false } : null; throw new Error("Unable to save device configuration in the system credential manager."); }
       this.config = config;
+      this.animationSent = null;
+      if (this.animation) this.animationState = { state: "queued", attempts: 0 };
       if (config.enabled && !this.closed) this.startScheduler(config);
     });
   }
@@ -97,8 +127,31 @@ export class DeviceIntegration {
   }
 
   private startScheduler(config: DeviceConfig): void {
-    const synchronizer = new DeviceSynchronizer({ client: this.createClient(config), poller: this.options.poller });
-    this.scheduler = new DeviceScheduler({ intervalMs: this.options.intervalMs, synchronize: () => synchronizer.synchronize() });
+    const client = this.createClient(config);
+    const synchronizer = new DeviceSynchronizer({ client, poller: this.options.poller, loadCover: (url) => this.loadCover(url) });
+    this.scheduler = new DeviceScheduler({ intervalMs: this.options.intervalMs, synchronize: async () => {
+      if (!await synchronizer.synchronize()) return false;
+      try {
+        const status = await client.status();
+        const mode = this.desiredMode;
+        if (mode && status.mode !== mode) await client.setMode(mode);
+        const animation = this.animation;
+        if (animation && animation.sha256 !== this.animationSent) {
+          this.animationState = { state: "uploading", attempts: this.animationState.attempts + 1 };
+          try {
+            await client.uploadAnimation(animation);
+            if (this.animation === animation) {
+              this.animationSent = animation.sha256;
+              this.animationState = { state: "complete", attempts: this.animationState.attempts };
+            }
+          } catch {
+            if (this.animation === animation) this.animationState = { state: "retrying", attempts: this.animationState.attempts };
+            return false;
+          }
+        }
+        return true;
+      } catch { return false; }
+    } });
     this.scheduler.start();
   }
 }

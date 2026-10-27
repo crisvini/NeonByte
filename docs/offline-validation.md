@@ -42,7 +42,7 @@ The C++ storage adapter uses temporary disk files, the existing `Transfer`, `Has
 
 The synchronizer is explicitly instantiated by the offline runner. Each cycle reads `PlaybackPoller.currentSnapshot`, sends metadata, then heartbeat, then track-bound artwork when needed. Poller change notifications remain deduplicated. Successful covers are cached by track ID and URL; failed conversion/upload is retried on a later cycle and text remains available. Transport failure invalidates the cover cache. GIF upload is explicit and uses the existing converter and validators. Status compatibility is checked before every mutation; redirects and request deadlines are enforced, and remote errors are not echoed.
 
-This work does not activate device connectivity in `agent/src/main.ts`, change the dashboard's simulation status, or configure a physical endpoint. A production scheduling/service lifecycle, device-address configuration, discovery, and LAN acceptance remain later authorized integration work. The runner drives periodic synchronization with simulated time rather than installing an agent background service.
+That original offline validation did not activate connectivity in `agent/src/main.ts` or configure a physical endpoint. Later software-only Phase 5 integration is described below. The runner drives periodic synchronization with simulated time rather than installing an agent background service.
 
 ## Verified Scenarios
 
@@ -84,7 +84,7 @@ The portable integration is ready to inform a separately authorized hardware-val
 - Host storage models failure points and real process restarts; it does not establish LittleFS compatibility, flash endurance, real power-cut atomicity, or stock filesystem preservation. Host Wi-Fi fixture records are not target configuration records.
 - Actual flash size/layout, pinout, display/backlight, boot compatibility, free heap/fragmentation, full stack depth, throughput/FPS, and sustained device operation remain PENDING.
 - Full original backup, verified hardware configuration, independent Wi-Fi-only failed-boot recovery, and filesystem-independent verified maintenance updates remain unresolved installation gates. Existing public compilation profiles still lack a usable private recovery identity.
-- Production LAN scheduling/address configuration, reboot identification beyond v1 status, OS startup/distribution, and the initial-null clearing gap remain integration work. No Phase 5 physical/LAN checklist or MVP hardware item is marked complete here.
+- Reboot identification beyond v1 status, OS startup/distribution, and the initial-null clearing gap remain integration work. No Phase 5 physical/LAN checklist or MVP hardware item is marked complete here.
 
 Stop at this offline boundary. See [recovery](recovery.md), [hardware](hardware.md), and [safe first-boot preparation](safe-first-boot.md) before proposing any physical work.
 
@@ -100,14 +100,30 @@ choice. The local status API reports the address, pairing presence, and
 connection state, but never returns the token. Credential-manager failures leave
 connectivity disabled and are reported without exposing credentials.
 
-The scheduler periodically sends current playback metadata and heartbeat via
-protocol v1 and retries after a failed connection. This does not yet deliver
-artwork, dashboard mode changes, or GIF uploads to the device. The browser
-continues to provide the 240 by 240 simulator and demo controls. The initial-null
-playback limitation described above remains unchanged. The dashboard accepts a
-pre-existing device token; it does not provision one on the firmware.
+The scheduler periodically sends playback metadata and heartbeat, downloads
+Spotify artwork from the existing allowed HTTPS host, decodes it with `sharp`,
+and uses the existing RGB565 converter and protocol v1 client. The dashboard
+queues display-mode changes and converted GIFs for the device while retaining
+the local simulator. GIF status reports queued, uploading, retrying, or complete
+and the attempt count; it does not claim byte-level progress. A successful v1
+response confirms firmware-side validation and replacement. Failed transfers
+are retried with the same validated bytes. The current animation queue is in
+memory and is lost when the agent restarts. A previously installed animation is
+persisted by the firmware. The initial-null playback limitation described above
+remains unchanged. The dashboard accepts a pre-existing device token; it does not
+provision one on the firmware.
 
-Protocol v1 uses unencrypted HTTP: use it only on a trusted network. A configured
-hostname must continue to resolve to the intended device. Host-harness tests do
+Duplicate successful GIF uploads are suppressed in the current session. Covers
+are sent again after observed connection failure; protocol v1 exposes neither a
+boot identifier nor installed asset hashes, so a silent restart or storage
+change cannot be identified or reconciled in every case. The host test covers an
+observed outage and restart, a failed replacement, retry, and preserved media.
+
+The client accepts only literal RFC 1918 IPv4 or loopback addresses; hostnames,
+public addresses, and link-local addresses are rejected to prevent public
+requests and DNS rebinding. Previously saved hostname configurations must be
+updated to a private IP. Protocol v1 uses unencrypted HTTP and cannot authenticate
+the server: use it only on a trusted network. Private addressing does not
+protect against a malicious host or interception on that network. Host-harness tests do
 not establish physical device compatibility or recovery readiness. All hardware
 and installation blockers remain in force.
