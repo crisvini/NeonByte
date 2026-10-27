@@ -143,8 +143,8 @@ int main() {
     display.panel_.setAddrWindow(0,239,240,1);
     assert(display.panel_.windowWords == std::vector<uint32_t>({0x000000ef,0x00ef00ef}));
     display.panel_.windowWords.clear();
-    display.panel_.setAddrWindow(48,4,144,144);
-    assert(display.panel_.windowWords == std::vector<uint32_t>({0x003000bf,0x00040093}));
+    display.panel_.setAddrWindow(32,4,176,176);
+    assert(display.panel_.windowWords == std::vector<uint32_t>({0x002000cf,0x000400b3}));
     struct Corner { uint16_t x, y; uint32_t column, row; };
     const Corner corners[] = {{0,0,0x00000000,0x00000000}, {239,0,0x00ef00ef,0x00000000},
                               {0,239,0x00000000,0x00ef00ef}, {239,239,0x00ef00ef,0x00ef00ef}};

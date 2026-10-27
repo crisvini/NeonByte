@@ -68,7 +68,11 @@ test("serves the local panel and protects mode changes with a loopback origin ch
   try {
     const page = await fetch(origin);
     assert.equal(page.status, 200);
-    assert.match(await page.text(), /240/);
+    const html = await page.text();
+    assert.match(html, /original GIF received by the Windows agent/);
+    assert.match(html, /240 × 240 RGB565/);
+    assert.match(html, /20 frames and 30 seconds/);
+    assert.match(html, /32 KiB reserve/);
 
     const rejected = await fetch(`${origin}/api/mode`, {
       method: "POST",

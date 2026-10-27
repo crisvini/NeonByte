@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DeviceClient } from "../src/device/client.js";
+import { convertGifToAnimation } from "../src/media/animation.js";
 
-const status = { protocolVersion: "v1", firmwareVersion: "host", ip: "127.0.0.1", freeStorageBytes: 1_000_000, mode: "auto", activeScene: "gif" };
+const status = { protocolVersion: "v1", firmwareVersion: "host", ip: "127.0.0.1", freeStorageBytes: 4_000_000, mode: "auto", activeScene: "gif" };
 
 test("device mutations stop on incompatible or malformed status before disclosing pairing credentials", async () => {
   for (const invalid of [{ ...status, protocolVersion: "v2" }, { ...status, freeStorageBytes: -1 }, { ...status, extra: true }, { ...status, mode: "unknown" },
@@ -77,4 +78,24 @@ test("device deadlines scale for validated binary uploads and respect explicit o
   const overridden = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret", fetchDevice, timeoutMs: 1234 });
   await overridden.uploadAnimation(makeAsset(20));
   assert.deepEqual(deadlines, [1234, 1234]);
+});
+
+test("converted animation requires atomic staging space and reports capacity errors safely", async () => {
+  const asset = convertGifToAnimation(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64"));
+  let freeStorageBytes = asset.bytes.length + 32768 - 1;
+  let uploadStatus = 204;
+  let uploads = 0;
+  const client = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret",
+    fetchDevice: async (_input, init) => {
+      if (init?.method === "GET") return new Response(JSON.stringify({ ...status, freeStorageBytes }));
+      uploads++;
+      return uploadStatus === 204 ? new Response(null, { status: 204 }) : new Response("test-secret from remote", { status: uploadStatus });
+    } });
+  await assert.rejects(client.uploadAnimation(asset), (error: Error) => /converted animation.*storage/i.test(error.message) && !error.message.includes("test-secret"));
+  assert.equal(uploads, 0);
+  freeStorageBytes++;
+  await client.uploadAnimation(asset);
+  assert.equal(uploads, 1);
+  uploadStatus = 413;
+  await assert.rejects(client.uploadAnimation(asset), (error: Error) => /converted animation.*storage/i.test(error.message) && !error.message.includes("test-secret"));
 });

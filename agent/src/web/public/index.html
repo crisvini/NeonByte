@@ -85,13 +85,15 @@
           </article>
 
           <article class="card gif-card">
-            <div class="card-heading compact"><div><p class="eyebrow">CUSTOM ANIMATION</p><h2>Your GIF</h2></div><span class="file-limit">up to 8 MB</span></div>
+            <div class="card-heading compact"><div><p class="eyebrow">CUSTOM ANIMATION</p><h2>Your GIF</h2></div><span class="file-limit">Original GIF: up to 8 MB</span></div>
             <label class="upload-zone" for="gif-file">
               <span class="upload-icon" aria-hidden="true">↑</span>
               <strong>Choose GIF file</strong>
               <span>Looping preview that fills the screen</span>
             </label>
             <input id="gif-file" type="file" accept="image/gif,.gif" hidden>
+            <p class="card-copy">The 8 MB (8 MiB) limit applies to the original GIF received by the Windows agent. Conversion produces a centered, cropped 240 × 240 RGB565 animation for the ESP8266, using 115,200 pixel bytes per frame.</p>
+            <p class="card-copy">Up to 20 frames and 30 seconds; files exceeding these limits are rejected. Decoding memory limits also apply. The converted animation must fit in device storage alongside the installed GIF and a 32 KiB reserve for safe replacement.</p>
             <p class="upload-status" id="upload-status" aria-live="polite">No GIF uploaded in this session.</p>
           </article>
         </div>

@@ -5,6 +5,15 @@ import type { PlaybackPoller } from "../spotify/poller.js";
 import type { NowPlayingV1, PlaybackSnapshot } from "../spotify/types.js";
 import type { DisplayMode } from "../web/scene.js";
 
+export const MEDIA_STORAGE_RESERVE_BYTES = 32 * 1024;
+
+export class AnimationStorageError extends Error {
+  constructor() {
+    super("The converted animation does not fit in device storage with space for safe replacement. Choose a GIF with fewer frames; the previously installed GIF is preserved.");
+    this.name = "AnimationStorageError";
+  }
+}
+
 export interface DeviceStatus {
   protocolVersion: "v1";
   firmwareVersion: string;
@@ -66,10 +75,12 @@ export class DeviceClient {
       });
       if (response.status !== (method === "GET" ? 200 : 204)) {
         await response.body?.cancel();
+        if (path === "/api/v1/animation" && response.status === 413) throw new AnimationStorageError();
         throw new Error("Device request rejected.");
       }
       return response;
-    } catch {
+    } catch (error) {
+      if (error instanceof AnimationStorageError) throw error;
       // Never echo remote bodies, addresses, pairing tokens, or fetch exception details.
       throw new Error("Device communication failed; check pairing, compatibility, and connectivity.");
     }
@@ -115,7 +126,9 @@ export class DeviceClient {
   }
   async uploadAnimation(asset: MediaAsset): Promise<void> {
     validateAnimation(asset.bytes, asset.sha256);
-    await this.mutate("/api/v1/animation", "PUT", asset.bytes, {
+    const status = await this.status();
+    if (asset.bytes.length + MEDIA_STORAGE_RESERVE_BYTES > status.freeStorageBytes) throw new AnimationStorageError();
+    await this.request("/api/v1/animation", "PUT", asset.bytes, {
       "Content-Type": "application/octet-stream", "X-Content-SHA256": asset.sha256,
     }, this.uploadTimeout(asset.bytes.length));
   }

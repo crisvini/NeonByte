@@ -103,14 +103,14 @@ function updateStatusText() {
 
   const animation = status.animation;
   document.querySelector("#upload-status").textContent = animation.available
-    ? `GIF ready · ${animation.frameCount} frames · ${formatBytes(animation.sizeBytes)} · ${animation.sha256.slice(0, 12)}…`
+    ? `Converted animation · ${animation.frameCount} frames · ${formatBytes(animation.sizeBytes)} · ${animation.sha256.slice(0, 12)}…`
     : "No GIF uploaded in this session.";
   const transfer = device.animation;
   if (animation.available && transfer && transfer.state !== "none") {
-    const messages = { queued: "Queued for device", uploading: "Uploading to device", retrying: "Device transfer failed; retrying", complete: "Installed on device" };
+    const messages = { queued: "Queued for device", uploading: "Uploading to device", retrying: "Device transfer failed; retrying", blocked: "Converted animation does not fit in device storage. Choose fewer frames; the installed GIF is preserved.", complete: "Installed on device" };
     document.querySelector("#upload-status").textContent += ` · ${messages[transfer.state]}${transfer.attempts ? ` (attempt ${transfer.attempts})` : ""}`;
   }
-  document.querySelector("#upload-status").classList.remove("error");
+  document.querySelector("#upload-status").classList.toggle("error", transfer?.state === "blocked");
 }
 
 function formatBytes(value) {
@@ -208,7 +208,7 @@ function loadCover(url) {
   image.onerror = () => {
     if (requestId === coverLoadId) {
       coverImage = null;
-      notify("Unable to load the Spotify cover; the title and progress remain available.");
+      notify("Unable to load the Spotify cover; the title and artist remain available.");
     }
   };
   image.src = currentCoverUrl.startsWith("/") ? currentCoverUrl : "/api/cover/source";
@@ -237,11 +237,23 @@ function drawCover(target, image, x, y, width, height) {
   target.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, x, y, width, height);
 }
 
-function fitText(text, maxWidth) {
-  let result = String(text ?? "");
-  if (context.measureText(result).width <= maxWidth) return result;
-  while (result.length > 1 && context.measureText(`${result}…`).width > maxWidth) result = result.slice(0, -1);
-  return `${result}…`;
+function fitTextLines(text, maxWidth) {
+  const characters = Array.from(String(text ?? ""));
+  const lines = [];
+  let offset = 0;
+  for (let line = 0; line < 2 && offset < characters.length; line += 1) {
+    let value = "";
+    while (offset < characters.length && context.measureText(value + characters[offset]).width <= maxWidth) {
+      value += characters[offset++];
+    }
+    if (line === 1 && offset < characters.length) {
+      const visible = Array.from(value);
+      while (visible.length && context.measureText(visible.join("") + "…").width > maxWidth) visible.pop();
+      value = visible.join("") + "…";
+    }
+    lines.push(value);
+  }
+  return lines;
 }
 
 function drawWaiting(now) {
@@ -265,62 +277,36 @@ function drawWaiting(now) {
   context.fillText(status?.snapshot.status === "idle" ? "No active track" : "Waiting for Spotify", 120, 166);
   context.fillStyle = "#9b98aa";
   context.font = "9px system-ui, sans-serif";
-  context.fillText("Conecte sua conta ou ative os dados demo", 120, 183);
+  context.fillText("Connect Spotify or enable demo data", 120, 183);
 }
+
+let previousSpotifyContent = "";
 
 function drawSpotify(now) {
   const track = status?.snapshot.nowPlaying;
   if (!track || status.snapshot.status !== "playing") {
+    previousSpotifyContent = "";
     drawWaiting(now);
     return;
   }
-  context.fillStyle = "#090a11";
+  const content = JSON.stringify([track.trackId, track.title, track.artist, coverLoadId, Boolean(coverImage)]);
+  if (content === previousSpotifyContent) return;
+  previousSpotifyContent = content;
+  context.fillStyle = "#000000";
   context.fillRect(0, 0, 240, 240);
-  const coverX = 64;
-  const coverY = 12;
-  const coverSize = 112;
-  if (coverImage) {
-    context.save();
-    context.beginPath();
-    context.roundRect(coverX, coverY, coverSize, coverSize, 7);
-    context.clip();
-    drawCover(context, coverImage, coverX, coverY, coverSize, coverSize);
-    context.restore();
-  } else {
-    const fallback = context.createLinearGradient(coverX, coverY, coverX + coverSize, coverY + coverSize);
-    fallback.addColorStop(0, "#ee76bd");
-    fallback.addColorStop(1, "#444ec7");
-    context.fillStyle = fallback;
-    context.fillRect(coverX, coverY, coverSize, coverSize);
-    context.fillStyle = "rgba(255,255,255,.74)";
-    context.font = "bold 38px system-ui, sans-serif";
-    context.textAlign = "center";
-    context.fillText("♪", 120, 89);
-  }
+  const coverX = 32;
+  const coverY = 4;
+  const coverSize = 176;
+  if (coverImage) drawCover(context, coverImage, coverX, coverY, coverSize, coverSize);
   context.textAlign = "left";
-  context.fillStyle = "#f6f3fa";
+  context.textBaseline = "top";
+  context.fillStyle = "#ffffff";
   context.font = "600 12px system-ui, sans-serif";
-  context.fillText(fitText(track.title, 200), 20, 155);
-  context.fillStyle = "#aaa6b8";
+  fitTextLines(track.title, 224).forEach((line, index) => context.fillText(line, 8, 188 + index * 12));
+  context.fillStyle = "#9c9e9c";
   context.font = "10px system-ui, sans-serif";
-  context.fillText(fitText(track.artist, 200), 20, 173);
-  const elapsed = track.isPlaying ? Math.max(0, now - track.sampledAtUnixMs) : 0;
-  const progress = Math.min(track.durationMs, track.progressMs + elapsed);
-  const progressWidth = Math.max(0, Math.min(200, progress / Math.max(1, track.durationMs) * 200));
-  context.fillStyle = "#373340";
-  context.fillRect(20, 197, 200, 3);
-  context.fillStyle = "#b993ff";
-  context.fillRect(20, 197, progressWidth, 3);
-  context.fillStyle = "#aaa6b8";
-  context.font = "8px ui-monospace, SFMono-Regular, monospace";
-  context.fillText(formatTime(progress), 20, 216);
-  context.textAlign = "right";
-  context.fillText(formatTime(track.durationMs), 220, 216);
-}
-
-function formatTime(milliseconds) {
-  const seconds = Math.floor(Math.max(0, milliseconds) / 1000);
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  fitTextLines(track.artist, 224).forEach((line, index) => context.fillText(line, 8, 218 + index * 10));
+  context.textBaseline = "alphabetic";
 }
 
 function drawGif(now) {
@@ -353,6 +339,7 @@ function render(now) {
   const scene = status?.activeScene ?? "gif";
   if (scene !== previousScene) {
     previousScene = scene;
+    previousSpotifyContent = "";
     frameIndex = -1;
     frameDeadline = 0;
   }
@@ -399,7 +386,7 @@ async function uploadGif(file) {
   const label = document.querySelector("#upload-status");
   if (!file) return;
   if (file.size > MAX_GIF_BYTES) {
-    label.textContent = "This GIF exceeds the 8 MB limit. Choose a smaller file.";
+    label.textContent = "The original GIF exceeds the Windows agent's 8 MB (8 MiB) input limit. Choose a smaller original file.";
     label.classList.add("error");
     return;
   }

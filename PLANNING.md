@@ -8,7 +8,7 @@
 
 Build **NeonByte**, an open-source project consisting of custom firmware for a small Wi-Fi display and a desktop agent that reads Spotify. The device presents **exactly two screens**:
 
-1. **Spotify Now Playing:** album cover, title, artist, and track progress.
+1. **Spotify Now Playing:** centered 176 × 176 album cover, title, and artist; no playback bar or times.
 2. **Fullscreen GIF:** animation fills the entire screen and loops with no overlays.
 
 **Default behavior:** active Spotify playback → Spotify; paused playback, no playback, or an unavailable agent → GIF. The user can manually select `auto`, `spotify`, or `gif`. In `spotify` mode with no music, show a subtle waiting state (do not invent a track). The GIF must remain available after the clock restarts; if the PC shuts down while the display remains powered, the GIF continues.
@@ -63,7 +63,7 @@ The agent starts automatically **when the user logs in** (Windows 11 natively; U
 | Component | Responsibilities | Must not do |
 |---|---|---|
 | Agent | OAuth, Spotify, polling, caching, media conversion, configuration UI, sending updates | Store secrets in firmware; require a container or database |
-| Firmware | Display scenes, update progress locally, play GIFs, persist assets, and respond to commands | Call Spotify directly; depend on the Internet for GIF playback |
+| Firmware | Display scenes, retain protocol timing, play GIFs, persist assets, and respond to commands | Call Spotify directly; depend on the Internet for GIF playback |
 | Simulator | Reproduce visual behavior and test protocols before flashing | Pretend browser tests validate hardware |
 
 ## 4. Repository Structure
@@ -127,8 +127,8 @@ The structure may change when there is a documented reason. Avoid premature abst
 
 ### 5.2 Spotify
 
-- Display the cover at the correct aspect ratio, title, artist, controlled truncation/scrolling, and a progress bar.
-- Progress advances in firmware between syncs and is corrected when a new playback timestamp arrives.
+- Display a centered 176 × 176 cover, title and artist with unchanged font sizes, up to two safely truncated lines each, and no progress bar or playback times.
+- Protocol progress advances in firmware between syncs and is corrected when a new playback timestamp arrives; it does not trigger display redraws.
 - Suggested initial polling interval: **15 seconds** (configurable); handle `429` and `Retry-After`, network failures, `204 No Content`, token expiration, and token refresh.
 - Update the cover only when the track or cover changes; transfer data in a format suitable for the LCD.
 - Do not show tokens or secrets in logs, shared URLs, or device responses.
@@ -275,6 +275,8 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 
 **HTTP recovery authorization (2026-10-27):** the maintainer reported HTTP timeouts and closed sockets on a physical SD PRO, approved an offline correction and private rebuild with the existing identity, and prohibited device contact and OTA. The [HTTP recovery report](docs/http-recovery-investigation.md) records the reproduced disconnected-client lifecycle defect, bounded media deadlines, authenticated diagnostics, offline validation and remaining hardware questions. The single-client architecture, OTA policy and all physical backup/recovery gates remain in force.
 
+**Spotify/GIF display authorization (2026-10-27):** The maintainer authorized offline layout/flicker corrections, GIF-limit clarification, color investigation and a private rebuild with exactly the existing recovery credentials, while prohibiting device access and OTA. The [display report](docs/spotify-gif-display.md) describes the 176 × 176 incremental cover, unchanged fonts, two bounded lines per field, content-based redraw, storage-capacity feedback and controlled RGB565 fixtures. The maintainer identifies the current 180-degree orientation as validated; rotation 2/MADCTL 0x08 is preserved. No other hardware acceptance item or later phase is completed by this authorization. The original Phase 3 progress-bar implementation below is superseded by this explicit display request.
+
 - [x] Connect the desktop agent components to the existing native firmware core through loopback HTTP v1 without a board build.
 - [x] Verify offline playback/artwork/progress, scene switching, expiry, simulated storage/restarts, and mocked provisioning/maintenance failures.
 - [x] Run native and agent regressions, sanitizer checks, repository validation, and synthetic deployment-guard checks; document defects and remaining hardware gaps.
@@ -298,6 +300,10 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 - [x] Implement candidate/readback/atomic replacement for configuration and mode, staged SHA-256 media uploads, track-bound covers, and row-streamed playback; verify portable failure cases.
 - [x] Implement compile-gated device-hosted firmware OTA with exact size, SHA-256, image checks, and staging bounds; compile the enabled code without deploying it.
 - [x] Evaluate local binary size, static RAM, stack frames, filesystem geometry, stock image format, and the nominal 512 KiB stock guard; document unverified physical behavior.
+
+- [x] Verify the authorized 176 × 176 Spotify layout, unchanged font sizes, longer bounded metadata, content-based redraw and installed-GIF fallback through native regressions.
+- [x] Clarify original GIF versus converted RGB565 limits and verify actionable insufficient-staging-space feedback without interrupting heartbeats.
+- [x] Verify software color packing and SPI byte order, prepare controlled color fixtures, preserve rotation/colors/HTTP/recovery, and produce the authorized private rebuild with unchanged existing credentials; physical color validation remains pending.
 
 - [ ] Document verified hardware and prepare a testable backup/restore procedure.
 - [ ] Configure the board, framework, flags, and partition scheme based on evidence.
@@ -375,7 +381,7 @@ physical acceptance criteria are verified.
 - Agent: Spotify states, refresh token, `204`/`401`/`429`, retry, timeout, change deduplication, and cover cache.
 - Media: invalid GIF, wrong dimensions, oversized file, missing frames, checksum, and frame timing.
 - Protocol: invalid payload, unknown mode, wrong token, interrupted connection, incomplete uploads, and incompatible version.
-- Simulator: `auto ↔ spotify ↔ gif` changes, 240 × 240 UI, and progress updates.
+- Simulator: `auto ↔ spotify ↔ gif` changes, 240 × 240 UI, and no redraw from progress updates.
 
 ### Manual Tests on Real Hardware
 
@@ -404,7 +410,7 @@ English (en-US) is mandatory throughout the NeonByte project, including all curr
 ## 10. MVP Definition of Done
 
 - [ ] During first startup, the user can configure Wi-Fi, pair the clock, and connect Spotify.
-- [ ] Active Spotify playback shows the cover, artist, track, and progress.
+- [ ] Active Spotify playback shows the larger cover, artist and track without a progress bar or playback times.
 - [ ] Paused/no playback or an unavailable agent shows the GIF in `auto` mode.
 - [ ] A custom GIF fills 240 × 240 and loops when the PC is off (while the clock remains powered).
 - [ ] The `auto`, `spotify`, and `gif` modes can be selected and persist.

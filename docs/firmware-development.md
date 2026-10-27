@@ -26,7 +26,7 @@ Run PlatformIO jobs sequentially: native test preparation may clean other enviro
 - `esp8266/main.cpp` binds the core to an extended monotonic clock, optional SNTP Unix time, nonblocking station retries, protected AP provisioning/reconfiguration, and a cooperative loop.
 - `esp8266/http_server.cpp` serves a single HTTP/1.1 connection on port 80 with bounded headers/body buffers, authentication before storage/body allocation, incremental binary writes, and incremental staged-file SHA-256.
 - `esp8266/storage.cpp` disables LittleFS autoformat, persists only `/neonbyte/` files, reads candidates after close before promoting settings, and atomically renames verified media. No stock settings migration is attempted.
-- `esp8266/display.cpp` uses the provisional ST7789 profile. Animation and cover pixels stream in 480-byte rows. Covers are decimated from 240 × 240 to 144 × 144; text and progress use the remaining area. The built-in font substitutes `?` for unsupported Unicode glyphs and truncates long lines.
+- `esp8266/display.cpp` uses the provisional ST7789 profile. Animation and cover pixels stream in 480-byte rows. Covers are sampled from 240 × 240 to centered 176 × 176. The unchanged size-1 built-in font displays up to two bounded lines each for title and artist, substitutes `?` for unsupported Unicode glyphs, and truncates with ASCII dots. Metadata redraws only when visible content changes; progress bars and playback times are absent. See the [display and GIF report](spotify-gif-display.md).
 
 ## Configuration and Network Behavior
 

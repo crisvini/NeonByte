@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createCoverAsset, type MediaAsset } from "../media/animation.js";
 import { downloadSpotifyCover } from "../web/server.js";
 import type { DisplayMode } from "../web/scene.js";
-import { DeviceClient, DeviceSynchronizer } from "./client.js";
+import { AnimationStorageError, DeviceClient, DeviceSynchronizer, MEDIA_STORAGE_RESERVE_BYTES } from "./client.js";
 import { DeviceScheduler, type DeviceConnectionStatus } from "./scheduler.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 
@@ -14,7 +14,7 @@ export interface DeviceConfigStore {
 }
 export interface DeviceSettings { address: string; token?: string; enabled: boolean }
 export interface DeviceView { address: string; enabled: boolean; paired: boolean; connection: DeviceConnectionStatus;
-  animation: { state: "none" | "queued" | "uploading" | "retrying" | "complete"; attempts: number } }
+  animation: { state: "none" | "queued" | "uploading" | "retrying" | "blocked" | "complete"; attempts: number } }
 
 
 /** The address and pairing token share one credential-manager entry. */
@@ -137,6 +137,10 @@ export class DeviceIntegration {
         if (mode && status.mode !== mode) await client.setMode(mode);
         const animation = this.animation;
         if (animation && animation.sha256 !== this.animationSent) {
+          if (animation.bytes.length + MEDIA_STORAGE_RESERVE_BYTES > status.freeStorageBytes) {
+            this.animationState = { state: "blocked", attempts: this.animationState.attempts };
+            return true; // Keep playback and heartbeat synchronization alive while storage is full.
+          }
           this.animationState = { state: "uploading", attempts: this.animationState.attempts + 1 };
           try {
             await client.uploadAnimation(animation);
@@ -144,9 +148,10 @@ export class DeviceIntegration {
               this.animationSent = animation.sha256;
               this.animationState = { state: "complete", attempts: this.animationState.attempts };
             }
-          } catch {
-            if (this.animation === animation) this.animationState = { state: "retrying", attempts: this.animationState.attempts };
-            return false;
+          } catch (error) {
+            const storageFull = error instanceof AnimationStorageError;
+            if (this.animation === animation) this.animationState = { state: storageFull ? "blocked" : "retrying", attempts: this.animationState.attempts };
+            return storageFull;
           }
         }
         return true;

@@ -18,6 +18,9 @@ class PersistentStorage final : public Storage {
 public:
     std::uint32_t assetRevision = 0;
     std::vector<std::uint8_t> animationBytes;
+    std::vector<std::uint8_t> coverBytes;
+    std::string_view coverTrack = "track";
+    mutable std::vector<std::uint32_t> coverReads;
 
     bool loadMode(DisplayMode& mode) const override {
         static_cast<void>(mode);
@@ -37,11 +40,10 @@ public:
         return true;
     }
     bool readCover(std::string_view trackId, std::uint32_t offset, std::uint8_t* bytes, std::size_t length) const {
-        static_cast<void>(trackId);
-        static_cast<void>(offset);
-        static_cast<void>(bytes);
-        static_cast<void>(length);
-        return false;
+        coverReads.push_back(offset);
+        if (trackId != coverTrack || offset > coverBytes.size() || length > coverBytes.size() - offset) return false;
+        std::copy_n(coverBytes.data() + offset, length, bytes);
+        return true;
     }
 };
 

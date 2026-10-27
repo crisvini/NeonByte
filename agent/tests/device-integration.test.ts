@@ -3,6 +3,7 @@ import test from "node:test";
 import { DeviceIntegration, type DeviceConfig, type DeviceConfigStore } from "../src/device/integration.js";
 import { PlaybackPoller } from "../src/spotify/poller.js";
 import { startLocalWebApp } from "../src/web/server.js";
+import { convertGifToAnimation } from "../src/media/animation.js";
 
 class MemoryStore implements DeviceConfigStore {
   value: DeviceConfig | null = null;
@@ -11,6 +12,34 @@ class MemoryStore implements DeviceConfigStore {
 }
 const poller = () => new PlaybackPoller({ provider: { getCurrentPlayback: async () => null }, pollIntervalMs: 15000 });
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+test("insufficient converted storage is visible while heartbeats continue and recovers when space is available", async () => {
+  const asset = convertGifToAnimation(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64"));
+  let freeStorageBytes = 0, uploads = 0, heartbeats = 0;
+  const device = new DeviceIntegration({ store: new MemoryStore(), poller: poller(), intervalMs: 10,
+    fetchDevice: async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (init?.method === "GET") return new Response(JSON.stringify({ protocolVersion: "v1", firmwareVersion: "test",
+        ip: "127.0.0.1", freeStorageBytes, mode: "auto", activeScene: "gif" }));
+      if (path.endsWith("/animation")) uploads++;
+      if (path.endsWith("/heartbeat")) heartbeats++;
+      return new Response(null, { status: 204 });
+    } });
+  device.setAnimation(asset);
+  await device.configure({ address: "http://127.0.0.1:1", token: "test-secret", enabled: true });
+  try {
+    await delay(80);
+    assert.equal(device.status.animation.state, "blocked");
+    assert.equal(uploads, 0);
+    assert.ok(heartbeats >= 2);
+    assert.equal(device.status.connection, "connected");
+    freeStorageBytes = asset.bytes.length + 32768;
+    await delay(80);
+    assert.equal(device.status.animation.state, "complete");
+    assert.equal(uploads, 1);
+    assert.equal(JSON.stringify(device.status).includes("test-secret"), false);
+  } finally { await device.stop(); }
+});
 
 test("configuration requires explicit enable and safely restores it after restart", async () => {
   const store = new MemoryStore();

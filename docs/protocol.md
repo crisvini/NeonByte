@@ -55,6 +55,8 @@ The suggested Spotify polling interval is 15 seconds and will be configurable in
 }
 ~~~
 
+The Spotify display shows a centered 176 × 176 cover and two bounded title/artist fields with unchanged font sizes. It has no progress bar or playback times, and progress-only updates do not redraw metadata. The existing timing fields remain in v1 for compatibility.
+
 The agent must clamp `progressMs` to `durationMs`. The firmware advances progress locally between updates and corrects it when it receives another timestamp. Initial text limits are 256 characters for `trackId`, `title`, and `artist`; keep them aligned across schemas, agent, and firmware.
 
 There is no clear-playback operation in v1, and `trackId` must be nonempty. The offline client sends the last known track with `isPlaying: false` when playback becomes idle or unavailable. A newly started agent with no track history cannot immediately clear unknown playback already on the device; independent metadata expiry still selects GIF after the timeout even if heartbeats continue. No invented track ID or schema change is introduced by offline validation.

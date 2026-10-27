@@ -53,6 +53,8 @@ jobs:
         run: pio run -d firmware -e esp8266-integration-check
       - name: Probe pinned display and recovery adapters offline
         run: python firmware/scripts/probe_compatibility.py
+      - name: Probe pinned RGB565 SPI byte order offline
+        run: python firmware/scripts/probe_display_colors.py
       - name: Probe stock restoration HTTP admission offline
         run: python firmware/scripts/probe_stock_http.py
       - name: Probe HTTP connection lifecycle offline

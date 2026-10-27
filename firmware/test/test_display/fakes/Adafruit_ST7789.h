@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <string>
 
 constexpr std::uint8_t SPI_MODE3 = 3;
 constexpr std::uint8_t ST77XX_MADCTL = 0x36;
@@ -27,13 +28,21 @@ inline void digitalWrite(int pin, int value) {
 namespace neonbyte::display_test {
 
 struct RowWrite {
+    int x = 0, width = 0;
     int y = -1;
     std::uint16_t firstPixel = 0;
     std::size_t pixelCount = 0;
+    std::vector<std::uint16_t> pixels;
 };
+
+struct Rectangle { int x, y, width, height; std::uint16_t color; };
+struct TextWrite { int x, y; std::uint8_t size; std::string text; };
 
 struct PanelState {
     std::vector<RowWrite> rows;
+    std::vector<Rectangle> rectangles;
+    std::vector<TextWrite> texts;
+    unsigned screenClears = 0;
     std::uint32_t initializationFrequency = 0;
     std::uint32_t drawingFrequency = 0;
     std::uint8_t mode = 0, rotation = 255, madctl = 0;
@@ -67,24 +76,25 @@ public:
         if (command == ST77XX_MADCTL && length == 1) neonbyte::display_test::panelState.madctl = data[0];
     }
     void invertDisplay(bool inverted) { neonbyte::display_test::panelState.inverted = inverted; }
-    void fillScreen(std::uint16_t color) { static_cast<void>(color); }
-    void setCursor(int x, int y) { static_cast<void>(x); static_cast<void>(y); }
+    void fillScreen(std::uint16_t color) { static_cast<void>(color); ++neonbyte::display_test::panelState.screenClears; }
+    void setCursor(int x, int y) { cursorX_ = x; cursorY_ = y; newText_ = true; }
     void setTextColor(std::uint16_t color) { static_cast<void>(color); }
-    void setTextSize(std::uint8_t size) { static_cast<void>(size); }
+    void setTextSize(std::uint8_t size) { textSize_ = size; }
     void setTextWrap(bool enabled) { static_cast<void>(enabled); }
-    std::size_t write(std::uint8_t value) { static_cast<void>(value); return 1; }
+    std::size_t write(std::uint8_t value) {
+        auto& texts = neonbyte::display_test::panelState.texts;
+        if (newText_) { texts.push_back({cursorX_, cursorY_, textSize_, {}}); newText_ = false; }
+        texts.back().text.push_back(static_cast<char>(value));
+        return 1;
+    }
     void fillRect(int x, int y, int width, int height, std::uint16_t color) {
-        static_cast<void>(x);
-        static_cast<void>(y);
-        static_cast<void>(width);
-        static_cast<void>(height);
-        static_cast<void>(color);
+        neonbyte::display_test::panelState.rectangles.push_back({x, y, width, height, color});
     }
     void startWrite() {}
     void setAddrWindow(int x, int y, int width, int height) {
         activeRow_ = -1;
-        if (x == 0 && y >= 0 && y < 240 && width == 240 && height == 1) {
-            neonbyte::display_test::panelState.rows.push_back({y, 0, 0});
+        if (x >= 0 && y >= 0 && y < 240 && x + width <= 240 && height == 1) {
+            neonbyte::display_test::panelState.rows.push_back({x, width, y, 0, 0, {}});
             activeRow_ = static_cast<int>(neonbyte::display_test::panelState.rows.size() - 1);
         }
     }
@@ -93,12 +103,16 @@ public:
         auto& row = neonbyte::display_test::panelState.rows[static_cast<std::size_t>(activeRow_)];
         if (row.pixelCount == 0) row.firstPixel = pixel;
         ++row.pixelCount;
+        row.pixels.push_back(pixel);
     }
     void endWrite() {}
 
 private:
     int activeRow_ = -1;
     std::uint32_t frequency_ = 0;
+    int cursorX_ = 0, cursorY_ = 0;
+    std::uint8_t textSize_ = 1;
+    bool newText_ = true;
 };
 
 using Adafruit_ST77xx = Adafruit_ST7789;

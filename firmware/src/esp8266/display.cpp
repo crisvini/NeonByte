@@ -3,6 +3,22 @@
 #include "neonbyte/scene_manager.h"
 #include <algorithm>
 namespace neonbyte {
+namespace {
+SpotifyText metadataText(std::string_view text) {
+    SpotifyText result;
+    for (unsigned char character : text) {
+        if ((character & 0xc0) == 0x80) continue;
+        if (result.length == result.bytes.size()) {
+            std::fill_n(result.bytes.end()-3, 3, '.');
+            break;
+        }
+        // One replacement cell per unsupported Unicode code point; no split UTF-8.
+        result.bytes[result.length++] = character >= 32 && character < 127 ? character : '?';
+    }
+    return result;
+}
+} // namespace
+
 void DeviceDisplay::begin() {
 #if NEONBYTE_ENABLE_DISPLAY
     if (initialized_) return;
@@ -46,19 +62,34 @@ void DeviceDisplay::showSpotifyWaiting() {
         panel_.fillScreen(ST77XX_BLACK); textLine("Waiting for playback",20,116,32,ST77XX_WHITE); scene_ = 1;
     }
 }
-void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t progressMs) {
+void DeviceDisplay::metadataLines(const SpotifyText& text, int firstY, int secondY, std::uint16_t color) {
+    const auto value = text.view();
+    textLine(value.substr(0,SPOTIFY_TEXT_COLUMNS),8,firstY,SPOTIFY_TEXT_COLUMNS,color);
+    if (value.size() > SPOTIFY_TEXT_COLUMNS) {
+        textLine(value.substr(SPOTIFY_TEXT_COLUMNS),8,secondY,SPOTIFY_TEXT_COLUMNS,color);
+    }
+}
+void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t) {
     if (!initialized_) return;
-    if (scene_ != 2 || displayedTrack_.view() != track.trackId.view() || revision_ != storage_.assetRevision) {
-        panel_.fillScreen(ST77XX_BLACK); displayedTrack_ = track.trackId;
+    const bool entering = scene_ != 2;
+    if (entering) panel_.fillScreen(ST77XX_BLACK);
+    const bool trackChanged = displayedTrack_.view() != track.trackId.view();
+    if (trackChanged && !entering) panel_.fillRect(32,4,SPOTIFY_COVER_SIZE,SPOTIFY_COVER_SIZE,ST77XX_BLACK);
+    if (entering || trackChanged || revision_ != storage_.assetRevision) {
+        displayedTrack_ = track.trackId;
         coverRow_ = 0; revision_ = storage_.assetRevision;
     }
     scene_ = 2;
-    panel_.fillRect(0,154,240,86,ST77XX_BLACK);
-    textLine(track.title.view(),8,162,37,ST77XX_WHITE);
-    textLine(track.artist.view(),8,182,37,0x9cf3);
-    panel_.fillRect(8,213,224,4,0x2104);
-    const auto width = track.durationMs ? (static_cast<double>(progressMs)/track.durationMs)*224 : 0;
-    panel_.fillRect(8,213,std::min(224,static_cast<int>(width)),4,ST77XX_GREEN);
+    const auto title = metadataText(track.title.view());
+    if (entering || title.view() != displayedTitle_.view()) {
+        if (!entering) panel_.fillRect(8,188,224,20,ST77XX_BLACK);
+        metadataLines(title,188,200,ST77XX_WHITE); displayedTitle_ = title;
+    }
+    const auto artist = metadataText(track.artist.view());
+    if (entering || artist.view() != displayedArtist_.view()) {
+        if (!entering) panel_.fillRect(8,218,224,18,ST77XX_BLACK);
+        metadataLines(artist,218,228,0x9cf3); displayedArtist_ = artist;
+    }
 }
 void DeviceDisplay::beginAnimationFrame(std::uint16_t, std::uint16_t) {}
 void DeviceDisplay::writeAnimationPixels(std::uint32_t offset, const std::uint8_t* pixels, std::size_t length) {
@@ -75,21 +106,18 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
     if (state.activeScene == ActiveScene::spotify) {
         if (state.waiting) showSpotifyWaiting();
         else {
-            if (scene_ != 2 || now-lastUi_ >= 1000 || displayedTrack_.view() != state.nowPlaying->trackId.view() || revision_ != storage_.assetRevision) {
-                showSpotify(*state.nowPlaying,state.progressMs); lastUi_ = now;
-            }
+            showSpotify(*state.nowPlaying,state.progressMs);
             // One cover row per loop leaves the HTTP and Wi-Fi services runnable.
-            if (coverRow_ < 144) {
-                if (!storage_.readCover(displayedTrack_.view(),(coverRow_*240/144)*480,pixels_.data(),pixels_.size())) {
-                    panel_.fillRect(48,4,144,144,ST77XX_BLACK); coverRow_ = 144;
-                } else {
-                    panel_.startWrite(); panel_.setAddrWindow(48,4+coverRow_,144,1);
-                    for (unsigned x=0;x<144;++x) {
-                        const unsigned source = (x*240/144)*2;
-                        panel_.SPI_WRITE16(pixels_[source] | (std::uint16_t(pixels_[source+1])<<8));
-                    }
-                    panel_.endWrite(); ++coverRow_;
+            if (coverRow_ < SPOTIFY_COVER_SIZE) {
+                if (!storage_.readCover(displayedTrack_.view(),(coverRow_*240/SPOTIFY_COVER_SIZE)*480,pixels_.data(),pixels_.size())) {
+                    pixels_.fill(0);
                 }
+                panel_.startWrite(); panel_.setAddrWindow(32,4+coverRow_,SPOTIFY_COVER_SIZE,1);
+                for (unsigned x=0;x<SPOTIFY_COVER_SIZE;++x) {
+                    const unsigned source = (x*240/SPOTIFY_COVER_SIZE)*2;
+                    panel_.SPI_WRITE16(pixels_[source] | (std::uint16_t(pixels_[source+1])<<8));
+                }
+                panel_.endWrite(); ++coverRow_;
             }
         }
         return;

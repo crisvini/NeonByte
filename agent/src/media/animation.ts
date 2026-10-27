@@ -231,7 +231,7 @@ export function convertGifToAnimation(input: Uint8Array, limits: AnimationLimits
       throw new Error("The GIF contains no image frames.");
     }
     if (imageFrameCount > maxFrames) {
-      throw new Error(`The GIF has ${imageFrameCount} frames; the current preview limit is ${maxFrames}.`);
+      throw new Error(`The GIF has ${imageFrameCount} frames; the animation conversion limit is ${maxFrames}. Choose a GIF with fewer frames.`);
     }
 
     validateGifFrameDescriptors(width, height, imageFrames.map((frame) => frame.image.descriptor), {

@@ -119,3 +119,30 @@ test("rejects a cover with mismatched pixel dimensions or checksum", () => {
   const cover = createCoverAsset(new Uint8Array(240 * 240 * 4), 240, 240);
   assert.throws(() => validateCover(cover.bytes, "0".repeat(64)), /checksum/i);
 });
+
+test("tiny original GIFs still require full RGB565 frame storage and keep the 20-frame limit", () => {
+  const imageBlock = onePixelGif.subarray(19, -1);
+  const frames = (count: number) => Buffer.concat([onePixelGif.subarray(0, 19), ...Array<Buffer>(count).fill(imageBlock), Buffer.from([0x3b])]);
+  const input = frames(20);
+  assert.ok(input.length < 1024);
+  assert.equal(convertGifToAnimation(input).bytes.length, 2_304_051);
+  assert.throws(() => convertGifToAnimation(frames(21)), /21 frames.*limit is 20/);
+});
+
+test("primary and secondary colors retain exact RGB565 words and little-endian asset bytes", () => {
+  const colors = [
+    [255, 0, 0, 0xf800], [0, 255, 0, 0x07e0], [0, 0, 255, 0x001f],
+    [255, 255, 255, 0xffff], [0, 0, 0, 0x0000], [0, 255, 255, 0x07ff],
+    [255, 0, 255, 0xf81f], [255, 255, 0, 0xffe0],
+  ];
+  for (const [red, green, blue, expected] of colors) {
+    const asset = createCoverAsset(Uint8Array.from([red!, green!, blue!, 255]), 1, 1);
+    assert.equal(asset.bytes.readUInt16LE(9), expected);
+    assert.deepEqual([...asset.bytes.subarray(9, 11)], [expected! & 255, expected! >> 8]);
+    // The GIF path uses the same converter after decoding its palette.
+    const gif = Buffer.from(onePixelGif);
+    gif[13] = red!; gif[14] = green!; gif[15] = blue!; gif[22] = 0;
+    const animation = convertGifToAnimation(gif);
+    assert.equal(animation.bytes.readUInt16LE(13), expected);
+  }
+});
