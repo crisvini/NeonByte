@@ -15,7 +15,7 @@
 
 All mutating routes require `Authorization: Bearer {token}`: mode, Spotify, cover, animation, and heartbeat. `GET /api/v1/status` is read-only and does not require a token. Tokens must not appear in logs, URLs, or responses.
 
-The runtime generates a random 64-hex-character token and stores it in its namespaced configuration file. A separately generated WPA2 AP password and the token are shown locally only during initial setup with an enabled, validated display. No unauthenticated pairing exception or reset route exists. The token remains plaintext in device flash; pairing on real hardware and recovery remain PENDING. See [firmware development](firmware-development.md).
+A future private per-device recovery identity supplies first-boot access independently of storage and display. New namespaced configuration uses that token for initial pairing; existing valid pairing tokens remain unchanged. Recovery AP and bearer credentials are independent, privately supplied random secrets with no defaults. Public compilation profiles have no usable identity and are not installations. See [safe first-boot preparation](safe-first-boot.md) for secret delivery, staged provisioning, authenticated maintenance, and limitations. Tokens remain plaintext in device flash; physical validation remains PENDING.
 
 ## Display Modes and Scene Selection
 
@@ -101,11 +101,17 @@ These device-hosted extensions do not change the existing JSON schemas or agent 
 | PUT | /api/v1/config | `application/x-www-form-urlencoded`, at most 512 bytes; exactly `ssid=<encoded>&password=<encoded>` in that order | 204 after verified persistent replacement; station connection is attempted asynchronously. |
 | PUT | /api/v1/firmware | `application/octet-stream`, exact length, X-Content-SHA256 | 204 after validation and successful firmware staging; a restart is scheduled. |
 
-SSID length is 1–32 decoded bytes. Wi-Fi passwords are empty for open networks, 8–63 printable bytes, or 64 hexadecimal characters. Form `+` means space; percent escapes must be well formed and cannot decode to NUL/control bytes. Stored credentials are not returned. There is no default or hardcoded Wi-Fi password or pairing token.
+SSID length is 1–32 decoded bytes. Wi-Fi passwords are empty for open networks, 8–63 printable bytes, or 64 hexadecimal characters. Form `+` means space; percent escapes must be well formed and cannot decode to NUL/control bytes. Stored credentials are not returned. There is no shared or default Wi-Fi password or pairing token. Recovery identity is supplied privately per device.
 
 Firmware OTA is **disabled** in the provisional artifact (`409 conflict`). An enabled future build accepts only an uncompressed combined DIO/40 MHz/4 MB ESP8266 eboot/application image, at most 524,288 bytes and within runtime staging space. It validates segment bounds/checksums, modern Arduino length/CRC, and the complete staged-file SHA-256 before `Update.begin(exactSize, U_FLASH)`. Modern checksum validation accounts for elf2bin's post-checksum metadata patch. `Update.end(false)` rejects incomplete firmware. Filesystem updates and formatting are absent. Compressed, signed/trailing, old-stock-CRC, and other-profile images are unsupported by this route.
 
 Firmware maintenance can pause rendering during complete image validation and flash staging. Animation SHA-256 runs in 512-byte steps across loop iterations. The connection has a 5-second inactivity timeout and 60-second total deadline; local finalization retains the total deadline. One connection is handled at a time, responses close the connection, and a pending successful OTA prevents further mutations before restart.
+
+## Authenticated Maintenance Extensions
+
+The additive `/maintenance/v1/*` extensions are separate from the API v1 JSON contracts. Every maintenance request, including status, requires the private recovery bearer token. They provide status, staged/confirmed Wi-Fi, explicit temporary Wi-Fi, guarded storage initialization, application pause/resume, and access to the existing gated updater while the application is paused. The exact routes and response fields are specified in [safe first-boot preparation](safe-first-boot.md#maintenance-routes). No existing v1 schema or success payload changes. Ordinary v1 application requests return `409 conflict` while the application is paused.
+
+The recovery AP stays available after station connection. Maintenance confirmation saves credentials only after association to the candidate SSID; failed persistence retains the previous installed configuration. Temporary settings require explicit selection and disappear at reset. Firmware maintenance still requires mountable storage and free space; it is not filesystem repair or independent boot recovery.
 
 ## Security and Validation Limits
 

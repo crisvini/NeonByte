@@ -1,6 +1,6 @@
 # NeonByte — Implementation Plan
 
-> **Status:** Phases 1, 2, and 3 are complete; OAuth validation with a real account is pending Spotify credentials. Phase 4 includes locally compiled ESP8266 adapters authorized on 2026-10-26; display/flash/boot validation and Wi-Fi-only installation/recovery remain pending · **Intended license:** MIT · **Target device:** JUZIPi SD PRO (ESP-12F / ESP8266 visually confirmed; remaining hardware identification pending)
+> **Status:** Phases 1, 2, and 3 are complete; OAuth validation with a real account is pending Spotify credentials. Phase 4 includes locally compiled ESP8266 adapters and host-validated safe first-boot preparation authorized on 2026-10-26; display/flash/boot validation and Wi-Fi-only installation/recovery remain pending · **Intended license:** MIT · **Target device:** JUZIPi SD PRO (ESP-12F / ESP8266 visually confirmed; remaining hardware identification pending)
 >
 > **Primary rule:** implement phases sequentially; do not flash firmware until the hardware is validated and recovery is documented.
 
@@ -248,6 +248,12 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 **ESP8266 integration authorization (2026-10-26):** the maintainer visually confirmed ESP-12F / ESP8266 and authorized local firmware integration and compilation, with Wi-Fi as the exclusive communication/update method. The [integration report](docs/esp8266-integration.md) records artifact/resource evidence. No device was contacted or modified. The default native environment is preserved. Provisional 4 MB/DIO/4m3m assumptions do not validate the installed hardware. Display activation and OTA remain disabled in the review artifact; the enabled validation environment is also compilation-only.
 
 **Stock OTA research (2026-10-26):** the [Wi-Fi-only installation report](docs/stock-ota-installation-research.md) compares SmartClock AI and Mini-Display source/release evidence. NeonByte fits the nominal stock size guard and shares the published Mini-Display bootstrap's boot region; direct OTA is the proposed candidate, pending first-boot/provisioning changes and existing hardware, full-backup, and independent Wi-Fi-only recovery gates. Research does not authorize installation implementation or device operations; all physical acceptance tasks remain open.
+
+**Safe first-boot preparation authorization (2026-10-26):** the maintainer authorized Phase 4 startup/provisioning/maintenance implementation, host fault injection, target compilation, and CI checks only. The [preparation report](docs/safe-first-boot.md) records the private recovery-identity design and residual limits. No device contact, installation package, release, safety-gate removal, or Phase 5 work is authorized. Hardware, full backup, independent Wi-Fi-only boot recovery, and filesystem-independent verified maintenance updates remain deployment blockers.
+
+- [x] Start authenticated recovery networking before filesystem/configuration/display dependencies; verify with native fault injection.
+- [x] Add explicit confirmed/temporary provisioning, guarded application maintenance, and private secret-delivery requirements without changing API v1 contracts.
+- [x] Add native firmware tests and both compilation-only ESP8266 profiles to CI; validate locally and document remaining deployment risks.
 
 - [x] Create a C++17 PlatformIO native test environment without selecting a device board.
 - [x] Implement host-tested scene modes, Spotify progress correction, and heartbeat fallback.

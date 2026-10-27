@@ -33,4 +33,15 @@ bool parseWifiConfiguration(std::string_view form, WifiCredentials& credentials)
     if (length == 64) for (char c : std::string_view(candidate.password,length)) if (hex(c) < 0) return false;
     credentials = candidate; return true;
 }
+void StationAssociation::beginAttempt(const WifiCredentials& credentials) {
+    target_ = credentials; allowed_ = associated_ = verified_ = false;
+}
+void StationAssociation::onConnected(std::string_view observedSsid) {
+    associated_ = allowed_ && target_.ssid[0] && observedSsid == target_.ssid;
+    verified_ = false;
+}
+bool StationAssociation::confirmed(const WifiCredentials& credentials, bool liveConnected) const {
+    return liveConnected && allowed_ && verified_ && std::strcmp(credentials.ssid,target_.ssid) == 0
+        && std::strcmp(credentials.password,target_.password) == 0;
+}
 } // namespace neonbyte

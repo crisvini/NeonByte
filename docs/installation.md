@@ -25,3 +25,7 @@ The refresh token is stored in the operating system's native credential manager.
 Without a valid `SPOTIFY_CLIENT_ID`, the agent starts in demo mode so you can test play, pause, track changes, GIFs, and display modes without external calls. With a Client ID configured, the interface offers demo data controls. GIFs must be animated and limited to 8 MiB, 20 frames, 30 seconds total duration, 1,048,576 pixels per logical dimension or frame descriptor, and 4,194,304 pixels total across descriptors. The preview is temporary and remains in memory until the agent exits.
 
 These instructions do not install or configure the device. Any firmware depends on hardware identification, a tested backup and restore procedure, and explicit authorization to flash.
+
+## Firmware Preparation Boundary
+
+[Safe first-boot preparation](safe-first-boot.md) documents the implemented maintenance/provisioning logic, validation, unresolved risks, and exact future OTA package requirements. No installation package has been generated. Public compile-check binaries have no usable recovery identity and must not be installed. Hardware, complete backup, independent Wi-Fi-only boot recovery, and filesystem-independent verified maintenance updates remain deployment blockers. Installation-related work requires separate maintainer approval.

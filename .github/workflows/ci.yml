@@ -24,3 +24,25 @@ jobs:
       - run: npm ci --prefix agent
       - run: npm run check
 
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install platformio==6.2.0
+      - name: Run native firmware tests
+        run: pio test -d firmware -e native
+      - name: Compile provisional ESP8266 profile
+        run: pio run -d firmware -e esp8266-provisional
+      - name: Compile enabled ESP8266 validation profile
+        run: pio run -d firmware -e esp8266-integration-check
+      - name: Validate local images and deployment guard
+        run: |
+          python firmware/scripts/test_local_build_guard.py
+          c++ -std=c++17 -Wall -Wextra -Werror -Ifirmware/include firmware/scripts/validate_image.cpp firmware/src/firmware_image.cpp -o /tmp/neonbyte-image-validator
+          python firmware/scripts/inspect_image.py firmware/.pio/build/esp8266-provisional/firmware.bin
+          python firmware/scripts/inspect_image.py firmware/.pio/build/esp8266-integration-check/firmware.bin
+          /tmp/neonbyte-image-validator firmware/.pio/build/esp8266-provisional/firmware.bin
+          /tmp/neonbyte-image-validator firmware/.pio/build/esp8266-integration-check/firmware.bin

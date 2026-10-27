@@ -3,6 +3,7 @@
 #include "neonbyte/esp8266/storage.h"
 #include "neonbyte/http_headers.h"
 #include "neonbyte/hash_job.h"
+#include "neonbyte/safe_startup.h"
 #include <bearssl/bearssl_hash.h>
 #include <ESP8266WiFi.h>
 #include <memory>
@@ -17,11 +18,12 @@ private:
 };
 class DeviceHttpServer {
 public:
-    DeviceHttpServer(PersistentStorage& storage, ProtocolHandler& protocol, RequestAuthenticator& authenticator)
-        : storage_(storage), protocol_(protocol), authenticator_(authenticator), transfer_(storage) {}
+    DeviceHttpServer(PersistentStorage& storage, SafeStartup& startup, RequestAuthenticator& authenticator)
+        : storage_(storage), startup_(startup), authenticator_(authenticator), transfer_(storage) {}
+    void setProtocol(ProtocolHandler* protocol) { protocol_ = protocol; }
     void begin() { server_.begin(); }
     void tick(std::uint64_t now);
-    bool configurationChanged = false;
+
 private:
     void headersComplete();
     void bodyComplete();
@@ -32,7 +34,8 @@ private:
     void prepareResponse();
     void close();
     PersistentStorage& storage_;
-    ProtocolHandler& protocol_;
+    SafeStartup& startup_;
+    ProtocolHandler* protocol_ = nullptr;
     RequestAuthenticator& authenticator_;
     Transfer transfer_;
     WiFiServer server_{80};
@@ -40,6 +43,8 @@ private:
     HttpHeaders headers_{};
     std::array<char,HTTP_HEADER_LIMIT> headerBytes_{};
     std::unique_ptr<char[]> body_;
+    std::array<char,513> controlBody_{};
+    char* bodyData() { return body_ ? body_.get() : controlBody_.data(); }
     std::unique_ptr<FileSource> hashSource_;
     std::unique_ptr<HashJob> hashJob_;
     Sha256Digest digest_;
@@ -49,6 +54,7 @@ private:
     std::size_t headerSize_ = 0, responseHeaderSize_ = 0, sent_ = 0;
     std::uint32_t received_ = 0;
     std::uint64_t started_ = 0, lastActivity_ = 0, restartAt_ = 0;
+    bool maintenance_ = false;
     bool rebootPending_ = false, finalizing_ = false, readingBody_ = false, sending_ = false, binary_ = false, firmware_ = false;
 };
 } // namespace neonbyte

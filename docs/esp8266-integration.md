@@ -2,6 +2,8 @@
 
 **Date:** 2026-10-26. **Result:** local implementation and compilation completed; deployment is **BLOCKED**. The maintainer visually confirmed ESP-12F / ESP8266 and authorized this local work. No physical device was contacted, uploaded to, flashed, erased, or modified. Stock firmware and filesystem remain untouched. Phase 5 is not started, and physical Phase 4 acceptance is incomplete.
 
+**Subsequent preparation:** the [safe first-boot report](safe-first-boot.md) supersedes the original startup, secret delivery, and allocation arrangement described below. Measurements in this report identify the earlier integration artifacts; current preparation measurements are recorded in that report. Deployment remains blocked.
+
 ## Implemented Scope
 
 - Preserved the native PlatformIO environment as the default and added pinned provisional ESP8266 profiles.
@@ -143,6 +145,6 @@ Remaining test limits: no ESP8266 runtime socket/timeouts/disconnect fault harne
 
 The provisional pin profile is unverified, including boot-sensitive GPIO0/GPIO2. Physical flash capacity, board power, display behavior, installed layout, filesystem compatibility, complete unit backup, and successful boot are PENDING. There is no demonstrated recovery path independent of the replaced application that satisfies Wi-Fi-only operation.
 
-OTA on a running NeonByte application cannot rescue firmware that fails before joining Wi-Fi. The default build's disabled display also means first-setup secrets cannot be obtained from that artifact. Mount/configuration failures deliberately fail closed; automatic formatting, serial rescue, and stock credential migration are absent.
+OTA on a running NeonByte application cannot rescue firmware that fails before networking. Safe first-boot preparation removes the LCD/filesystem dependency for recovery secret delivery and retains authenticated maintenance during representative application failures. It still requires a privately prepared identity; public compile-check builds have no usable identity. Firmware staging still needs LittleFS, and independent boot recovery remains unproven. Automatic formatting, physical rescue, and stock credential migration remain absent.
 
 **Stop before deployment.** The stock firmware/filesystem must remain untouched. Physical Phase 4 tasks stay unchecked in [PLANNING.md](../PLANNING.md). A safe Wi-Fi-only installation has not been established; no further device operation or phase is authorized by these results.

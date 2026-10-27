@@ -2,6 +2,8 @@
 
 **Date:** 2026-10-26. **Scope:** public-source review and offline artifact inspection only. No installation implementation, firmware changes, target compilation, device contact, upload, flash, or clock modification occurred. Third-party source was examined as evidence; no implementation was incorporated into NeonByte.
 
+**Subsequent Phase 4 implementation:** [safe first-boot preparation](safe-first-boot.md) implements host-tested startup/provisioning/maintenance changes. This research report and its artifact measurements remain historical evidence; the preparation report records current behavior and remaining blockers. No installation or packaging is authorized.
+
 ## Conclusion
 
 **Prefer a direct, uncompressed NeonByte image through the stock OTA interface as the future first-installation candidate. A bootstrap is unnecessary for the current size and would add another application replacement. Deployment remains blocked.**

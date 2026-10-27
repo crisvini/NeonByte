@@ -5,6 +5,7 @@
 namespace neonbyte {
 void DeviceDisplay::begin() {
 #if NEONBYTE_ENABLE_DISPLAY
+    if (initialized_) return;
     pinMode(DISPLAY_BACKLIGHT,OUTPUT); digitalWrite(DISPLAY_BACKLIGHT,HIGH);
     panel_.init(240,240,SPI_MODE3); panel_.setSPISpeed(20'000'000);
     panel_.setRotation(0);

@@ -67,14 +67,7 @@ bool PersistentStorage::beginStorage() {
 bool PersistentStorage::loadConfiguration() {
     if (!ready) return false;
     File file = LittleFS.open("/neonbyte/config.bin","r");
-    if (!file) {
-        if (LittleFS.exists("/neonbyte/config.bin")) return false;
-        // Local setup secrets use the SDK hardware RNG, never chip IDs or defaults.
-        constexpr char HEX_DIGITS[] = "0123456789abcdef";
-        for (unsigned i=0;i<64;++i) configuration.token[i] = HEX_DIGITS[os_random() & 15];
-        for (unsigned i=0;i<16;++i) configuration.apPassword[i] = HEX_DIGITS[os_random() & 15];
-        return saveConfiguration(configuration);
-    }
+    if (!file) return false; // First-boot identity is independent of LittleFS.
     DeviceConfiguration candidate{}; std::uint8_t stored[32], actual[32];
     if (file.size() != sizeof(candidate)+sizeof(stored) || file.read(reinterpret_cast<std::uint8_t*>(&candidate),sizeof(candidate)) != sizeof(candidate) || file.read(stored,sizeof(stored)) != sizeof(stored)) return false;
     digest(&candidate,sizeof(candidate),actual);

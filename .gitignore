@@ -26,3 +26,6 @@ Thumbs.db
 SDPro_V1.0.6_20260525_174828.bin
 # Generated local compiler database
 firmware/compile_commands.json
+
+# Per-device recovery identity; never include it in public artifacts
+/firmware/private/

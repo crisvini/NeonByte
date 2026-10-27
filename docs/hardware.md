@@ -32,6 +32,8 @@ An [independent hardware-tested SD PRO project](https://github.com/piotrkochan/h
 
 `NEONBYTE_ENABLE_DISPLAY=0` keeps the provisional artifact from initializing SPI or display GPIOs. The `esp8266-integration-check` environment compiles the enabled paths for local inspection only. Neither artifact is approved for installation. See the [integration report](esp8266-integration.md).
 
+The [safe first-boot report](safe-first-boot.md) documents host-tested provisioning/maintenance independent of display and configuration storage, with a private per-device identity required for future use. Public compile checks contain no usable credentials. This does not validate radio behavior, boot recovery, or installation.
+
 ## Firmware and Storage Boundaries
 
 The native environment remains the default. ESP8266 code provides Wi-Fi, a bounded HTTP server, persisted bearer/configuration/mode, namespaced asset staging, RGB565 rows, animation playback, and gated OTA. These are compile-validated implementations, not physical validation. No agent-to-device client is implemented in this phase.

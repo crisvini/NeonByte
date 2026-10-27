@@ -32,11 +32,15 @@ void DeviceHttpServer::prepareResponse() {
 }
 void DeviceHttpServer::headersComplete() {
     if (!headers_.parse({headerBytes_.data(),headerSize_})) { error(400,"invalid_request","Use unambiguous HTTP/1.1 framing and Content-Length."); return; }
-    if (headers_.path != "/api/v1/status" && !authenticator_.isAuthorized(headers_.authorization)) { error(401,"unauthorized","A valid bearer token is required."); return; }
-    firmware_ = headers_.path == "/api/v1/firmware";
+    maintenance_ = headers_.path.substr(0,16) == "/maintenance/v1/";
+    if (maintenance_ ? !startup_.authorized(headers_.authorization)
+        : headers_.path != "/api/v1/status" && !authenticator_.isAuthorized(headers_.authorization)) { error(401,"unauthorized","A valid bearer token is required."); return; }
+    firmware_ = headers_.path == "/api/v1/firmware" || headers_.path == "/maintenance/v1/firmware";
+    if (!maintenance_ && !protocol_) { error(409,"conflict","The application is paused; use authenticated maintenance."); return; }
     binary_ = firmware_ || headers_.path == "/api/v1/cover" || headers_.path == "/api/v1/animation";
     if (binary_) {
         if (headers_.method != HttpMethod::put) { error(400,"invalid_request","The upload route requires PUT."); return; }
+        if (firmware_ && maintenance_ && startup_.applicationRunning()) { error(409,"conflict","Pause the application before a maintenance firmware upload."); return; }
         if (firmware_ && !NEONBYTE_ENABLE_OTA) { error(409,"conflict","OTA is disabled pending installation and recovery validation."); return; }
         if (headers_.contentType != "application/octet-stream") { error(415,"unsupported_media_type","Upload application/octet-stream."); return; }
         const auto kind = firmware_ ? AssetKind::firmware : headers_.path == "/api/v1/cover" ? AssetKind::cover : AssetKind::animation;
@@ -47,10 +51,12 @@ void DeviceHttpServer::headersComplete() {
         if (!storage_.selectAsset(kind,headers_.trackId)) { error(400,"invalid_request","Provide a percent-encoded UTF-8 X-Track-Id of 1 to 256 code points."); return; }
         if (!transfer_.begin(headers_.contentLength,limit,headers_.sha256)) { error(409,"conflict","Storage is unavailable or insufficient for atomic replacement."); return; }
     } else {
-        const auto limit = headers_.path == "/api/v1/config" ? 512U : JSON_BODY_LIMIT;
+        const auto limit = maintenance_ || headers_.path == "/api/v1/config" ? 512U : JSON_BODY_LIMIT;
         if (headers_.contentLength > limit) { error(413,"payload_too_large","The request body exceeds the route limit."); return; }
-        body_.reset(new (std::nothrow) char[headers_.contentLength+1]);
-        if (!body_) { error(500,"internal_error","Insufficient memory for this request."); return; }
+        if (limit == JSON_BODY_LIMIT) {
+            body_.reset(new (std::nothrow) char[headers_.contentLength+1]);
+            if (!body_) { error(500,"internal_error","Insufficient memory for this request."); return; }
+        }
     }
     readingBody_ = true;
     if (!headers_.contentLength) bodyComplete();
@@ -58,12 +64,12 @@ void DeviceHttpServer::headersComplete() {
 void DeviceHttpServer::configureWifi() {
     if (headers_.method != HttpMethod::put || headers_.contentType != "application/x-www-form-urlencoded") { error(400,"invalid_request","Use PUT with an ssid and password form."); return; }
     WifiCredentials credentials;
-    if (!parseWifiConfiguration({body_.get(),received_},credentials)) { error(400,"invalid_request","Provide a valid ssid and password form."); return; }
+    if (!parseWifiConfiguration({bodyData(),received_},credentials)) { error(400,"invalid_request","Provide a valid ssid and password form."); return; }
     DeviceConfiguration candidate = storage_.configuration;
     memcpy(candidate.ssid,credentials.ssid,sizeof(candidate.ssid));
     memcpy(candidate.password,credentials.password,sizeof(candidate.password));
     if (!storage_.saveConfiguration(candidate)) { error(500,"internal_error","The Wi-Fi configuration could not be saved."); return; }
-    configurationChanged = true; response_ = {}; response_.statusCode = 204; prepareResponse();
+    startup_.usePersistedWifi(credentials,lastActivity_); response_ = {}; response_.statusCode = 204; prepareResponse();
 }
 void DeviceHttpServer::finishBinary() {
     const auto result = hashJob_->step(chunk_.data(),chunk_.size());
@@ -79,11 +85,12 @@ void DeviceHttpServer::finishBinary() {
     response_ = {}; response_.statusCode = 204; prepareResponse();
 }
 void DeviceHttpServer::dispatchJson() {
-    body_[received_] = 0;
+    bodyData()[received_] = 0;
+    const HttpRequest request{headers_.method,headers_.path,headers_.authorization,headers_.contentType,{bodyData(),received_}};
+    if (maintenance_) { handleMaintenance(request,startup_,lastActivity_,response_); prepareResponse(); return; }
     if (headers_.path == "/api/v1/config") { configureWifi(); return; }
     const String ip = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
-    const HttpRequest request{headers_.method,headers_.path,headers_.authorization,headers_.contentType,{body_.get(),received_}};
-    response_ = protocol_.handle(request,{"0.1.0-phase4",{ip.c_str(),ip.length()}}); prepareResponse();
+    response_ = protocol_->handle(request,{"0.1.0-phase4",{ip.c_str(),ip.length()}}); prepareResponse();
 }
 void DeviceHttpServer::bodyComplete() {
     if (!binary_) { dispatchJson(); return; }
@@ -135,7 +142,7 @@ void DeviceHttpServer::tick(std::uint64_t now) {
     lastActivity_ = now;
     if (binary_) {
         if (!transfer_.append(chunk_.data(),bytes)) { error(500,"internal_error","The staged upload could not be written."); return; }
-    } else memcpy(body_.get()+received_,chunk_.data(),bytes);
+    } else memcpy(bodyData()+received_,chunk_.data(),bytes);
     received_ += bytes;
     if (received_ == headers_.contentLength) bodyComplete();
 }
