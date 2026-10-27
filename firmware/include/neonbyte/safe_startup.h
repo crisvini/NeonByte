@@ -35,6 +35,7 @@ public:
     bool storageAvailable() const { return storageAvailable_; }
     bool configurationLoaded() const { return configurationLoaded_; }
     bool applicationRunning() const { return applicationRunning_; }
+    bool applicationPaused() const { return !applicationRunning_ && !automaticStart_; }
     bool pendingWifi() const { return pendingWifi_; }
     bool volatileWifi() const { return volatileWifi_; }
     bool stationConnected() const;

@@ -3,6 +3,7 @@
 #include "neonbyte/esp8266/storage.h"
 #include "neonbyte/http_headers.h"
 #include "neonbyte/hash_job.h"
+#include "neonbyte/esp8266/ota_staging.h"
 #include "neonbyte/safe_startup.h"
 #include <bearssl/bearssl_hash.h>
 #include <ESP8266WiFi.h>
@@ -19,7 +20,8 @@ private:
 class DeviceHttpServer {
 public:
     DeviceHttpServer(PersistentStorage& storage, SafeStartup& startup, RequestAuthenticator& authenticator)
-        : storage_(storage), startup_(startup), authenticator_(authenticator), transfer_(storage) {}
+        : storage_(storage), startup_(startup), authenticator_(authenticator), transfer_(storage),
+          maintenanceOta_(maintenanceBackend_,digest_), maintenanceTransfer_(maintenanceOta_) {}
     void setProtocol(ProtocolHandler* protocol) { protocol_ = protocol; }
     void begin() { server_.begin(); }
     void tick(std::uint64_t now);
@@ -38,6 +40,11 @@ private:
     ProtocolHandler* protocol_ = nullptr;
     RequestAuthenticator& authenticator_;
     Transfer transfer_;
+    Esp8266OtaBackend maintenanceBackend_{};
+    Sha256Digest digest_{};
+    MaintenanceOtaTransaction maintenanceOta_;
+    Transfer maintenanceTransfer_;
+    Transfer* activeTransfer_ = &transfer_;
     WiFiServer server_{80};
     WiFiClient client_;
     HttpHeaders headers_{};
@@ -45,9 +52,9 @@ private:
     std::unique_ptr<char[]> body_;
     std::array<char,513> controlBody_{};
     char* bodyData() { return body_ ? body_.get() : controlBody_.data(); }
-    std::unique_ptr<FileSource> hashSource_;
+    std::unique_ptr<FileSource> fileHashSource_;
+    ImageSource* hashSource_ = nullptr;
     std::unique_ptr<HashJob> hashJob_;
-    Sha256Digest digest_;
     std::array<std::uint8_t,512> chunk_{};
     HttpResponse response_{};
     std::array<char,192> responseHeaders_{};
@@ -55,6 +62,7 @@ private:
     std::uint32_t received_ = 0;
     std::uint64_t started_ = 0, lastActivity_ = 0, restartAt_ = 0;
     bool maintenance_ = false;
+    bool maintenanceFirmware_ = false;
     bool rebootPending_ = false, finalizing_ = false, readingBody_ = false, sending_ = false, binary_ = false, firmware_ = false;
 };
 } // namespace neonbyte

@@ -1,5 +1,6 @@
 #include <unity.h>
 #include "neonbyte/safe_startup.h"
+#include "neonbyte/ota_staging.h"
 #include <string>
 #include <cstring>
 using namespace neonbyte;
@@ -33,6 +34,23 @@ void testNetworkAndHttpStartBeforeStorageAndDisplay() {
     TEST_ASSERT_TRUE(services.calls.find('F') > services.calls.find('H'));
     TEST_ASSERT_TRUE(services.calls.find('A') > services.calls.find('H'));
     TEST_ASSERT_TRUE(startup.recoveryApRunning());
+}
+void testMaintenanceOtaAdmissionRejectsPendingAutomaticStartup() {
+    Services services; SafeStartup startup(services,IDENTITY);
+    startup.begin(0,false);
+    const std::string authorization = "Bearer " + std::string(IDENTITY.token);
+    TEST_ASSERT_FALSE(startup.applicationPaused());
+    const auto admission = maintenanceOtaAdmission(startup.authorized(authorization),startup.applicationPaused(),true,
+        HttpMethod::put,"application/octet-stream",0x1030,std::string(64,'a'));
+    TEST_ASSERT_EQUAL(OtaAdmissionError::applicationRunning,admission);
+    TEST_ASSERT_EQUAL(StartupResult::ok,startup.pauseApplication(authorization));
+    TEST_ASSERT_TRUE(startup.applicationPaused());
+    TEST_ASSERT_EQUAL(OtaAdmissionError::none,
+        maintenanceOtaAdmission(startup.authorized(authorization),startup.applicationPaused(),true,
+            HttpMethod::put,"application/octet-stream",0x1030,std::string(64,'a')));
+    startup.tick(10000);
+    TEST_ASSERT_EQUAL(std::string::npos,services.calls.find('F'));
+    TEST_ASSERT_EQUAL(std::string::npos,services.calls.find('G'));
 }
 void testMissingOrMalformedIdentityNeverStartsNetwork() {
     for (auto identity : {RecoveryIdentity{}, RecoveryIdentity{"short",IDENTITY.apPassword},
@@ -205,6 +223,7 @@ void tearDown() {}
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(testNetworkAndHttpStartBeforeStorageAndDisplay);
+    RUN_TEST(testMaintenanceOtaAdmissionRejectsPendingAutomaticStartup);
     RUN_TEST(testMissingOrMalformedIdentityNeverStartsNetwork);
     RUN_TEST(testMountConfigurationAndApplicationFailuresKeepRecoveryAvailable);
     RUN_TEST(testCrashBootStaysInMaintenanceUntilAuthenticatedRun);

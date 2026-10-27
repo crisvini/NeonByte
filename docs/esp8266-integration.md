@@ -4,6 +4,8 @@
 
 **Subsequent preparation:** the [safe first-boot report](safe-first-boot.md) supersedes the original startup, secret delivery, and allocation arrangement described below. Measurements in this report identify the earlier integration artifacts; current preparation measurements are recorded in that report. Deployment remains blocked.
 
+**Part 4 update (2026-10-27):** the maintenance firmware route now uses raw sketch staging with checked readback; the API v1 firmware route retains file staging. See the [maintenance OTA design](maintenance-ota-design.md), [safe first-boot report](safe-first-boot.md), and [recovery limits](recovery.md) for current behavior and validation scope. The compile-check remains non-installable.
+
 ## Implemented Scope
 
 - Preserved the native PlatformIO environment as the default and added pinned provisional ESP8266 profiles.
@@ -145,6 +147,6 @@ Remaining test limits: no ESP8266 runtime socket/timeouts/disconnect fault harne
 
 The provisional pin profile is unverified, including boot-sensitive GPIO0/GPIO2. Physical flash capacity, board power, display behavior, installed layout, filesystem compatibility, complete unit backup, and successful boot are PENDING. There is no demonstrated recovery path independent of the replaced application that satisfies Wi-Fi-only operation.
 
-OTA on a running NeonByte application cannot rescue firmware that fails before networking. Safe first-boot preparation removes the LCD/filesystem dependency for recovery secret delivery and retains authenticated maintenance during representative application failures. It still requires a privately prepared identity; public compile-check builds have no usable identity. Firmware staging still needs LittleFS, and independent boot recovery remains unproven. Automatic formatting, physical rescue, and stock credential migration remain absent.
+OTA on a running NeonByte application cannot rescue firmware that fails before networking. Safe first-boot preparation removes the LCD/filesystem dependency for recovery secret delivery and retains authenticated maintenance during representative application failures. It still requires a privately prepared identity; public compile-check builds have no usable identity. The API v1 firmware route still stages through LittleFS; the maintenance route now uses raw flash staging, which remains unverified on hardware. Independent boot recovery remains unproven. Automatic formatting, physical rescue, and stock credential migration remain absent.
 
 **Stop before deployment.** The stock firmware/filesystem must remain untouched. Physical Phase 4 tasks stay unchecked in [PLANNING.md](../PLANNING.md). A safe Wi-Fi-only installation has not been established; no further device operation or phase is authorized by these results.

@@ -4,6 +4,8 @@
 
 This review changes documentation only. No clock was contacted, probed, restarted, or modified. No firmware was compiled, uploaded, flashed, or packaged; no private identity or release was generated. Existing deployment safeguards and API v1 contracts remain unchanged. Proposed implementation and future evidence collection below require their own authorization where they exceed this review.
 
+**Part 4 update (2026-10-27):** under separate local authorization, the authenticated maintenance route's raw sketch staging transaction was implemented with native fault injection and compiled in the existing non-installable ESP8266 profile. This resolves the earlier proposal's implementation status, not the review's installation decision. Runtime flash behavior, complete backup, independent Wi-Fi-only recovery, and hardware acceptance remain pending; no device operation or installation package was produced.
+
 ## Evidence and Decision
 
 Read in full: [agent instructions](../AGENTS.md), [implementation plan](../PLANNING.md), [recovery](recovery.md), [safe first boot](safe-first-boot.md), and [stock OTA research](stock-ota-installation-research.md). Supporting evidence includes [hardware](hardware.md), [stock binary analysis](stock-firmware-analysis.md), the current ESP8266 startup/storage/HTTP adapters, and pinned Arduino 3.1.2 update/boot code. Historical reports retain their original measurements; they are not evidence that the installed firmware matches the analyzed vendor image.
@@ -17,7 +19,7 @@ Read in full: [agent instructions](../AGENTS.md), [implementation plan](../PLANN
 | Board, power, display, flash, layout | Provisional profile and external unit reports; no unit-specific validation beyond module identification | PENDING; blocks deployment |
 | Complete original backup and restoration | Vendor application update only; no unit-specific full-flash export or tested restore | BLOCKED |
 | Independent Wi-Fi-only failed-boot recovery | Stock and NeonByte web services run in the application; no retained rescue service established | BLOCKED |
-| Firmware update without LittleFS | Maintenance networking is independent; firmware staging is not | BLOCKED; proposed improvement below |
+| Firmware update without LittleFS | Maintenance raw staging is implemented and host/compile validated; device behavior is unverified | PENDING spare-device validation; does not satisfy backup/recovery gates |
 | Private installation candidate and physical acceptance | Public compile checks lack a usable identity; no approved package or spare-unit validation | PENDING; no packaging or device operations authorized |
 
 **GO:** record the reported desktop results, inspect existing local artifacts/source, and assemble a revision-specific evidence request. **NO-GO:** stock OTA installation, firmware upload experiments, bootstrap deployment, installation packaging, or release publication. Improving maintenance access alone cannot change that decision.
@@ -85,15 +87,15 @@ A custom bootloader plus separately retained rescue application and verified sel
 
 Request vendor evidence of an already installed independent rescue mechanism. If none exists, the current independent-recovery requirement cannot be met by a small NeonByte change. **Keep the project unit on stock firmware.** Any future decision to change the requirement would be a separate explicit policy decision, not a technical GO from this review.
 
-## Filesystem-Dependent Maintenance Updater
+## Filesystem-Dependent Maintenance Updater at the Review Date
 
-### Current Path and Failure
+### Current Path and Failure at the Review Date
 
-In [HTTP handling](../firmware/src/esp8266/http_server.cpp), both firmware routes select `PersistentStorage` as the transfer sink. Recovery authentication and a paused application are required for `/maintenance/v1/firmware`; the OTA feature gate remains enforced. [Persistent storage](../firmware/src/esp8266/storage.cpp) then requires a mounted volume and candidate length plus the 32 KiB reserve, writes `/neonbyte/firmware.part`, checks image format and readback SHA-256, and promotes it to `/neonbyte/firmware.bin`. `applyFirmware()` validates format/CRC again, checks physical/linked flash and available sketch staging, copies the file through `Update.begin(..., U_FLASH)`, and finalizes with `Update.end(false)`.
+At the review date, both firmware routes selected `PersistentStorage` as the transfer sink. Recovery authentication and a paused application were required for `/maintenance/v1/firmware`; the OTA feature gate remained enforced. [Persistent storage](../firmware/src/esp8266/storage.cpp) then required a mounted volume and candidate length plus the 32 KiB reserve, wrote `/neonbyte/firmware.part`, checked image format and readback SHA-256, and promoted it to `/neonbyte/firmware.bin`. `applyFirmware()` validated format/CRC again, checked physical/linked flash and available sketch staging, copied the file through `Update.begin(..., U_FLASH)`, and finalized with `Update.end(false)`.
 
-Thus there are two staging locations: a LittleFS file and the Arduino raw sketch-update area. A full, read-only, absent, or incompatible LittleFS volume blocks the first stage even though the raw sketch staging area might be usable. Temporary Wi-Fi and an early HTTP listener do not remove this dependency. Lowering the reserve, deleting stock files, formatting, or changing filesystem boundaries would not safely address it.
+At that time there were two staging locations: a LittleFS file and the Arduino raw sketch-update area. A full, read-only, absent, or incompatible LittleFS volume blocked the first stage even though the raw sketch staging area might be usable. Temporary Wi-Fi and an early HTTP listener did not remove this dependency. Lowering the reserve, deleting stock files, formatting, or changing filesystem boundaries would not safely address it.
 
-### Smallest Safe Improvement Proposed
+### Smallest Safe Improvement Proposed at the Review Date
 
 **Add a filesystem-independent sink only for the existing authenticated maintenance firmware route, using the existing raw sketch OTA area and pinned Arduino updater.** Retain the single application, linker geometry, normal asset/file path, private recovery identity, feature gates, and deployment-target restrictions. This is a proposal, not implementation authorization.
 

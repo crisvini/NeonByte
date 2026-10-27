@@ -13,12 +13,13 @@ void Sha256Digest::finish(char* hex64) {
     for (unsigned i=0;i<32;++i) { hex64[2*i] = HEX_DIGITS[bytes[i]>>4]; hex64[2*i+1] = HEX_DIGITS[bytes[i]&15]; }
 }
 void DeviceHttpServer::close() {
-    transfer_.abort(); hashJob_.reset(); hashSource_.reset(); client_.stop(); body_.reset();
+    activeTransfer_->abort(); hashJob_.reset(); fileHashSource_.reset(); hashSource_ = nullptr; client_.stop(); body_.reset();
     headerSize_ = received_ = sent_ = 0;
-    finalizing_ = readingBody_ = sending_ = binary_ = firmware_ = false;
+    activeTransfer_ = &transfer_;
+    finalizing_ = readingBody_ = sending_ = binary_ = firmware_ = maintenanceFirmware_ = false;
 }
 void DeviceHttpServer::error(unsigned status, const char* code, const char* message) {
-    transfer_.abort(); hashJob_.reset(); hashSource_.reset(); finalizing_ = false; response_ = {}; response_.statusCode = status;
+    activeTransfer_->abort(); hashJob_.reset(); fileHashSource_.reset(); hashSource_ = nullptr; finalizing_ = false; response_ = {}; response_.statusCode = status;
     response_.contentType = "application/json";
     response_.bodySize = snprintf(response_.body.data(),response_.body.size(),"{\"code\":\"%s\",\"message\":\"%s\"}",code,message);
     prepareResponse();
@@ -33,23 +34,42 @@ void DeviceHttpServer::prepareResponse() {
 void DeviceHttpServer::headersComplete() {
     if (!headers_.parse({headerBytes_.data(),headerSize_})) { error(400,"invalid_request","Use unambiguous HTTP/1.1 framing and Content-Length."); return; }
     maintenance_ = headers_.path.substr(0,16) == "/maintenance/v1/";
-    if (maintenance_ ? !startup_.authorized(headers_.authorization)
-        : headers_.path != "/api/v1/status" && !authenticator_.isAuthorized(headers_.authorization)) { error(401,"unauthorized","A valid bearer token is required."); return; }
     firmware_ = headers_.path == "/api/v1/firmware" || headers_.path == "/maintenance/v1/firmware";
+    maintenanceFirmware_ = isMaintenanceFirmwarePath(headers_.path);
+    if (maintenanceFirmware_) {
+        const auto admission = maintenanceOtaAdmission(startup_.authorized(headers_.authorization),startup_.applicationPaused(),
+            NEONBYTE_ENABLE_OTA != 0,headers_.method,headers_.contentType,headers_.contentLength,headers_.sha256);
+        switch (admission) {
+            case OtaAdmissionError::none: break;
+            case OtaAdmissionError::unauthorized: error(401,"unauthorized","A valid recovery bearer token is required."); return;
+            case OtaAdmissionError::applicationRunning: error(409,"conflict","Pause the application before a maintenance firmware upload."); return;
+            case OtaAdmissionError::disabled: error(409,"conflict","OTA is disabled pending installation and recovery validation."); return;
+            case OtaAdmissionError::method: error(400,"invalid_request","The upload route requires PUT."); return;
+            case OtaAdmissionError::mediaType: error(415,"unsupported_media_type","Upload application/octet-stream."); return;
+            case OtaAdmissionError::tooLarge: error(413,"payload_too_large","The asset exceeds this build's upload limit."); return;
+            case OtaAdmissionError::invalidBody: error(400,"invalid_request","Provide a nonzero length and lowercase SHA-256."); return;
+        }
+    } else if (maintenance_ ? !startup_.authorized(headers_.authorization)
+        : headers_.path != "/api/v1/status" && !authenticator_.isAuthorized(headers_.authorization)) {
+        error(401,"unauthorized","A valid bearer token is required."); return;
+    }
     if (!maintenance_ && !protocol_) { error(409,"conflict","The application is paused; use authenticated maintenance."); return; }
     binary_ = firmware_ || headers_.path == "/api/v1/cover" || headers_.path == "/api/v1/animation";
     if (binary_) {
         if (headers_.method != HttpMethod::put) { error(400,"invalid_request","The upload route requires PUT."); return; }
-        if (firmware_ && maintenance_ && startup_.applicationRunning()) { error(409,"conflict","Pause the application before a maintenance firmware upload."); return; }
-        if (firmware_ && !NEONBYTE_ENABLE_OTA) { error(409,"conflict","OTA is disabled pending installation and recovery validation."); return; }
+        if (firmware_ && !maintenanceFirmware_ && !NEONBYTE_ENABLE_OTA) { error(409,"conflict","OTA is disabled pending installation and recovery validation."); return; }
         if (headers_.contentType != "application/octet-stream") { error(415,"unsupported_media_type","Upload application/octet-stream."); return; }
         const auto kind = firmware_ ? AssetKind::firmware : headers_.path == "/api/v1/cover" ? AssetKind::cover : AssetKind::animation;
         const auto limit = firmware_ ? FIRMWARE_BYTES_LIMIT : kind == AssetKind::cover ? COVER_BYTES : ANIMATION_BYTES_LIMIT;
         if (headers_.contentLength > limit) { error(413,"payload_too_large","The asset exceeds this build's upload limit."); return; }
         if (!headers_.contentLength || !isSha256(headers_.sha256)) { error(400,"invalid_request","Provide a nonzero length and lowercase SHA-256."); return; }
         if (kind == AssetKind::cover && headers_.contentLength != COVER_BYTES) { error(422,"invalid_content","The cover must be NBIC v1 at 240 by 240."); return; }
-        if (!storage_.selectAsset(kind,headers_.trackId)) { error(400,"invalid_request","Provide a percent-encoded UTF-8 X-Track-Id of 1 to 256 code points."); return; }
-        if (!transfer_.begin(headers_.contentLength,limit,headers_.sha256)) { error(409,"conflict","Storage is unavailable or insufficient for atomic replacement."); return; }
+        if (!prepareUploadStorage(headers_.path,[&] { return storage_.selectAsset(kind,headers_.trackId); })) { error(400,"invalid_request","Provide a percent-encoded UTF-8 X-Track-Id of 1 to 256 code points."); return; }
+        activeTransfer_ = &selectUploadTransfer(headers_.path,transfer_,maintenanceTransfer_);
+        if (maintenanceFirmware_ && !maintenanceOta_.setExpectedHash(headers_.sha256)) { error(400,"invalid_request","Provide a lowercase SHA-256 digest."); return; }
+        if (!activeTransfer_->begin(headers_.contentLength,limit,headers_.sha256)) {
+            error(409,"conflict",maintenanceFirmware_ ? "Raw flash staging is unavailable for this runtime layout." : "Storage is unavailable or insufficient for atomic replacement."); return;
+        }
     } else {
         const auto limit = maintenance_ || headers_.path == "/api/v1/config" ? 512U : JSON_BODY_LIMIT;
         if (headers_.contentLength > limit) { error(413,"payload_too_large","The request body exceeds the route limit."); return; }
@@ -75,12 +95,16 @@ void DeviceHttpServer::finishBinary() {
     const auto result = hashJob_->step(chunk_.data(),chunk_.size());
     if (result == HashStep::pending) return;
     if (result == HashStep::failed) { error(500,"internal_error","The staged asset could not be read."); return; }
+    if (maintenanceFirmware_ && !maintenanceOtaBodyHasNoExtraBytes(received_,headers_.contentLength,static_cast<std::size_t>(std::max(0,client_.available())))) {
+        error(400,"invalid_request","The firmware body must match Content-Length exactly."); return;
+    }
     char actualHash[64]; digest_.finish(actualHash);
-    hashJob_.reset(); hashSource_.reset(); finalizing_ = false;
-    if (!transfer_.finish({actualHash,sizeof(actualHash)},true)) { error(422,"invalid_content","Checksum validation or atomic installation failed."); return; }
+    hashJob_.reset(); fileHashSource_.reset(); hashSource_ = nullptr; finalizing_ = false;
+    if (!activeTransfer_->finish({actualHash,sizeof(actualHash)},true)) { error(422,"invalid_content","Checksum validation or atomic installation failed."); return; }
     if (firmware_) {
-        if (!storage_.applyFirmware()) { error(500,"internal_error","Firmware staging was rejected; no restart was requested."); return; }
-        rebootPending_ = true;
+        if (!maintenanceFirmware_ && !storage_.applyFirmware()) { error(500,"internal_error","Firmware staging was rejected; no restart was requested."); return; }
+        rebootPending_ = !maintenanceFirmware_ || maintenanceOtaRestartAllowed(maintenanceOta_.state());
+        if (!rebootPending_) { error(500,"internal_error","Firmware staging was rejected; no restart was requested."); return; }
     }
     response_ = {}; response_.statusCode = 204; prepareResponse();
 }
@@ -94,11 +118,17 @@ void DeviceHttpServer::dispatchJson() {
 }
 void DeviceHttpServer::bodyComplete() {
     if (!binary_) { dispatchJson(); return; }
-    storage_.sealStaged();
-    if (!storage_.validateStaged()) { error(422,"invalid_content","The uploaded asset format is invalid."); return; }
-    const char* path = firmware_ ? "/neonbyte/firmware.part" : headers_.path == "/api/v1/cover" ? "/neonbyte/cover.part" : "/neonbyte/animation.part";
-    const auto prefix = headers_.path == "/api/v1/cover" ? COVER_TRACK_BYTES : 0U;
-    hashSource_.reset(new (std::nothrow) FileSource(path));
+    std::uint32_t prefix = 0;
+    if (maintenanceFirmware_) {
+        hashSource_ = &maintenanceOta_;
+    } else {
+        storage_.sealStaged();
+        if (!storage_.validateStaged()) { error(422,"invalid_content","The uploaded asset format is invalid."); return; }
+        const char* path = firmware_ ? "/neonbyte/firmware.part" : headers_.path == "/api/v1/cover" ? "/neonbyte/cover.part" : "/neonbyte/animation.part";
+        prefix = headers_.path == "/api/v1/cover" ? COVER_TRACK_BYTES : 0U;
+        fileHashSource_.reset(new (std::nothrow) FileSource(path));
+        hashSource_ = fileHashSource_.get();
+    }
     if (hashSource_) hashJob_.reset(new (std::nothrow) HashJob(*hashSource_,digest_,prefix,received_));
     if (!hashJob_) { error(500,"internal_error","Insufficient memory to validate the upload."); return; }
     finalizing_ = true;
@@ -115,7 +145,12 @@ void DeviceHttpServer::tick(std::uint64_t now) {
         client_.setNoDelay(true); client_.setTimeout(10); started_ = lastActivity_ = now;
     }
     if ((!finalizing_ && now-lastActivity_ > 5000) || now-started_ > 60000 || (!client_.connected() && !client_.available())) { close(); return; }
-    if (finalizing_) { lastActivity_ = now; finishBinary(); return; }
+    if (finalizing_) {
+        if (maintenanceFirmware_ && !maintenanceOtaBodyHasNoExtraBytes(received_,headers_.contentLength,static_cast<std::size_t>(std::max(0,client_.available())))) {
+            error(400,"invalid_request","The firmware body must match Content-Length exactly."); return;
+        }
+        lastActivity_ = now; finishBinary(); return;
+    }
     if (sending_) {
         const auto capacity = client_.availableForWrite(); if (capacity <= 0) return;
         const char* source; std::size_t remaining;
@@ -141,7 +176,7 @@ void DeviceHttpServer::tick(std::uint64_t now) {
     if (bytes <= 0) return;
     lastActivity_ = now;
     if (binary_) {
-        if (!transfer_.append(chunk_.data(),bytes)) { error(500,"internal_error","The staged upload could not be written."); return; }
+        if (!activeTransfer_->append(chunk_.data(),bytes)) { error(500,"internal_error","The staged upload could not be written."); return; }
     } else memcpy(bodyData()+received_,chunk_.data(),bytes);
     received_ += bytes;
     if (received_ == headers_.contentLength) bodyComplete();

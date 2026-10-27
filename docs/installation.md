@@ -30,7 +30,7 @@ These instructions do not install or configure the device. Any firmware depends 
 
 ## Firmware Preparation Boundary
 
-[Safe first-boot preparation](safe-first-boot.md) documents the implemented maintenance/provisioning logic, validation, unresolved risks, and exact future OTA package requirements. No installation package has been generated. Public compile-check binaries have no usable recovery identity and must not be installed. Hardware, complete backup, independent Wi-Fi-only boot recovery, and filesystem-independent verified maintenance updates remain deployment blockers. Installation-related work requires separate maintainer approval.
+[Safe first-boot preparation](safe-first-boot.md) documents the implemented maintenance/provisioning logic, validation, unresolved risks, and exact future OTA package requirements. The maintenance-only raw staging path is implemented and host/compile validated, but has not been exercised on a device. No installation package has been generated. Public compile-check binaries have no usable recovery identity and must not be installed. Hardware, complete backup, independent Wi-Fi-only boot recovery, and spare-device validation remain deployment blockers. Installation-related work requires separate maintainer approval.
 
 ## Optional Startup at Windows Login
 
