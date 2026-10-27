@@ -18,6 +18,11 @@ public:
 private:
     br_sha256_context context_{};
 };
+struct HttpDiagnostics {
+    std::uint32_t connectionsAccepted = 0, connectionsDisconnected = 0, idleTimeouts = 0, totalTimeouts = 0;
+    std::uint32_t uploadsStarted = 0, uploadsAborted = 0, uploadsCompleted = 0, uploadFailures = 0;
+    std::uint32_t uploadBytes = 0, maxLoopGapMs = 0;
+};
 class DeviceHttpServer {
 public:
     DeviceHttpServer(PersistentStorage& storage, SafeStartup& startup, RequestAuthenticator& authenticator)
@@ -66,6 +71,10 @@ private:
     std::size_t headerSize_ = 0, responseHeaderSize_ = 0, sent_ = 0;
     std::uint32_t received_ = 0;
     std::uint64_t started_ = 0, lastActivity_ = 0, restartAt_ = 0;
+    std::uint64_t requestDeadlineMs_ = 60000;
+    std::uint64_t lastTick_ = 0;
+    HttpDiagnostics diagnostics_{};
+    bool clientActive_ = false, uploadActive_ = false, lastTickValid_ = false;
     bool maintenance_ = false;
     bool maintenanceFirmware_ = false;
     bool stockRestore_ = false;

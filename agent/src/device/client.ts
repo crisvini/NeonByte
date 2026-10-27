@@ -39,6 +39,7 @@ export class DeviceClient {
   private readonly token: string;
   private readonly fetchDevice: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly hasTimeoutOverride: boolean;
   private lastPlayback: NowPlayingV1 | null = null;
 
   constructor(options: { baseUrl: string; token: string; fetchDevice?: typeof fetch; timeoutMs?: number }) {
@@ -51,13 +52,14 @@ export class DeviceClient {
     this.token = options.token;
     this.fetchDevice = options.fetchDevice ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.hasTimeoutOverride = options.timeoutMs !== undefined;
     if (!Number.isInteger(this.timeoutMs) || this.timeoutMs < 1) throw new Error("Use a positive device timeout.");
   }
 
-  private async request(path: string, method: string, body?: string | Buffer, headers: Record<string, string> = {}): Promise<Response> {
+  private async request(path: string, method: string, body?: string | Buffer, headers: Record<string, string> = {}, timeoutMs = this.timeoutMs): Promise<Response> {
     try {
       const response = await this.fetchDevice(new URL(path, this.baseUrl), {
-        method, redirect: "error", signal: AbortSignal.timeout(this.timeoutMs),
+        method, redirect: "error", signal: AbortSignal.timeout(timeoutMs),
         headers: { ...headers, ...(method === "GET" ? {} : { Authorization: `Bearer ${this.token}` }),
           ...(method === "GET" ? {} : { "Content-Length": String(body === undefined ? 0 : Buffer.byteLength(body)) }) },
         ...(body === undefined ? {} : { body }),
@@ -82,9 +84,14 @@ export class DeviceClient {
     throw new Error("The device did not return a compatible protocol v1 status.");
   }
 
-  private async mutate(path: string, method: string, body?: string | Buffer, headers?: Record<string, string>): Promise<void> {
+  private async mutate(path: string, method: string, body?: string | Buffer, headers?: Record<string, string>, timeoutMs = this.timeoutMs): Promise<void> {
     await this.status();
-    await this.request(path, method, body, headers);
+    await this.request(path, method, body, headers, timeoutMs);
+  }
+
+  private uploadTimeout(bytes: number): number {
+    // An explicit timeout overrides every request, including binary uploads.
+    return this.hasTimeoutOverride ? this.timeoutMs : 75_000 + Math.ceil(bytes / 8192) * 1000;
   }
 
   async heartbeat(): Promise<void> { await this.mutate("/api/v1/heartbeat", "POST"); }
@@ -104,13 +111,13 @@ export class DeviceClient {
     await this.mutate("/api/v1/cover", "PUT", asset.bytes, {
       "Content-Type": "application/octet-stream", "X-Content-SHA256": asset.sha256,
       "X-Track-Id": encodeURIComponent(trackId),
-    });
+    }, this.uploadTimeout(asset.bytes.length));
   }
   async uploadAnimation(asset: MediaAsset): Promise<void> {
     validateAnimation(asset.bytes, asset.sha256);
     await this.mutate("/api/v1/animation", "PUT", asset.bytes, {
       "Content-Type": "application/octet-stream", "X-Content-SHA256": asset.sha256,
-    });
+    }, this.uploadTimeout(asset.bytes.length));
   }
 }
 

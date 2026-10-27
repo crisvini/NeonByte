@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DeviceClient } from "../src/device/client.js";
@@ -43,4 +44,37 @@ test("device client rejects public and hostname destinations before sending cred
   for (const address of ["http://127.0.0.1:1", "http://10.1.2.3", "http://172.16.0.1", "http://192.168.1.2", "http://[::1]"]) {
     assert.doesNotThrow(() => new DeviceClient({ baseUrl: address, token: "test-secret" }));
   }
+});
+
+test("device deadlines scale for validated binary uploads and respect explicit overrides", async (context) => {
+  const deadlines: number[] = [];
+  context.mock.method(AbortSignal, "timeout", (milliseconds: number) => {
+    deadlines.push(milliseconds);
+    return new AbortController().signal;
+  });
+  const makeAsset = (frames: number) => {
+    const bytes = Buffer.alloc(frames === 0 ? 115_209 : 11 + frames * 115_202);
+    bytes.write(frames === 0 ? "NBIC" : "NBIF");
+    bytes.writeUInt8(1, 4);
+    bytes.writeUInt16LE(240, 5);
+    bytes.writeUInt16LE(240, 7);
+    if (frames > 0) {
+      bytes.writeUInt16LE(frames, 9);
+      for (let index = 0; index < frames; index += 1) bytes.writeUInt16LE(20, 11 + index * 115_202);
+    }
+    return { bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
+  };
+  const fetchDevice: typeof fetch = async (_input, init) => init?.method === "GET"
+    ? new Response(JSON.stringify(status)) : new Response(null, { status: 204 });
+  const client = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret", fetchDevice });
+  await client.heartbeat();
+  await client.uploadCover("track", makeAsset(0));
+  await client.uploadAnimation(makeAsset(1));
+  await client.uploadAnimation(makeAsset(20));
+  assert.deepEqual(deadlines, [10_000, 10_000, 10_000, 90_000, 10_000, 90_000, 10_000, 357_000]);
+
+  deadlines.length = 0;
+  const overridden = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret", fetchDevice, timeoutMs: 1234 });
+  await overridden.uploadAnimation(makeAsset(20));
+  assert.deepEqual(deadlines, [1234, 1234]);
 });

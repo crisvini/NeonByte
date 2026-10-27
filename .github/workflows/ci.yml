@@ -55,6 +55,10 @@ jobs:
         run: python firmware/scripts/probe_compatibility.py
       - name: Probe stock restoration HTTP admission offline
         run: python firmware/scripts/probe_stock_http.py
+      - name: Probe HTTP connection lifecycle offline
+        run: python firmware/scripts/probe_http_lifecycle.py
+      - name: Probe authenticated HTTP diagnostics offline
+        run: python firmware/scripts/probe_http_diagnostics.py
       - name: Validate local images and deployment guard
         run: |
           python firmware/scripts/test_local_build_guard.py

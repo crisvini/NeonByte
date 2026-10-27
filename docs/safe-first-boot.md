@@ -58,6 +58,7 @@ These are additive device extensions outside the API v1 contract. All responses 
 | Method | Route | Request and result |
 |---|---|---|
 | GET | `/maintenance/v1/status` | Empty body; authenticated JSON booleans: `storageAvailable`, `configurationLoaded`, `applicationRunning`, `recoveryApRunning`, `stationConnected`, `pendingWifi`, `volatileWifi` |
+| GET | `/maintenance/v1/diagnostics` | Empty body; recovery-authenticated, non-secret memory, reset, HTTP and transfer counters. Values are volatile except the SDK reset reason; see [HTTP recovery](http-recovery-investigation.md) |
 | PUT | `/maintenance/v1/wifi` | URL-encoded `ssid=<encoded>&password=<encoded>`; at most 512 bytes; 204 stages a candidate and begins association without saving |
 | PUT | `/maintenance/v1/wifi/temporary` | Same form; explicitly opts into RAM-only configuration, including when storage cannot mount |
 | POST | `/maintenance/v1/wifi/confirm` | Empty body; 204 only after association to the candidate SSID and successful persistent replacement, or explicit temporary selection; otherwise 409 |

@@ -13,14 +13,18 @@ void Sha256Digest::finish(char* hex64) {
     for (unsigned i=0;i<32;++i) { hex64[2*i] = HEX_DIGITS[bytes[i]>>4]; hex64[2*i+1] = HEX_DIGITS[bytes[i]&15]; }
 }
 void DeviceHttpServer::close() {
-    activeTransfer_->abort(); hashJob_.reset(); fileHashSource_.reset(); hashSource_ = nullptr; client_.stop(); body_.reset();
+    if (uploadActive_) { ++diagnostics_.uploadsAborted; uploadActive_ = false; }
+    hashJob_.reset(); fileHashSource_.reset(); hashSource_ = nullptr; activeTransfer_->abort(); client_.stop(); body_.reset();
     headerSize_ = received_ = sent_ = 0;
     activeTransfer_ = &transfer_;
     activeRawOta_ = &maintenanceOta_;
-    finalizing_ = readingBody_ = sending_ = binary_ = firmware_ = maintenanceFirmware_ = stockRestore_ = false;
+    headers_ = {}; response_ = {}; responseHeaderSize_ = 0;
+    started_ = lastActivity_ = 0; requestDeadlineMs_ = 60000; clientActive_ = false;
+    finalizing_ = readingBody_ = sending_ = binary_ = firmware_ = maintenanceFirmware_ = stockRestore_ = maintenance_ = false;
 }
 void DeviceHttpServer::error(unsigned status, const char* code, const char* message) {
-    activeTransfer_->abort(); hashJob_.reset(); fileHashSource_.reset(); hashSource_ = nullptr; finalizing_ = false; response_ = {}; response_.statusCode = status;
+    if (uploadActive_) { ++diagnostics_.uploadsAborted; ++diagnostics_.uploadFailures; uploadActive_ = false; }
+    hashJob_.reset(); fileHashSource_.reset(); hashSource_ = nullptr; activeTransfer_->abort(); finalizing_ = false; response_ = {}; response_.statusCode = status;
     response_.contentType = "application/json";
     response_.bodySize = snprintf(response_.body.data(),response_.body.size(),"{\"code\":\"%s\",\"message\":\"%s\"}",code,message);
     prepareResponse();
@@ -69,6 +73,7 @@ void DeviceHttpServer::headersComplete() {
         const auto limit = firmware_ ? FIRMWARE_BYTES_LIMIT : kind == AssetKind::cover ? COVER_BYTES : ANIMATION_BYTES_LIMIT;
         if (headers_.contentLength > limit) { error(413,"payload_too_large","The asset exceeds this build's upload limit."); return; }
         if (!headers_.contentLength || !isSha256(headers_.sha256)) { error(400,"invalid_request","Provide a nonzero length and lowercase SHA-256."); return; }
+        if (!firmware_) requestDeadlineMs_ = 60000 + ((std::uint64_t(headers_.contentLength)+8191)/8192)*1000;
         if (kind == AssetKind::cover && headers_.contentLength != COVER_BYTES) { error(422,"invalid_content","The cover must be NBIC v1 at 240 by 240."); return; }
         if (!prepareUploadStorage(headers_.path,[&] { return storage_.selectAsset(kind,headers_.trackId); })) { error(400,"invalid_request","Provide a percent-encoded UTF-8 X-Track-Id of 1 to 256 code points."); return; }
         activeRawOta_ = stockRestore_ ? &stockRestoreOta_ : &maintenanceOta_;
@@ -77,6 +82,7 @@ void DeviceHttpServer::headersComplete() {
         if (!activeTransfer_->begin(headers_.contentLength,limit,headers_.sha256)) {
             error(409,"conflict",maintenanceFirmware_ ? "Raw flash staging is unavailable for this runtime layout." : "Storage is unavailable or insufficient for atomic replacement."); return;
         }
+        uploadActive_ = true; ++diagnostics_.uploadsStarted;
     } else {
         const auto limit = maintenance_ || headers_.path == "/api/v1/config" ? 512U : JSON_BODY_LIMIT;
         if (headers_.contentLength > limit) { error(413,"payload_too_large","The request body exceeds the route limit."); return; }
@@ -113,11 +119,32 @@ void DeviceHttpServer::finishBinary() {
         rebootPending_ = !maintenanceFirmware_ || maintenanceOtaRestartAllowed(activeRawOta_->state());
         if (!rebootPending_) { error(500,"internal_error","Firmware staging was rejected; no restart was requested."); return; }
     }
+    if (uploadActive_) { ++diagnostics_.uploadsCompleted; uploadActive_ = false; }
     response_ = {}; response_.statusCode = 204; prepareResponse();
 }
 void DeviceHttpServer::dispatchJson() {
     bodyData()[received_] = 0;
     const HttpRequest request{headers_.method,headers_.path,headers_.authorization,headers_.contentType,{bodyData(),received_}};
+    if (maintenance_ && request.path == "/maintenance/v1/diagnostics") {
+        if (!startup_.authorized(request.authorization)) { error(401,"unauthorized","A valid recovery bearer token is required."); return; }
+        if (request.method != HttpMethod::get || !request.body.empty()) { error(400,"invalid_request","Use GET with an empty body."); return; }
+        const auto* reset = ESP.getResetInfoPtr();
+        response_ = {}; response_.statusCode = 200; response_.contentType = "application/json";
+        const int written = snprintf(response_.body.data(),response_.body.size(),
+            "{\"freeHeapBytes\":%lu,\"maxFreeBlockBytes\":%lu,\"resetReason\":%lu,"
+            "\"connectionsAccepted\":%lu,\"connectionsDisconnected\":%lu,\"idleTimeouts\":%lu,\"totalTimeouts\":%lu,"
+            "\"uploadsStarted\":%lu,\"uploadsAborted\":%lu,\"uploadsCompleted\":%lu,\"uploadFailures\":%lu,"
+            "\"uploadBytes\":%lu,\"maxLoopGapMs\":%lu}",
+            static_cast<unsigned long>(ESP.getFreeHeap()),static_cast<unsigned long>(ESP.getMaxFreeBlockSize()),
+            static_cast<unsigned long>(reset ? reset->reason : 0xffffffffUL),
+            static_cast<unsigned long>(diagnostics_.connectionsAccepted),static_cast<unsigned long>(diagnostics_.connectionsDisconnected),
+            static_cast<unsigned long>(diagnostics_.idleTimeouts),static_cast<unsigned long>(diagnostics_.totalTimeouts),
+            static_cast<unsigned long>(diagnostics_.uploadsStarted),static_cast<unsigned long>(diagnostics_.uploadsAborted),
+            static_cast<unsigned long>(diagnostics_.uploadsCompleted),static_cast<unsigned long>(diagnostics_.uploadFailures),
+            static_cast<unsigned long>(diagnostics_.uploadBytes),static_cast<unsigned long>(diagnostics_.maxLoopGapMs));
+        if (written < 0 || static_cast<std::size_t>(written) >= response_.body.size()) { error(500,"internal_error","Diagnostics are unavailable."); return; }
+        response_.bodySize = static_cast<std::size_t>(written); prepareResponse(); return;
+    }
     if (maintenance_) { handleMaintenance(request,startup_,lastActivity_,response_); prepareResponse(); return; }
     if (headers_.path == "/api/v1/config") { configureWifi(); return; }
     const String ip = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
@@ -141,17 +168,31 @@ void DeviceHttpServer::bodyComplete() {
     finalizing_ = true;
 }
 void DeviceHttpServer::tick(std::uint64_t now) {
+    if (lastTickValid_ && now >= lastTick_) {
+        diagnostics_.maxLoopGapMs = std::max(diagnostics_.maxLoopGapMs,
+            static_cast<std::uint32_t>(std::min<std::uint64_t>(now-lastTick_,0xffffffffULL)));
+    }
+    lastTick_ = now; lastTickValid_ = true;
     if (rebootPending_) {
         if (!restartAt_) restartAt_ = now+2000;
-        if (now >= restartAt_) { client_.stop(); ESP.restart(); }
+        if (now >= restartAt_) { client_.stop(); ESP.restart(); return; }
         // Do not accept another mutation after Update.end schedules the boot copy.
         if (!sending_) return;
     }
-    if (!client_) {
+    if (clientActive_ && !client_) {
+        ++diagnostics_.connectionsDisconnected;
+        close();
+        if (rebootPending_) return;
+    }
+    if (!clientActive_) {
+        if (rebootPending_) return;
         client_ = server_.accept(); if (!client_) return;
+        clientActive_ = true; ++diagnostics_.connectionsAccepted;
         client_.setNoDelay(true); client_.setTimeout(10); started_ = lastActivity_ = now;
     }
-    if ((!finalizing_ && now-lastActivity_ > 5000) || now-started_ > 60000 || (!client_.connected() && !client_.available())) { close(); return; }
+    if (!finalizing_ && now-lastActivity_ > 5000) { ++diagnostics_.idleTimeouts; close(); return; }
+    if (now-started_ > requestDeadlineMs_) { ++diagnostics_.totalTimeouts; close(); return; }
+    if (!client_.connected() && !client_.available()) { ++diagnostics_.connectionsDisconnected; close(); return; }
     if (finalizing_) {
         if (maintenanceFirmware_ && !maintenanceOtaBodyHasNoExtraBytes(received_,headers_.contentLength,static_cast<std::size_t>(std::max(0,client_.available())))) {
             error(400,"invalid_request","The firmware body must match Content-Length exactly."); return;
@@ -184,6 +225,7 @@ void DeviceHttpServer::tick(std::uint64_t now) {
     lastActivity_ = now;
     if (binary_) {
         if (!activeTransfer_->append(chunk_.data(),bytes)) { error(500,"internal_error","The staged upload could not be written."); return; }
+        diagnostics_.uploadBytes += static_cast<std::uint32_t>(bytes);
     } else memcpy(bodyData()+received_,chunk_.data(),bytes);
     received_ += bytes;
     if (received_ == headers_.contentLength) bodyComplete();

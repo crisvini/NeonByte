@@ -65,6 +65,7 @@ struct Startup {
 struct Auth { bool isAuthorized(std::string_view auth) { return auth == "Bearer pairing-test"; } };
 class DeviceHttpServer {
 public:
+    struct Diagnostics { unsigned uploadsStarted = 0, uploadsCompleted = 0; } diagnostics_;
     UploadStorage storage_; Startup startup_; Auth authenticator_;
     Sink maintenanceOta_, stockRestoreOta_;
     Transfer transfer_{storage_}, maintenanceTransfer_{maintenanceOta_}, stockRestoreTransfer_{stockRestoreOta_};
@@ -83,9 +84,10 @@ public:
     HttpResponse response_{};
     struct { int available() { return 0; } } client_;
     std::uint32_t received_ = 0;
+    std::uint64_t requestDeadlineMs_ = 60000;
     bool finalizing_ = false, rebootPending_ = false;
     bool maintenance_ = false, firmware_ = false, maintenanceFirmware_ = false, stockRestore_ = false;
-    bool binary_ = false, readingBody_ = false;
+    bool binary_ = false, readingBody_ = false, uploadActive_ = false;
     unsigned status = 0;
     void error(unsigned code,const char*,const char*) { status = code; finalizing_ = false; activeTransfer_->abort(); }
     void dispatchJson() { assert(false); }
@@ -110,6 +112,7 @@ int main() {
     DeviceHttpServer allowed; allowed.request(request());
     if (NEONBYTE_ENABLE_OTA && NEONBYTE_ENABLE_STOCK_RESTORE) {
         assert(allowed.status == 0 && allowed.readingBody_);
+        assert(allowed.requestDeadlineMs_ == 60000);
         assert(allowed.activeTransfer_ == &allowed.stockRestoreTransfer_);
         assert(allowed.activeRawOta_ == &allowed.stockRestoreOta_);
         assert(allowed.stockRestoreOta_.begins == 1 && allowed.maintenanceOta_.begins == 0);
@@ -123,6 +126,7 @@ int main() {
         while (allowed.finalizing_) allowed.finishBinary();
         assert(allowed.status == 204 && allowed.rebootPending_);
         assert(allowed.stockRestoreOta_.commits == 1 && allowed.maintenanceOta_.commits == 0);
+        assert(allowed.diagnostics_.uploadsStarted == 1 && allowed.diagnostics_.uploadsCompleted == 1 && !allowed.uploadActive_);
     } else assert(allowed.status == 409 && !allowed.readingBody_);
     assert(allowed.storage_.selections == 0 && allowed.storage_.begins == 0);
     for (unsigned fault=0;fault<6;++fault) {
@@ -145,8 +149,18 @@ int main() {
     application.request(request("/api/v1/firmware","Bearer pairing-test"));
     if (NEONBYTE_ENABLE_OTA) {
         assert(application.activeTransfer_ == &application.transfer_ && application.storage_.selections == 1);
+        assert(application.requestDeadlineMs_ == 60000);
         assert(application.stockRestoreOta_.begins == 0 && application.maintenanceOta_.begins == 0);
     } else assert(application.status == 409);
+    DeviceHttpServer animation;
+    animation.protocol_ = &animation;
+    animation.request(request("/api/v1/animation","Bearer pairing-test",std::string(64,'a'),2304051));
+    assert(animation.status == 0 && animation.readingBody_ && animation.requestDeadlineMs_ == 342000);
+    DeviceHttpServer cover;
+    cover.protocol_ = &cover;
+    cover.request(request("/api/v1/cover","Bearer pairing-test",std::string(64,'a'),COVER_BYTES,
+        "X-Track-Id: track\r\n"));
+    assert(cover.status == 0 && cover.readingBody_ && cover.requestDeadlineMs_ == 75000);
 }
 '''
     sanitizerFlags = (["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie"]
