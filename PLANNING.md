@@ -257,6 +257,8 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 
 **End-to-end offline validation authorization (2026-10-26):** the maintainer separately authorized a native host harness, agent communication through existing v1, playback/media/timeout/persistence validation, and mocked provisioning/maintenance failures. The [offline report](docs/offline-validation.md) records 16 integration scenarios, an existing Unicode normalization defect fixed with regressions, and the remaining initial-null playback-clearing gap. This narrowly authorizes the PC-only client and runner, not production LAN activation, physical installation, installation-ready packages, or deployment-protection changes. All hardware acceptance and later phase checklists remain pending.
 
+**Part 5 offline continuation (2026-10-27):** host coverage now includes the real `DeviceDisplay::tick` adapter compiled against test-only panel/storage doubles for frame timing and looping, plus zero-capacity replacement followed by process restart. The fresh report records 20 offline scenarios and 63 native tests, sanitizer results, compile-only image sizes, stack reports, and the unchanged v1 initial-null fallback. `npm run check` passed with Markdown lint on 22 files, the language check, 9 root tests plus 1 Windows-only skip, TypeScript build/typecheck, and 54 agent tests; the local build guard and `git diff --check` passed. No device or LAN endpoint was accessed; all physical Phase 4/5 acceptance remains pending.
+
 - [x] Connect the desktop agent components to the existing native firmware core through loopback HTTP v1 without a board build.
 - [x] Verify offline playback/artwork/progress, scene switching, expiry, simulated storage/restarts, and mocked provisioning/maintenance failures.
 - [x] Run native and agent regressions, sanitizer checks, repository validation, and synthetic deployment-guard checks; document defects and remaining hardware gaps.
@@ -272,6 +274,8 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 - [x] Define display, storage, clock, authentication, and network interfaces with native mocks.
 - [x] Stream the existing version 1 RGB565 animation format from storage in caller-sized chunks.
 - [x] Document host memory costs, resource limits, protocol compatibility, and remaining hardware dependencies.
+- [x] Host-test `DeviceDisplay::tick` frame delays, row streaming, frame order, looping, and slow-render behavior with a fake panel and in-memory storage.
+- [x] Host-test zero-capacity animation replacement and verify the installed asset and mode survive a process restart.
 
 - [x] Add pinned, locally compilable ESP8266 profiles while retaining native tests and blocking PlatformIO device-operation targets.
 - [x] Bind the core to the ESP8266 clock, cooperative Wi-Fi retry/protected provisioning, and bounded HTTP v1 implementation; validate compilation and portable logic.
@@ -311,13 +315,15 @@ physical acceptance criteria are verified.
 - [x] Report GIF transfer stages and attempts, retry failed replacements, and suppress duplicate successful uploads in the same session.
 - [x] Reject public, hostname, and link-local device destinations before transmitting a pairing token.
 
-- [ ] Implement the agent HTTP client for v1 endpoints.
-- [ ] Pair and configure the device IP/hostname; handle IP changes.
-- [ ] Send the cover only when needed; ensure metadata and image ordering/consistency.
-- [ ] Implement animation upload with progress, safe retries, and device-side verification.
-- [ ] Implement heartbeat, disconnect, reconnect, timeout, and synchronization after reboot.
-- [ ] Test manual modes, track changes, pause/resume, and end of session.
-- [ ] Test unstable Wi-Fi, suspended PC, restarted device, unavailable Internet, and large GIFs.
+- [x] Implement and test the agent HTTP client for v1 against the loopback native host.
+- [x] Exercise host-side address/token configuration and address changes through the local native harness.
+- [ ] Pair an actual clock and validate DHCP/IP changes after clock restart.
+- [x] Test cover caching, metadata-before-cover ordering, cover-before-metadata behavior, and track-bound artwork against the native core.
+- [x] Test current animation stage/attempt reporting, safe retries, and firmware-side validation in the native host; byte-level progress and physical transfers remain pending.
+- [x] Test heartbeat, simulated disconnect/reconnect, timeout, and agent/native-process restart behavior offline.
+- [x] Test manual modes, track changes, pause/resume, and end-of-session behavior against the native core.
+- [x] Simulate transport outages, host-process restarts, and unavailable Spotify in the offline harness.
+- [ ] Validate RF instability, PC suspend/resume, actual clock restart, and large GIF transfer behavior on hardware.
 
 **Acceptance:** stable automatic switching; no manual intervention after network loss/return; GIF persists; Spotify does not affect the GIF while manual mode is active; and language consistency is verified.
 

@@ -6,6 +6,6 @@
     "MD060": false
   },
   "globs": ["**/*.md"],
-  "ignores": [".serena/**", "**/.pio/**", "**/node_modules/**"]
+  "ignores": [".serena/**", ".superpowers/**", "**/.pio/**", "**/node_modules/**"]
 }
 

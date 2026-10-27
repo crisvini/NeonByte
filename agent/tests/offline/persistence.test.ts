@@ -84,3 +84,21 @@ test("mode persistence failures preserve both current state and previously insta
   await harness.restart();
   assert.equal((await client.status()).mode, "gif");
 });
+
+test("full storage preserves the installed GIF and mode after a device-process restart", async (t) => {
+  const harness = await startHarness(t);
+  const client = new DeviceClient({ baseUrl: harness.url, token: harness.token });
+  await client.uploadAnimation(animation);
+  await client.setMode("gif");
+
+  await harness.fault("capacity", 0);
+  await assert.rejects(client.uploadAnimation(convertGifToAnimation(gif)));
+  assert.equal((await harness.state()).animationSha, animation.sha256);
+
+  await harness.restart();
+  assert.equal((await client.status()).mode, "gif");
+  assert.equal((await harness.state()).animationSha, animation.sha256);
+  const redPixels = Buffer.alloc(115_200);
+  for (let index = 0; index < redPixels.length; index += 2) redPixels.writeUInt16LE(0xf800, index);
+  assert.equal((await harness.frame(1)).sha256, sha(redPixels));
+});

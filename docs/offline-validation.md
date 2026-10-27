@@ -67,7 +67,7 @@ The existing 54 native tests additionally exercise AP retries, missing/invalid i
 - **Fixed during implementation/review:** the initial new client attempted an invalid empty-track update on idle, status validation initially coerced enum arrays into strings, and the initial host storage fixture cleaned candidates before startup policy mounted storage. Regressions now cover valid paused-last-track updates, strict status types/lengths, and candidate preservation throughout crash maintenance until explicit storage preparation.
 - **Known v1 gap: a fresh agent cannot immediately clear unknown prior playback.** If the agent restarts with no track history while the device still holds a playing sample, v1 status does not return its track ID and v1 has no clear-playback operation. The agent sends no fabricated track. A regression records the remaining Spotify scene and confirms fallback at 45,001 ms even with heartbeats continuing. `synchronize() === true` means the requested transport operations succeeded, not proof of immediate scene agreement for an initial null snapshot. Resolving immediate clearing requires a separately considered contract or persistence design.
 
-## Local Results
+## Initial Local Results (2026-10-26)
 
 - Repository `npm run check`: Markdown and English checks, 8 root/contract tests, TypeScript build/type checking, and 42 agent tests passed.
 - `npm run test:offline`: 16 integration scenarios passed against the native host executable.
@@ -127,3 +127,47 @@ the server: use it only on a trusted network. Private addressing does not
 protect against a malicious host or interception on that network. Host-harness tests do
 not establish physical device compatibility or recovery readiness. All hardware
 and installation blockers remain in force.
+
+## Part 5 Offline Continuation
+
+**Date:** 2026-10-27. This records only the hardware-independent continuation in Part 5 of `NEXT_STEPS.md`. No physical clock, network endpoint, or RF interface was accessed. Protocol v1 and deployment safeguards are unchanged.
+
+### Coverage Cross-Check
+
+| Area | Existing implementation and host evidence | Part 5 status |
+|---|---|---|
+| Startup and maintenance failures | Native `SafeStartup` suite and offline maintenance scenarios cover identity/configuration/application startup faults, storage failure, retry, and retained recovery service. | Already implemented and host-proven. |
+| Modes and playback | Native scene tests plus agent/native integration cover manual modes, pause/resume, progress correction, deduplicated refresh, heartbeat loss, independent metadata expiry, and the 45-second boundary. | Already implemented and host-proven. |
+| Unicode and artwork | Agent normalization and native protocol tests cover Unicode limits; sync tests cover metadata-before-cover, cover-before-metadata, track mismatch, cache, retry, and replacement failure. | Already implemented and host-proven. |
+| Animation and storage | `AnimationReader` validates bounds, checksums are enforced during upload, and the process-backed host store covers corruption, incomplete candidates, write/readback/promotion failures, reserve limits, and process restart. | Already implemented and host-proven. |
+| Runtime frame timing | The new native `test_display` suite compiles the real `DeviceDisplay::tick` implementation against a fake ST7789 panel and in-memory storage. It checks 50/70 ms frame delays, frame order `0 → 1 → 0`, row-sized streaming, and overdue-frame behavior when drawing exceeds the delay. | Previously untested offline gap; now host-tested through the actual adapter code. |
+| Full storage after restart | The process-backed store now rejects an animation replacement at zero available capacity and verifies that the installed animation and `gif` mode survive a process restart. | Previously untested boundary; now host-tested. |
+
+The fake panel records drawing calls and pixels; it does not simulate electrical timing, LCD controller behavior, colors, orientation, or backlight. Repeated frame reads and scheduled host calls prove software ordering only.
+
+### Initial-Null Playback Limitation
+
+The agent cannot immediately clear unknown prior playback after restarting with no local track history: status v1 does not expose the prior track ID, and v1 has no clear-playback operation. The regression confirms the retained scene remains until metadata expires at 45,001 ms, even if heartbeats continue; a sample remains fresh at exactly 45,000 ms. No contract or protocol change was made. The existing 45-second fallback is the current supported behavior.
+
+### Build, Stack, and Host Bounds
+
+Both existing local compilation-only ESP8266 profiles were rebuilt. PlatformIO reported 43,900 bytes of static RAM in each profile, 357,019 program-section bytes for `esp8266-provisional`, and 358,043 for `esp8266-integration-check`. The generated combined images were 361,168 and 362,192 bytes. `inspect_image.py` accepted both image structures/checksums and explicitly reported `installationApproved: false`. These builds still use provisional ESP-12E/4 MB/DIO settings and do not validate the physical unit.
+
+The enabled profile's fresh Xtensa stack reports include `DeviceHttpServer::tick` 112 bytes, `dispatchJson` 1,152 bytes, `DeviceDisplay::tick` 96 bytes, `ProtocolHandler::handle` 208 bytes, `AnimationReader::open` 80 bytes, and `readFrameChunk` 16 bytes. Frames exclude nested library calls and do not establish a complete stack high-water mark. On the host, GCC 11.4.0 with `-Os -fstack-usage` reports `dispatchOneRequest` 1,216 bytes and `ProtocolHandler::handle` 272 bytes (`dynamic,bounded`); the refreshed host figures are recorded in [firmware-core-review.md](firmware-core-review.md).
+
+Portable code bounds remain explicit: the v1 JSON body limit is 12,288 bytes, HTTP binary chunks and hash steps are 512 bytes, display writes stream 480-byte rows, and the NBIF reader accepts at most 20 frames and 2,304,051 bytes. The host harness verifies these software limits; it does not measure target heap, fragmentation, throughput, or flash behavior.
+
+### Part 5 Results
+
+- `npm run test:offline`: 20 scenarios passed, including the new full-storage restart regression.
+- `NEONBYTE_HOST_SANITIZERS=1 npm run test:offline`: all 20 scenarios passed with AddressSanitizer and UndefinedBehaviorSanitizer.
+- `uv tool run --from platformio pio test -d firmware -e native`: all 63 tests passed across firmware, startup, integration, and display suites.
+- `uv tool run --from platformio pio run -d firmware -e esp8266-provisional`: compilation-only profile passed.
+- `uv tool run --from platformio pio run -d firmware -e esp8266-integration-check`: compilation-only profile passed.
+- `npm run check`: Markdown lint passed on 22 files; English check passed; 9 root tests passed with 1 Windows-only skip; agent build/typecheck passed and 54 agent tests passed.
+- `python3 firmware/scripts/test_local_build_guard.py`: permitted builds and blocked synthetic device targets verified.
+- `git diff --check`: passed.
+
+### Still Requires the Real Unit
+
+Host tests cannot establish LCD resolution, color correctness, orientation, or backlight; physical RAM/heap/fragmentation or FPS; installed flash geometry or LittleFS compatibility; Wi-Fi radio behavior, AP/DHCP association, or RF outage recovery; or atomicity under an actual power loss. These remain **PENDING**. No physical Phase 4/5 acceptance item is completed by this offline continuation, and installation remains **NO-GO** due to the existing full-backup and independent Wi-Fi-only recovery blockers.

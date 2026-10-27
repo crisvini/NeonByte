@@ -35,13 +35,13 @@ The core uses fixed buffers and non-owning views, with no runtime heap allocatio
 
 `JsonParser` holds an input view, position, and failure flag. Its local keys use a full `FixedText`, about 1 KiB. Mode parsing also uses a full `FixedText` for its value. The Spotify handler creates a temporary 3,104-byte track before replacing the retained state, which preserves the previous track if validation fails late in the request. These buffers remain unchanged; moving them into persistent objects would change memory ownership without a measured target requirement.
 
-GCC `-fstack-usage` reports the following function frames. Optimized parser functions can be inlined into the handler. These figures exclude callee frames, virtual adapter implementations, and request-body buffering.
+The Part 5 recheck used Linux x86-64 GCC 11.4.0, C++17, and `-Os`; its fresh `-fstack-usage` output supersedes the earlier host stack estimates below. Optimized parser functions can be inlined into the handler. These figures exclude callee frames, virtual adapter implementations, and request-body buffering.
 
 | Function | Host frame, bytes |
 |---|---:|
-| `dispatchOneRequest` | 1,216 |
-| `ProtocolHandler::handle` | 4,352 |
-| Internal status response builder | 1,232 |
+| `dispatchOneRequest` | 1,216 (`dynamic,bounded`) |
+| `ProtocolHandler::handle` | 272 (`dynamic,bounded`) |
+| `ProtocolHandler::statusResponse` | 176 |
 | `JsonParser::parseString` | 64 |
 | `JsonParser::parseUnsignedInteger` | 144 |
 | `SceneManager::updateNowPlaying` | 16 |
@@ -49,7 +49,7 @@ GCC `-fstack-usage` reports the following function frames. Optimized parser func
 | `AnimationReader::open` | 96 |
 | `AnimationReader::readFrameChunk` | 32 |
 
-Dispatch and handler frames alone total 5,568 bytes before deeper calls. This is a material integration constraint, not proof of a target stack overflow: board stack capacity and compiler behavior remain **PENDING**. Measure the complete call path with the eventual adapters before choosing a task stack or claiming compatibility. The review introduces no additional text or response buffers.
+The directly nested dispatch and handler frame figures total 1,488 bytes before deeper calls; `statusResponse` adds its own frame on that path. This is not a peak stack bound: callees, virtual adapters, target compiler behavior, and the board's usable stack remain outside the host measurement and **PENDING**. Measure the complete target call path before claiming stack safety. The review introduces no additional text or response buffers.
 
 Reproduce the host stack reports from the repository root:
 

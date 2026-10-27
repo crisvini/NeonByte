@@ -49,20 +49,20 @@ python3 firmware/scripts/test_local_build_guard.py
 | Metric | esp8266-provisional | esp8266-integration-check |
 |---|---:|---:|
 | Display / OTA enabled | No / No | Yes / Yes, compilation only |
-| Combined firmware.bin bytes | 348,816 | 352,304 |
-| PlatformIO program sections, bytes | 344,659 | 348,147 |
-| PlatformIO static RAM, bytes | 35,200 | 35,188 |
-| Distance below 524,288-byte stock guard | 175,472 | 171,984 |
-| Modern whole-image CRC | `0x783AF1F2` | `0xCCEB8BA5` |
+| Combined firmware.bin bytes | 361,168 | 362,192 |
+| PlatformIO program sections, bytes | 357,019 | 358,043 |
+| PlatformIO static RAM, bytes | 43,900 | 43,900 |
+| Distance below 524,288-byte stock guard | 163,120 | 162,096 |
+| Modern whole-image CRC | `0xA2606A8E` | `0x9D1C3B2B` |
 
 SHA-256 of the measured artifacts:
 
-- Provisional: `6aedabcc4ac000ab3a5bdbd29d4187f1200b25cf6358193920cdf4f9980a81d3`.
-- Enabled validation: `7609711012073c175d813c5db1a1948524fa88981f5cce3b9c9f19df63735b91`.
+- Provisional: `de57822f1ac4fab1cc84f9075e7b3628acb70a058ac093bf9ddfec4d3e5301f2`.
+- Enabled validation: `d9da989887013eed2ad037855b57f8551587ea6cc6ae6efe779910057021aeae`.
 
-Program sections differ from complete update-package length because the package also contains boot code, headers, and padding. The slightly smaller static RAM in the enabled build is a linker/content-placement result; it is not a measured runtime benefit. Build products stay under ignored `.pio/` directories and are not committed. Hashes identify these local builds, not a released or installable firmware.
+Program sections differ from complete update-package length because the package also contains boot code, headers, and padding. The equal static RAM figures are linked section totals, not a measured runtime benefit or free-heap value. Build products stay under ignored `.pio/` directories and are not committed. Hashes identify these local builds, not a released or installable firmware.
 
-The enabled ELF contains `.data` 1,620, `.rodata` 4,800, `.bss` 28,768, and a separate `.noinit` 56 bytes. PlatformIO reports the first three as static RAM, 43.0% of its configured 81,920-byte budget. IRAM sections `.text` 258 plus `.text1` 26,753 total 27,011 bytes, within the selected 32 KiB IRAM profile. These are linked artifact measurements, not observed device memory.
+The rechecked enabled ELF contains `.data` 1,748, `.rodata` 5,928, `.bss` 36,224, and a separate `.noinit` 56 bytes. PlatformIO reports the first three as 43,900 bytes of static RAM, 53.6% of its configured 81,920-byte budget. IRAM sections `.text` 258 plus `.text1` 26,753 total 27,011 bytes, within the selected 32 KiB IRAM profile. These are linked artifact measurements, not observed device memory.
 
 ## RAM and Stack Estimates
 
@@ -89,10 +89,13 @@ The default core continuation stack is 4,096 bytes. Target GCC `-fstack-usage` r
 | ProtocolHandler::statusResponse | 144 |
 | DeviceHttpServer::dispatchJson | 1,152 |
 | DeviceHttpServer::bodyComplete | 64 |
-| DeviceHttpServer::finishBinary | 96 |
+| DeviceHttpServer::finishBinary | 128 |
+| DeviceHttpServer::tick | 112 |
+| DeviceDisplay::tick | 96 |
+| AnimationReader::open / readFrameChunk | 80 / 16 |
 | PersistentStorage::applyFirmware | 592 |
 
-The application status path's known frames total about 1.7 KiB when including HTTP tick/header/body dispatch, protocol status handling, and loop entry, before deeper response/string/filesystem/library calls. OTA and validation have different call paths. These numbers reduce the previous host handler's 4,352-byte stack concern but do not prove complete target stack safety. No adapter-level stack watermark or sustained Wi-Fi/display test was performed.
+The application status path's known frames total about 1.7 KiB when including HTTP tick/header/body dispatch, protocol status handling, and loop entry, before deeper response/string/filesystem/library calls. OTA and validation have different call paths. These numbers do not prove complete target stack safety; the refreshed host measurements are recorded in [firmware-core-review.md](firmware-core-review.md). No adapter-level stack watermark or sustained Wi-Fi/display test was performed.
 
 ## Filesystem and OTA Space
 
@@ -104,7 +107,7 @@ The pinned [4m3m linker script](https://github.com/esp8266/Arduino/blob/3.1.2/to
 | LittleFS | `0x100000–0x3FA000` | 3,121,152 linked bytes before filesystem overhead |
 | Gap / EEPROM / SDK tail | At and above `0x3FA000` | Retained linked boundaries; stock contents and compatibility PENDING |
 
-The enabled package rounds from 352,304 to 356,352 bytes (`0x57000`). If this linked layout actually applied, free sketch space would be 692,224 bytes (`0xA9000`), and the adapter's conservative `(freeSpace - 4096) & ~4095` budget would be 688,128 bytes (`0xA8000`). The independent 512 KiB route cap is lower. These are derived layout estimates; no physical capacity or staging was measured. Runtime also checks detected capacity/configuration and refuses mismatches.
+The enabled combined image rounds from 362,192 to 364,544 bytes (`0x59000`). If this linked layout actually applied, free sketch space would be 684,032 bytes (`0xA7000`), and the adapter's conservative `(freeSpace - 4096) & ~4095` budget would be 679,936 bytes (`0xA6000`). The independent 512 KiB route cap is lower. These are derived layout estimates; no physical capacity or staging was measured. Runtime also checks detected capacity/configuration and refuses mismatches.
 
 Every candidate media file must coexist with the previous installed asset plus at least 32 KiB free reserve. The maximum 2,304,051-byte animation therefore cannot be safely replaced by another maximum animation inside the 3,121,152-byte linked volume. Even an otherwise empty ideal volume allows only about 13 full frames in each of two simultaneous animations; settings, filesystem overhead, stock assets, cover art, and retained firmware packages reduce this further. The implementation enforces measured runtime free space and can reject much smaller files with `409 conflict`.
 
@@ -122,10 +125,12 @@ Both generated files are **below** the nominal 512 KiB stock guard. This removes
 | Application | Five segments; entry `0x401000B8` | Five segments; entry `0x401000C0` | Different core/toolchain/runtime |
 | Whole-image metadata | Length/CRC at `0xFF8/0xFFC` | Length/CRC at `0x1010/0x1014` | Old/new validation behavior must not be conflated |
 | Filesystem offsets | `0x100000–0x3FA000` | Same linked range | Contents/format/migration compatibility PENDING |
-| Stock upload guard | Nominal 524,288 bytes, imperfect accounting | 352,304-byte enabled image | Below nominal guard; exact installed checks PENDING |
+| Stock upload guard | Nominal 524,288 bytes, imperfect accounting | 362,192-byte enabled image | Below nominal guard; exact installed checks PENDING |
 | Backup/rollback | Not established | Not implemented | Wi-Fi-only deployment BLOCKED |
 
 The modern [elf2bin source](https://github.com/esp8266/Arduino/blob/3.1.2/tools/elf2bin.py) writes length/CRC after generating image segment XOR. Validators must treat those eight patched IROM bytes as zero for the segment checksum; full-file CRC and SHA-256 then cover their required roles. Native regression tests and both independent offline validators accept the genuine generated images. The old stock image uses different metadata placement and is deliberately unsupported by NeonByte's future OTA route.
+
+**Part 5 recheck (2026-10-27):** both existing compilation-only profiles were rebuilt locally, and `inspect_image.py` accepted both combined E9 images with `installationApproved: false`. The inspector measured 361,168 and 362,192 bytes, respectively, and confirmed their whole-image CRCs and segment checksums. This refreshes local artifact evidence only; it does not validate the assumed 4 MB profile on the actual unit or change the installation decision.
 
 The [stock analysis](stock-firmware-analysis.md) found a generic-looking updater, a filename-prefix error that did not reject in the traced callback, and a guard that skipped oversized chunks before permissive finalization. The installed version, browser-side checks, complete verifier setup, modern-image acceptance, boot behavior, and stock data preservation remain unknown. No rename/bootstrap trick or upload experiment is authorized. The [upstream updater](https://github.com/esp8266/Arduino/blob/3.1.2/cores/esp8266/Updater.cpp) stages an application update and schedules eboot copy; the [OTA documentation](https://arduino-esp8266.readthedocs.io/en/3.1.2/ota_updates/readme.html) does not establish independent recovery for this clock.
 
