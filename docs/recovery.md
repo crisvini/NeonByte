@@ -2,6 +2,8 @@
 
 **Status (2026-10-26): BLOCKED for deployment.** The maintainer visually confirmed ESP-12F / ESP8266. No safe Wi-Fi-only backup, first installation, or recovery procedure has been established. No device requests, uploads, flashes, erases, or filesystem changes were performed.
 
+The [OTA readiness review](ota-readiness-review.md) evaluates which evidence can be collected without device modification, why complete backup and independent Wi-Fi recovery remain unestablished, and the smallest proposed filesystem-independent maintenance change. It preserves this deployment gate and authorizes no implementation or device operation.
+
 ## Permitted Scope
 
 Communication and future updates must use Wi-Fi exclusively. Physical programming, UART, soldering, and USB-serial are out of scope. The Phase 4 local source/build authorization does not authorize installation or waive the recovery gate.

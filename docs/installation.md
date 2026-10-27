@@ -87,8 +87,10 @@ Unregister-ScheduledTask -TaskName 'NeonByte Agent' -Confirm:$false
 This does not remove the checkout, `.env`, logs, or stored credentials. Remove
 those separately if desired, using Windows Credential Manager for stored
 NeonByte credentials. Windows Credential Manager and the scheduled task must
-use the same Windows user profile. Real Spotify reconnect after a restart and
-a Windows login remains to be verified on the target account.
+use the same Windows user profile. The maintainer confirmed Windows 11 automatic
+startup, hidden execution, and Spotify reconnection after restart; see the
+[manual validation record](../PLANNING.md#phase-6--automatic-startup-distribution-and-quality)
+for the remaining shutdown, logging, removal, and agent-only restart checks.
 
 ### Optional Ubuntu WSL2 Startup
 

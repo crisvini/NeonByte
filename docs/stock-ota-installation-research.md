@@ -4,6 +4,8 @@
 
 **Subsequent Phase 4 implementation:** [safe first-boot preparation](safe-first-boot.md) implements host-tested startup/provisioning/maintenance changes. This research report and its artifact measurements remain historical evidence; the preparation report records current behavior and remaining blockers. No installation or packaging is authorized.
 
+**Subsequent readiness review:** the [OTA readiness report](ota-readiness-review.md) supersedes the next-action recommendation below. Startup/provisioning work is already host-tested; current installation blockers are hardware/installed-image evidence, full backup, independent boot recovery, and filesystem-independent verified maintenance updates. Historical sizes and references to the earlier startup behavior below are not current artifact measurements or current runtime behavior.
+
 ## Conclusion
 
 **Prefer a direct, uncompressed NeonByte image through the stock OTA interface as the future first-installation candidate. A bootstrap is unnecessary for the current size and would add another application replacement. Deployment remains blocked.**

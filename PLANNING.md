@@ -1,6 +1,6 @@
 # NeonByte — Implementation Plan
 
-> **Status:** Phases 1, 2, and 3 are complete; OAuth validation with a real account is pending Spotify credentials. Phase 4 includes locally compiled ESP8266 adapters and host-validated safe first-boot preparation authorized on 2026-10-26; display/flash/boot validation and Wi-Fi-only installation/recovery remain pending · **Intended license:** MIT · **Target device:** JUZIPi SD PRO (ESP-12F / ESP8266 visually confirmed; remaining hardware identification pending)
+> **Status:** Phases 1, 2, and 3 are complete; the maintainer confirmed Windows 11 automatic startup, hidden execution, and real Spotify reconnection after restart on 2026-10-26. Phase 4 includes locally compiled ESP8266 adapters and host-validated safe first-boot preparation; display/flash/boot validation and Wi-Fi-only installation/recovery remain pending · **Intended license:** MIT · **Target device:** JUZIPi SD PRO (ESP-12F / ESP8266 visually confirmed; remaining hardware identification pending)
 >
 > **Primary rule:** implement phases sequentially; do not flash firmware until the hardware is validated and recovery is documented.
 
@@ -216,7 +216,7 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 - [x] Create a mock adapter for development without a Spotify account or external requests in tests.
 - [x] Expose internal state to the simulator through a defined and tested local interface (without exposing credentials).
 
-**Acceptance:** OAuth and refresh flows are covered by mock-based tests; real-account authentication remains pending until a Spotify account is configured; the mock reproduces play/pause/track changes; tests pass; secrets are not sent to the logger; and language consistency is verified.
+**Acceptance:** OAuth and refresh flows are covered by mock-based tests; real Spotify reconnection after restart is maintainer-verified as recorded in Phase 6. Initial authorization and forced token-expiration/revocation cases were not separately reported as manual tests. The mock reproduces play/pause/track changes; tests pass; secrets are not sent to the logger; and language consistency is verified.
 
 **Corrective review:** `make check` passed locally with Node.js 22.12.0 and 24.21.0. CI was configured for both major versions; the remote run for that change still depends on a new push. Deduplication accounts for expected progress and corrects deviations greater than 2 seconds; clock integration remains pending for its corresponding phase.
 
@@ -250,6 +250,8 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 **Stock OTA research (2026-10-26):** the [Wi-Fi-only installation report](docs/stock-ota-installation-research.md) compares SmartClock AI and Mini-Display source/release evidence. NeonByte fits the nominal stock size guard and shares the published Mini-Display bootstrap's boot region; direct OTA is the proposed candidate, pending first-boot/provisioning changes and existing hardware, full-backup, and independent Wi-Fi-only recovery gates. Research does not authorize installation implementation or device operations; all physical acceptance tasks remain open.
 
 **Safe first-boot preparation authorization (2026-10-26):** the maintainer authorized Phase 4 startup/provisioning/maintenance implementation, host fault injection, target compilation, and CI checks only. The [preparation report](docs/safe-first-boot.md) records the private recovery-identity design and residual limits. No device contact, installation package, release, safety-gate removal, or Phase 5 work is authorized. Hardware, full backup, independent Wi-Fi-only boot recovery, and filesystem-independent verified maintenance updates remain deployment blockers.
+
+**OTA readiness review (2026-10-26):** the [readiness report](docs/ota-readiness-review.md) records the Windows manual results, remaining stock OTA gates, safe evidence sources, backup/recovery feasibility, and a proposed maintenance-only updater improvement. Installation remains **NO-GO**: no documented stock full-flash export or independent Wi-Fi boot recovery exists in the reviewed evidence. The proposal is not implemented or authorized by this review. Next action: obtain revision-specific vendor backup/recovery evidence for offline review, without contacting or modifying the clock. All physical acceptance tasks remain pending.
 
 **End-to-end offline validation authorization (2026-10-26):** the maintainer separately authorized a native host harness, agent communication through existing v1, playback/media/timeout/persistence validation, and mocked provisioning/maintenance failures. The [offline report](docs/offline-validation.md) records 16 integration scenarios, an existing Unicode normalization defect fixed with regressions, and the remaining initial-null playback-clearing gap. This narrowly authorizes the PC-only client and runner, not production LAN activation, physical installation, installation-ready packages, or deployment-protection changes. All hardware acceptance and later phase checklists remain pending.
 
@@ -320,15 +322,18 @@ physical acceptance criteria are verified.
 
 **Deliverables:** opt-in Windows-native startup instructions, optional WSL2 configuration, and a future release version.
 
-**Windows priority:** the maintainer uses Windows-native Node.js for the agent and Ubuntu WSL2 for development. The Windows launcher was exercised with Windows PowerShell 5.1 and Node 22.4, and an isolated synthetic Windows credential was recovered by a second process. Actual Task Scheduler login, shutdown, Spotify authorization and reconnection after restart remain pending. WSL2 startup and Fedora configuration are optional references; Linux keyring persistence remains unverified.
+**Windows priority:** the maintainer uses Windows-native Node.js for the agent and Ubuntu WSL2 for development. The Windows launcher was exercised with Windows PowerShell 5.1 and Node 22.4, and an isolated synthetic Windows credential was recovered by a second process. Automatic startup, hidden execution, and Spotify reconnection after restart are now maintainer-verified below. Safe shutdown, failure logging, startup removal, and separately exercised OAuth failure cases remain pending. WSL2 startup and Fedora configuration are optional references; Linux keyring persistence remains unverified.
 
-**Desktop preparation (2026-10-26):** opt-in Windows Task Scheduler scripts, a Fedora user-service template, local logging instructions, and a loopback instance guard are implemented. Actual Windows and Fedora login, credential-manager, shutdown, and restart validation remain pending; no startup settings were changed during development. Physical Phase 4/5 validation and deployment protections remain unchanged.
+**Desktop preparation (2026-10-26):** opt-in Windows Task Scheduler scripts, a Fedora user-service template, local logging instructions, and a loopback instance guard are implemented. No startup settings were changed by the coding agent during development. The maintainer's later Windows manual results are recorded below; Fedora login/keyring, shutdown, and restart validation remain pending. Physical Phase 4/5 validation and deployment protections remain unchanged.
+
+**Manual Windows validation recorded on 2026-10-26:** the maintainer reported successful Windows 11 automatic startup, hidden execution without a persistent terminal window, and Spotify reconnection after restart. This is maintainer-supplied real-machine evidence, not a test rerun by the coding agent. The report does not separately identify an agent-only restart, forced token expiration, shutdown cleanup, log inspection, or startup removal; those broader checks remain open. No credentials or logs were supplied or recorded. These desktop results do not validate clock installation, LAN integration, or recovery.
 
 - [x] Add and test an OS-released single-instance guard and safe generic startup errors.
 - [x] Prepare opt-in Windows and Fedora startup configurations and document their installation, removal, logs, and troubleshooting.
 
-- [ ] Windows 11: register a Task Scheduler task to start the agent at **login**; provide accessible logs without a persistent terminal window and document installation/removal.
-- [ ] Validate Windows login startup, safe shutdown, logging, and real Spotify credential persistence and reconnection after agent and Windows restarts.
+- [x] Windows 11: validate automatic agent startup at **login** and hidden execution without a persistent terminal window (maintainer report).
+- [x] Validate real Spotify reconnection after the reported Windows restart (maintainer report).
+- [ ] Validate safe shutdown, accessible failure logs, startup removal, and a separate agent-only restart with real Spotify credentials; installation/removal and logging instructions are already documented.
 - [ ] Prevent multiple concurrent instances, log errors without exposing tokens, and shut down cleanly.
 - [ ] Package the agent or document a reproducible installation (supported Node LTS, dependencies, and configuration).
 - [ ] Complete `README.md`, `docs/installation.md`, `docs/recovery.md`, simulator screenshots, and known limitations.
@@ -376,7 +381,7 @@ English (en-US) is mandatory throughout the NeonByte project, including all curr
 - [ ] Paused/no playback or an unavailable agent shows the GIF in `auto` mode.
 - [ ] A custom GIF fills 240 × 240 and loops when the PC is off (while the clock remains powered).
 - [ ] The `auto`, `spotify`, and `gif` modes can be selected and persist.
-- [ ] The agent starts natively at Windows login and reconnects to Spotify after restart.
+- [x] The agent starts natively at Windows login and reconnects to Spotify after restart (maintainer manual validation recorded on 2026-10-26).
 - [ ] Installation, troubleshooting, backup, and recovery documentation is complete.
 - [ ] No credentials appear in logs or version control; automated tests and hardware tests are approved.
 
@@ -394,7 +399,7 @@ English (en-US) is mandatory throughout the NeonByte project, including all curr
 
 **Instruction to the coding agent:**
 
-> Read all of `PLANNING.md` and execute only the phase explicitly authorized by the maintainer. Phases 1, 2, and 3 are complete; real-account OAuth validation still depends on Spotify credentials. Phase 4 local ESP8266 integration is authorized and compile-validated with provisional assumptions. Safe Wi-Fi-only first installation and independent boot recovery are BLOCKED. Preserve all physical validation tasks as pending. Do not contact, upload to, or modify the device, and do not begin Phase 5 without separate authorization.
+> Read all of `PLANNING.md` and execute only the phase explicitly authorized by the maintainer. Phases 1, 2, and 3 are complete; Windows automatic startup, hidden execution, and real Spotify reconnection after restart are maintainer-verified, with remaining manual checks listed in Phase 6. Phase 4 local ESP8266 integration is authorized and compile-validated with provisional assumptions. Safe Wi-Fi-only first installation and independent boot recovery are BLOCKED. Preserve all physical validation tasks as pending. Do not contact, upload to, or modify the device, and do not begin Phase 5 without separate authorization.
 
 ## 12. Decision Log
 
