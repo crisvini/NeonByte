@@ -348,7 +348,7 @@ Every stage ends with an evidence review and an approval boundary. Keep the thre
 - **Hardware pending:** controlled LCD colors with unchanged orientation; AP+STA radio/channel behavior, HSPOT outage/recovery and RAM; RTC retention across the legacy bridge and subsequent OTA; authenticated new-build/boot verification and same-device manual DHCP correction. No source/mock result supplies these observations.
 - **Existing gates preserved:** full backup, independent Wi-Fi failed-boot recovery, exact flash/layout and operation-specific authorization. Neither GUI fallback nor simpler address handling reduces those requirements.
 
-The next approval requested is implementation of **Stage 1 only**, limited to its authorized offline diagnosis/tests and any evidence-justified source correction. Stage 2/3 implementation, target compilation/private firmware generation, device access and OTA require separate authorization. Windows selection/enrollment questions are Stage 3 acceptance dependencies, not reasons to delay independent Stage 1 offline work or expand its scope.
+Stage 1's offline authorization has been executed. Its controlled physical color signature and visual acceptance remain pending. Stage 2/3 implementation, target compilation/private firmware generation, device access and OTA require separate authorization. Windows selection/enrollment questions are Stage 3 acceptance dependencies, not reasons to expand Stage 1's scope.
 
 ## Original Analysis Verification Record
 
