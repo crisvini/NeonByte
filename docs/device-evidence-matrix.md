@@ -4,6 +4,8 @@
 
 ## Evidence Classes
 
+The [2026-10-27 independent compatibility investigation](ota-compatibility-investigation.md) adds host-probed library behavior and a public first-installation failure/serial-recovery report for another unit. Upstream default-branch commits are unchanged. These additions supply no exact-unit identification, backup, or independent Wi-Fi recovery evidence, so the installation decision remains **NO-GO**.
+
 - **Verified on this unit:** directly reported or recorded for the project unit. A maintainer report is identified as such; it is not silently upgraded to an independent measurement.
 - **Documented for exact revision:** tied by a revision identifier to this unit's board and installed software. No such documentation has been supplied or found in the reviewed public sources.
 - **Inferred from another SD PRO:** reported for a separate SD PRO unit or project. It can guide questions, but it does not identify this unit.

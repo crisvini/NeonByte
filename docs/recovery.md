@@ -30,6 +30,8 @@ Configuration readback and atomic rename protect against representative interrup
 
 The [stock OTA installation research](stock-ota-installation-research.md) documents direct installation and temporary bootstrap examples. Neither supplies independent Wi-Fi boot recovery, and the examined Mini-Display bootstrap changes EEPROM and formats its new filesystem. The existing preservation/recovery gate remains unchanged.
 
+The [independent compatibility investigation](ota-compatibility-investigation.md) adds a public report of failed Mini-Display first installation followed by serial recovery on another unit. That recovery is unavailable under this project's constraints. It also reproduces the current modern-image validator's intentional rejection of the original V1.0.6 file: the existing NeonByte OTA routes are not a verified return-to-stock mechanism. Keep their validation intact; a stock restoration design requires separate review. The report records additional display/provisioning gaps without changing NO-GO.
+
 ## Part 6 Decision Gate
 
 The 2026-10-27 review found no newly supplied exact-unit evidence. The published stock image is not a unit-specific backup; host-tested maintenance OTA still requires an already-running application and has not been validated on an identical spare. There is no documented independent Wi-Fi rescue service for a failed application or boot copy. Installation and physical validation therefore remain **NO-GO**. See the [dated evidence checklist and minimum next actions](installation-go-no-go.md).

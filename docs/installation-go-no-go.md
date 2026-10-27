@@ -15,6 +15,8 @@ The labels below are independent evidence types:
 
 The checklist is dated 2026-10-27. It preserves earlier evidence dates and does not imply that the clock was inspected during this review.
 
+The subsequent [independent compatibility investigation](ota-compatibility-investigation.md) adds library-boundary probes and an external first-installation failure report. It identifies further display and provisioning corrections, supplies no new exact-unit backup/recovery evidence, and leaves every mandatory gate and the **NO-GO** decision unchanged.
+
 ## Mandatory Evidence Checklist
 
 | Requirement | Source-supported | Mock-tested | Real-hardware-tested | Unknown | Gate |
