@@ -52,16 +52,20 @@ then start manually once with `npm --prefix agent run start`. Open
 [http://localhost:8787](http://localhost:8787) and connect Spotify. Stop the
 manual agent before enabling startup. Demo mode needs no Spotify credentials.
 
-To opt in, run this command from the same checkout and Windows account:
+To opt in or update an existing `NeonByte Agent` task, stop any running task
+and agent first, then run this command from the same checkout and Windows
+account. Registration replaces the existing task with the same name:
 
 ~~~powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\agent\startup\windows-register.ps1 -NodePath (Get-Command node.exe).Source
 ~~~
 
 The task `NeonByte Agent` starts at user login under the interactive user, uses
-a hidden PowerShell window, ignores overlapping task launches, and retries
+a windowless WScript launcher, ignores overlapping task launches, and retries
 failure up to three times. Keep the checkout and Node paths stable. Start it
-now with `Start-ScheduledTask -TaskName 'NeonByte Agent'`. The agent also
+now with `Start-ScheduledTask -TaskName 'NeonByte Agent'`. To apply an update,
+run `Stop-ScheduledTask -TaskName 'NeonByte Agent'` before registration,
+confirm the agent has exited, then start the task again. The agent also
 rejects another instance on `127.0.0.1:47877` in the same network namespace.
 
 Logs are in `%LOCALAPPDATA%\NeonByte\agent.log`. One previous log is kept
@@ -69,7 +73,9 @@ when the current log exceeds 1 MiB at launch. The launcher records standard
 output and errors; avoid sharing logs without checking them. Failures before
 logging starts may appear only in Task Scheduler history. Changes to `.env`
 require a restart. Task Scheduler can forcibly stop the agent; confirm the
-process has exited before restarting it.
+process has exited before restarting it. Verify on Windows that starting,
+stopping, and restarting the task leaves no terminal window or orphaned agent
+process; forced termination can interrupt shutdown.
 
 To uninstall startup, stop and unregister the task:
 
