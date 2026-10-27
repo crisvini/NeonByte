@@ -56,7 +56,7 @@ NeonByte Firmware (C++ / PlatformIO, platform to be confirmed)
   - Fallback when connectivity is lost
 ~~~
 
-The agent starts automatically **when the user logs in** (Ubuntu WSL2 on Windows 11, with Windows-native execution as an alternative), without requiring an open terminal. It does not need to start before login. Local connectivity and Spotify can fail temporarily; the system must recover without intervention.
+The agent starts automatically **when the user logs in** (Windows 11 natively; Ubuntu WSL2 is the development environment), without requiring an open terminal. It does not need to start before login. Local connectivity and Spotify can fail temporarily; the system must recover without intervention.
 
 ### Responsibilities
 
@@ -318,9 +318,9 @@ physical acceptance criteria are verified.
 
 ### Phase 6 — Automatic Startup, Distribution, and Quality
 
-**Deliverables:** opt-in WSL2/Windows startup instructions, optional Fedora configuration, and a future release version.
+**Deliverables:** opt-in Windows-native startup instructions, optional WSL2 configuration, and a future release version.
 
-**WSL2 priority:** the maintainer uses Ubuntu WSL2 on Windows 11. A Windows login task can run the agent in the foreground through `wsl.exe`; systemd and an unlocked Secret Service are separate session concerns. Manual login, task shutdown, keyring, reconnection, and Windows localhost validation remain pending. The Fedora example is retained as an optional reference, not an acceptance target. The installed Linux keyring can silently fall back to a nonpersistent kernel keyring, so persistent Spotify credentials are not yet guaranteed.
+**Windows priority:** the maintainer uses Windows-native Node.js for the agent and Ubuntu WSL2 for development. The Windows launcher was exercised with Windows PowerShell 5.1 and Node 22.4, and an isolated synthetic Windows credential was recovered by a second process. Actual Task Scheduler login, shutdown, Spotify authorization and reconnection after restart remain pending. WSL2 startup and Fedora configuration are optional references; Linux keyring persistence remains unverified.
 
 **Desktop preparation (2026-10-26):** opt-in Windows Task Scheduler scripts, a Fedora user-service template, local logging instructions, and a loopback instance guard are implemented. Actual Windows and Fedora login, credential-manager, shutdown, and restart validation remain pending; no startup settings were changed during development. Physical Phase 4/5 validation and deployment protections remain unchanged.
 
@@ -328,7 +328,7 @@ physical acceptance criteria are verified.
 - [x] Prepare opt-in Windows and Fedora startup configurations and document their installation, removal, logs, and troubleshooting.
 
 - [ ] Windows 11: register a Task Scheduler task to start the agent at **login**; provide accessible logs without a persistent terminal window and document installation/removal.
-- [ ] Validate the Ubuntu WSL2 login task, user session and credential access, shutdown, logging, and reconnection on the target Windows desktop. Fedora user-service preparation remains optional.
+- [ ] Validate Windows login startup, safe shutdown, logging, and real Spotify credential persistence and reconnection after agent and Windows restarts.
 - [ ] Prevent multiple concurrent instances, log errors without exposing tokens, and shut down cleanly.
 - [ ] Package the agent or document a reproducible installation (supported Node LTS, dependencies, and configuration).
 - [ ] Complete `README.md`, `docs/installation.md`, `docs/recovery.md`, simulator screenshots, and known limitations.
@@ -376,7 +376,7 @@ English (en-US) is mandatory throughout the NeonByte project, including all curr
 - [ ] Paused/no playback or an unavailable agent shows the GIF in `auto` mode.
 - [ ] A custom GIF fills 240 × 240 and loops when the PC is off (while the clock remains powered).
 - [ ] The `auto`, `spotify`, and `gif` modes can be selected and persist.
-- [ ] The agent starts at Windows login inside Ubuntu WSL2; validate the optional Windows-native path separately.
+- [ ] The agent starts natively at Windows login and reconnects to Spotify after restart.
 - [ ] Installation, troubleshooting, backup, and recovery documentation is complete.
 - [ ] No credentials appear in logs or version control; automated tests and hardware tests are approved.
 

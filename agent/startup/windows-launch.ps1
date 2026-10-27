@@ -8,5 +8,11 @@ if ((Test-Path $log) -and (Get-Item $log).Length -gt 1048576) {
     Move-Item -Force $log (Join-Path $logDir 'agent.previous.log')
 }
 Set-Location $root
-& $NodePath "--env-file-if-exists=$root/.env" "$root/agent/dist/main.js" run *>> $log
+$nodeArguments = @()
+$envFile = Join-Path $root '.env'
+if (Test-Path -LiteralPath $envFile) { $nodeArguments += "--env-file=$envFile" }
+$nodeArguments += (Join-Path $root 'agent/dist/main.js'), 'run'
+# Windows PowerShell 5.1 treats redirected native stderr as an error record.
+$ErrorActionPreference = 'Continue'
+& $NodePath @nodeArguments *>> $log
 exit $LASTEXITCODE

@@ -2,10 +2,10 @@
 
 **Status:** the Spotify agent and local interface with simulator are available; startup at login and firmware installation remain PENDING.
 
-## Spotify Agent (Ubuntu WSL2 and Windows 11)
+## Spotify Agent (Windows 11)
 
 1. Install Node.js 22 or later.
-2. On Ubuntu, confirm an unlocked Secret Service is accessible on the session D-Bus. On Windows, the agent uses Credential Manager.
+2. Use a Windows checkout, Windows Node.js, and Windows Credential Manager. Ubuntu WSL2 is for development; install dependencies separately in each environment.
 3. From the repository root, install dependencies with `npm ci` and `npm ci --prefix agent`.
 4. Copy `.env.example` to `.env`, set `SPOTIFY_CLIENT_ID`, and keep `SPOTIFY_REDIRECT_URI=http://127.0.0.1:8787/callback`. If you change the port, set `NEONBYTE_PORT` to the same value.
 5. In the Spotify Developer Dashboard, register the redirect URI exactly as configured. The application uses PKCE and does not need a `client_secret`.
@@ -32,15 +32,59 @@ These instructions do not install or configure the device. Any firmware depends 
 
 ## Optional Startup at Windows Login
 
-The primary setup runs the agent inside Ubuntu WSL2. Windows Task Scheduler
-starts a foreground `wsl.exe` command at login; no terminal needs to remain
-open. Building and testing do not register a task. The Windows account and
-Linux user must be the same ones used to configure the agent. Use Linux Node
-and Linux dependencies in the WSL checkout. Choose this setup or Windows-native
-startup, not both: the instance guard is scoped to a network namespace, so it
-cannot guarantee exclusion between Windows and WSL or between distributions.
+Run the agent natively on Windows. Startup is opt-in; installation and tests do
+not register a scheduled task. Do not enable the optional WSL2 startup path at
+the same time: the instance guard cannot guarantee exclusion across separate
+network namespaces.
 
-### Ubuntu WSL2
+### Windows-Native Startup
+
+In Windows PowerShell, from the Windows checkout, install and build the agent:
+
+~~~powershell
+npm ci
+npm ci --prefix agent
+npm --prefix agent run build
+~~~
+
+Copy `.env.example` to `.env`, configure your Spotify client ID and redirect,
+then start manually once with `npm --prefix agent run start`. Open
+[http://localhost:8787](http://localhost:8787) and connect Spotify. Stop the
+manual agent before enabling startup. Demo mode needs no Spotify credentials.
+
+To opt in, run this command from the same checkout and Windows account:
+
+~~~powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\agent\startup\windows-register.ps1 -NodePath (Get-Command node.exe).Source
+~~~
+
+The task `NeonByte Agent` starts at user login under the interactive user, uses
+a hidden PowerShell window, ignores overlapping task launches, and retries
+failure up to three times. Keep the checkout and Node paths stable. Start it
+now with `Start-ScheduledTask -TaskName 'NeonByte Agent'`. The agent also
+rejects another instance on `127.0.0.1:47877` in the same network namespace.
+
+Logs are in `%LOCALAPPDATA%\NeonByte\agent.log`. One previous log is kept
+when the current log exceeds 1 MiB at launch. The launcher records standard
+output and errors; avoid sharing logs without checking them. Failures before
+logging starts may appear only in Task Scheduler history. Changes to `.env`
+require a restart. Task Scheduler can forcibly stop the agent; confirm the
+process has exited before restarting it.
+
+To uninstall startup, stop and unregister the task:
+
+~~~powershell
+Stop-ScheduledTask -TaskName 'NeonByte Agent'
+Unregister-ScheduledTask -TaskName 'NeonByte Agent' -Confirm:$false
+~~~
+
+This does not remove the checkout, `.env`, logs, or stored credentials. Remove
+those separately if desired, using Windows Credential Manager for stored
+NeonByte credentials. Windows Credential Manager and the scheduled task must
+use the same Windows user profile. Real Spotify reconnect after a restart and
+a Windows login remains to be verified on the target account.
+
+### Optional Ubuntu WSL2 Startup
 
 1. In Ubuntu, run `npm ci`, `npm ci --prefix agent`, and
    `npm --prefix agent run build` from the checkout. Record the absolute paths
@@ -105,33 +149,16 @@ Microsoft notes that systemd services alone do not keep WSL running. See
 [WSL commands](https://learn.microsoft.com/en-us/windows/wsl/basic-commands),
 and [localhost networking](https://learn.microsoft.com/en-us/windows/wsl/networking).
 
-### Windows-Native Alternative
-
-Use a Windows checkout, Windows Node and Credential Manager. In Windows
-PowerShell, build as above and explicitly register the existing task:
-
-~~~powershell
-.\agent\startup\windows-register.ps1 -NodePath (Get-Command node.exe).Source
-~~~
-
-Use `Start-ScheduledTask -TaskName 'NeonByte Agent'` to start it. To deactivate,
-stop it with `Stop-ScheduledTask -TaskName 'NeonByte Agent'` and remove it with
-`Unregister-ScheduledTask -TaskName 'NeonByte Agent' -Confirm:$false`. Logs are
-in `%LOCALAPPDATA%\NeonByte\agent.log`, with one previous log rotated on
-launch. Do not enable both startup paths.
-
 ### Troubleshooting Startup
 
-- Check task history, the executable and checkout paths, the built agent, and
-  Linux logs. A failure before Linux starts may only appear in task history.
-- Confirm Windows can reach the WSL dashboard at `http://localhost:8787` and
-  that `NEONBYTE_PORT` matches the OAuth redirect URI. Localhost forwarding
-  depends on the WSL networking configuration.
+- Check task history, the Windows executable and checkout paths, the built
+  agent, and `%LOCALAPPDATA%\NeonByte\agent.log`.
+- Confirm the dashboard opens at `http://localhost:8787` and that
+  `NEONBYTE_PORT` matches the OAuth redirect URI.
 - Check for another agent or a process occupying port `47877` in the same
   namespace. Stop it before retrying. The dashboard port can also conflict.
-- If Spotify cannot reconnect, inspect the scheduled process's user session,
-  D-Bus, and keyring availability without printing credential values. Reconnect
-  from the dashboard when the keyring is available.
+- If Spotify cannot reconnect, confirm the task runs as the same Windows user
+  who connected Spotify, then reconnect from the dashboard if needed.
 - Changes to `.env` require restarting the agent. Never share `.env`, token
   values, or credential-store contents when reporting a problem.
 

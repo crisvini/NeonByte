@@ -200,3 +200,18 @@ test("receives the authorization code through a loopback callback and rejects a 
     await listener.close();
   }
 });
+
+test("a new OAuth client reconnects using the refresh token saved by an earlier client", async () => {
+  const store = new MemoryTokenStore();
+  const options = { clientId: "client-id", redirectUri: "http://127.0.0.1:8787/callback", tokenStore: store };
+  const first = new SpotifyOAuthClient({ ...options, fetchImpl: async () => tokenResponse("first-access", "saved-refresh") });
+  const request = first.createAuthorizationRequest();
+  await first.exchangeAuthorizationCode({ code: "code", codeVerifier: request.codeVerifier });
+  let refreshToken: string | null = null;
+  const restarted = new SpotifyOAuthClient({ ...options, fetchImpl: async (_input, init) => {
+    refreshToken = new URLSearchParams(String(init?.body)).get("refresh_token");
+    return tokenResponse("reconnected-access", undefined);
+  } });
+  assert.equal(await restarted.getAccessToken(), "reconnected-access");
+  assert.equal(refreshToken, "saved-refresh");
+});
