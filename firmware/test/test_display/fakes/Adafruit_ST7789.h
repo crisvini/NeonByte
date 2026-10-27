@@ -34,6 +34,10 @@ struct RowWrite {
 
 struct PanelState {
     std::vector<RowWrite> rows;
+    std::uint32_t initializationFrequency = 0;
+    std::uint32_t drawingFrequency = 0;
+    std::uint8_t mode = 0, rotation = 255, madctl = 0;
+    bool inverted = false;
 };
 
 inline PanelState panelState;
@@ -42,6 +46,7 @@ inline PanelState panelState;
 
 class Adafruit_ST7789 {
 public:
+    virtual ~Adafruit_ST7789() = default;
     Adafruit_ST7789(int chipSelect, int dataCommand, int reset) {
         static_cast<void>(chipSelect);
         static_cast<void>(dataCommand);
@@ -51,16 +56,17 @@ public:
     void init(std::uint16_t width, std::uint16_t height, std::uint8_t mode) {
         static_cast<void>(width);
         static_cast<void>(height);
-        static_cast<void>(mode);
+        neonbyte::display_test::panelState.mode = mode;
+        begin(0);
+        neonbyte::display_test::panelState.initializationFrequency = frequency_;
     }
-    void setSPISpeed(std::uint32_t frequency) { static_cast<void>(frequency); }
-    void setRotation(std::uint8_t rotation) { static_cast<void>(rotation); }
+    virtual void begin(std::uint32_t frequency) { frequency_ = frequency ? frequency : 32000000; }
+    void setSPISpeed(std::uint32_t frequency) { frequency_ = frequency; neonbyte::display_test::panelState.drawingFrequency = frequency; }
+    void setRotation(std::uint8_t rotation) { neonbyte::display_test::panelState.rotation = rotation; }
     void sendCommand(std::uint8_t command, const std::uint8_t* data, std::size_t length) {
-        static_cast<void>(command);
-        static_cast<void>(data);
-        static_cast<void>(length);
+        if (command == ST77XX_MADCTL && length == 1) neonbyte::display_test::panelState.madctl = data[0];
     }
-    void invertDisplay(bool inverted) { static_cast<void>(inverted); }
+    void invertDisplay(bool inverted) { neonbyte::display_test::panelState.inverted = inverted; }
     void fillScreen(std::uint16_t color) { static_cast<void>(color); }
     void setCursor(int x, int y) { static_cast<void>(x); static_cast<void>(y); }
     void setTextColor(std::uint16_t color) { static_cast<void>(color); }
@@ -92,4 +98,7 @@ public:
 
 private:
     int activeRow_ = -1;
+    std::uint32_t frequency_ = 0;
 };
+
+using Adafruit_ST77xx = Adafruit_ST7789;

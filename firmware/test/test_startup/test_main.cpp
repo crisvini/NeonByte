@@ -1,6 +1,7 @@
 #include <unity.h>
 #include "neonbyte/safe_startup.h"
 #include "neonbyte/ota_staging.h"
+#include "neonbyte/recovery_ap.h"
 #include <string>
 #include <cstring>
 using namespace neonbyte;
@@ -8,6 +9,30 @@ namespace {
 // Test-only identities. No test fixture is linked into an ESP8266 artifact.
 constexpr RecoveryIdentity IDENTITY{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     "fedcba9876543210fedcba9876543210"};
+struct ApBackend {
+    bool startOk = true, configureOk = true, readOk = true, addressMatches = true;
+    bool disabled = false, started = false, configured = false;
+    bool startProtectedAp() { started = true; return startOk; }
+    bool configureNetwork() { configured = true; return configureOk; }
+    bool networkMatches() { return readOk && addressMatches; }
+    void disableAp() { disabled = true; }
+};
+void testRecoveryApRejectsSdkFailuresAndMismatchedNetwork() {
+    for (unsigned fault=0;fault<4;++fault) {
+        ApBackend backend;
+        backend.startOk = fault != 0;
+        backend.configureOk = fault != 1;
+        backend.readOk = fault != 2;
+        backend.addressMatches = fault != 3;
+        TEST_ASSERT_FALSE(startCheckedRecoveryAp(backend));
+        TEST_ASSERT_TRUE(backend.disabled);
+    }
+    ApBackend backend;
+    TEST_ASSERT_TRUE(startCheckedRecoveryAp(backend));
+    TEST_ASSERT_TRUE(backend.started);
+    TEST_ASSERT_TRUE(backend.configured);
+    TEST_ASSERT_FALSE(backend.disabled);
+}
 class Services final : public StartupServices {
 public:
     std::string calls;
@@ -34,6 +59,46 @@ void testNetworkAndHttpStartBeforeStorageAndDisplay() {
     TEST_ASSERT_TRUE(services.calls.find('F') > services.calls.find('H'));
     TEST_ASSERT_TRUE(services.calls.find('A') > services.calls.find('H'));
     TEST_ASSERT_TRUE(startup.recoveryApRunning());
+}
+void testExplicitMaintenanceBootDoesNotMountUntilAuthorizedAndDefaultStillStarts() {
+    Services services;
+    SafeStartup startup(services,IDENTITY);
+    startup.begin(0,false,true);
+    startup.tick(60000);
+    TEST_ASSERT_EQUAL_STRING("NH",services.calls.c_str());
+    TEST_ASSERT_FALSE(startup.applicationRunning());
+    TEST_ASSERT_TRUE(startup.applicationPaused());
+    TEST_ASSERT_EQUAL(StartupResult::unauthorized,startup.runApplication("Bearer invalid"));
+    TEST_ASSERT_EQUAL_STRING("NH",services.calls.c_str());
+    const std::string authorization = "Bearer " + std::string(IDENTITY.token);
+    TEST_ASSERT_EQUAL(StartupResult::ok,startup.runApplication(authorization));
+    TEST_ASSERT_TRUE(startup.applicationRunning());
+}
+void testMaintenanceBootProvisioningAndColdRestartRemainExplicit() {
+    Services services;
+    services.loadOk = false;
+    SafeStartup startup(services,IDENTITY);
+    const std::string authorization = "Bearer " + std::string(IDENTITY.token);
+    startup.begin(0,false,true);
+    startup.tick(60000);
+    TEST_ASSERT_EQUAL_STRING("NH",services.calls.c_str());
+    TEST_ASSERT_EQUAL(StartupResult::ok,startup.stageWifi(authorization,"ssid=Network&password=examplepass",false,60000));
+    services.connected = true;
+    TEST_ASSERT_EQUAL(StartupResult::ok,startup.confirmWifi(authorization));
+    startup.tick(120000);
+    TEST_ASSERT_FALSE(startup.applicationRunning());
+    TEST_ASSERT_EQUAL(StartupResult::ok,startup.runApplication(authorization));
+    TEST_ASSERT_TRUE(startup.applicationRunning());
+    Services rebooted;
+    SafeStartup selected(rebooted,IDENTITY);
+    selected.begin(0,false,true);
+    selected.tick(120000);
+    TEST_ASSERT_EQUAL_STRING("NH",rebooted.calls.c_str());
+    Services existing;
+    SafeStartup normal(existing,IDENTITY);
+    normal.begin(0,false);
+    normal.tick(10000);
+    TEST_ASSERT_TRUE(normal.applicationRunning());
 }
 void testMaintenanceOtaAdmissionRejectsPendingAutomaticStartup() {
     Services services; SafeStartup startup(services,IDENTITY);
@@ -223,6 +288,9 @@ void tearDown() {}
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(testNetworkAndHttpStartBeforeStorageAndDisplay);
+    RUN_TEST(testRecoveryApRejectsSdkFailuresAndMismatchedNetwork);
+    RUN_TEST(testExplicitMaintenanceBootDoesNotMountUntilAuthorizedAndDefaultStillStarts);
+    RUN_TEST(testMaintenanceBootProvisioningAndColdRestartRemainExplicit);
     RUN_TEST(testMaintenanceOtaAdmissionRejectsPendingAutomaticStartup);
     RUN_TEST(testMissingOrMalformedIdentityNeverStartsNetwork);
     RUN_TEST(testMountConfigurationAndApplicationFailuresKeepRecoveryAvailable);

@@ -8,6 +8,12 @@ namespace neonbyte {
 constexpr int DISPLAY_DC = 0;
 constexpr int DISPLAY_RESET = 2;
 constexpr int DISPLAY_BACKLIGHT = 5;
+class BoundedDisplayPanel final : public Adafruit_ST7789 {
+public:
+    using Adafruit_ST7789::Adafruit_ST7789;
+protected:
+    void begin(std::uint32_t) override { Adafruit_ST77xx::begin(20'000'000); }
+};
 class DeviceDisplay final : public DisplayRenderer {
 public:
     explicit DeviceDisplay(PersistentStorage& storage) : storage_(storage), animation_(storage), panel_(-1,DISPLAY_DC,DISPLAY_RESET) {}
@@ -24,7 +30,7 @@ private:
     void textLine(std::string_view text, int x, int y, unsigned limit, std::uint16_t color);
     PersistentStorage& storage_;
     AnimationReader animation_;
-    Adafruit_ST7789 panel_;
+    BoundedDisplayPanel panel_;
     std::array<std::uint8_t,480> pixels_{};
     AnimationMetadata metadata_{};
     std::uint32_t revision_ = 0, offset_ = 0;

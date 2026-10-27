@@ -25,7 +25,7 @@ An [independent hardware-tested SD PRO project](https://github.com/piotrkochan/h
 | CS | Unconnected, permanently selected | PENDING |
 | DC / reset | GPIO0 / GPIO2 | PENDING; both have boot strap implications |
 | Backlight | GPIO5, active-low | PENDING; no button GPIO is used |
-| SPI / colors | Mode 3, BGR, inversion enabled; 20 MHz requested after initialization | The pinned library requests 32 MHz during initialization; [offline investigation](ota-compatibility-investigation.md) records the gap. Physical timing remains PENDING |
+| SPI / colors | Mode 3, BGR, inversion enabled; 20 MHz requested from the first initialization command | [Offline tests](ota-compatibility-corrections.md) cover the requested frequency. Physical timing remains PENDING |
 | Rotation / offsets | Rotation 0; MADCTL `0xC8`; column/row offsets 0/80 | Host-probed Adafruit behavior differs from TFT_eSPI rotation 0. Correct physical orientation remains PENDING |
 | Filesystem | LittleFS `0x100000–0x3FA000`, block 8,192 bytes | Matches the researched stock artifact's linked geometry; installed compatibility PENDING |
 | Boot / updates | Arduino 3.1.2 eboot combined image | Different from the old stock boot image; acceptance and startup PENDING |

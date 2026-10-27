@@ -22,7 +22,7 @@ public:
 class SafeStartup {
 public:
     SafeStartup(StartupServices& services, RecoveryIdentity identity) : services_(services), identity_(identity), recoveryAuth_(identity.token) {}
-    void begin(std::uint64_t now, bool previousFailure);
+    void begin(std::uint64_t now, bool previousFailure, bool maintenanceOnBoot = false);
     void tick(std::uint64_t now);
     bool authorized(std::string_view authorization) const;
     StartupResult stageWifi(std::string_view authorization, std::string_view form, bool temporary, std::uint64_t now);

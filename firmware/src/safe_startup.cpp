@@ -12,14 +12,14 @@ bool validSecret(std::string_view value, std::size_t length) {
     return varied;
 }
 }
-void SafeStartup::begin(std::uint64_t now, bool previousFailure) {
+void SafeStartup::begin(std::uint64_t now, bool previousFailure, bool maintenanceOnBoot) {
     identityValid_ = validSecret(identity_.token,64) && validSecret(identity_.apPassword,32)
         && identity_.token.find(identity_.apPassword) == std::string_view::npos;
     if (!identityValid_) return;
     apRunning_ = services_.startRecoveryAp(identity_);
     services_.startHttp();
     retryApAt_ = now+5000; initializeAt_ = now+10000;
-    automaticStart_ = !previousFailure;
+    automaticStart_ = !previousFailure && !maintenanceOnBoot;
 }
 bool SafeStartup::authorized(std::string_view authorization) const {
     return identityValid_ && recoveryAuth_.isAuthorized(authorization);

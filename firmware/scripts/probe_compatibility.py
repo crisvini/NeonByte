@@ -30,8 +30,10 @@ def runProbe(directory, name, source):
     sourcePath = directory / f"{name}.cpp"
     binaryPath = directory / name
     sourcePath.write_text(source, encoding="utf-8")
+    sanitizerFlags = (["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie"]
+                      if os.environ.get("NEONBYTE_PROBE_SANITIZERS") == "1" else [])
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-Wall", "-Wextra",
-                    "-Werror", str(sourcePath), "-o", str(binaryPath)], check=True)
+                    "-Werror", *sanitizerFlags, str(sourcePath), "-o", str(binaryPath)], check=True)
     result = subprocess.run([str(binaryPath)], check=True, capture_output=True, text=True)
     return json.loads(result.stdout)
 
@@ -43,52 +45,69 @@ def probeDisplay(directory, repository, library):
     commonSource = (library / "Adafruit_ST77xx.cpp").read_text()
     panelSource = (library / "Adafruit_ST7789.cpp").read_text()
     adapterSource = (repository / "firmware/src/esp8266/display.cpp").read_text()
+    adapterHeader = (repository / "firmware/include/neonbyte/esp8266/display.h").read_text()
     header = (library / "Adafruit_ST77xx.h").read_text()
     constants = "\n".join(line for line in header.splitlines() if line.startswith("#define ST77XX_"))
     frequency = next(line for line in commonSource.splitlines() if line.startswith("#define SPI_DEFAULT_FREQ"))
-    # Execute the actual method bodies. I/O, command-table transfer, and base
-    # fields are doubles; this does not execute the full driver or model a panel.
+    tableStart = panelSource.index("static const uint8_t PROGMEM")
+    tableEnd = panelSource.index("// clang-format on", tableStart)
+    panelStart = adapterHeader.index("class BoundedDisplayPanel final")
+    panelEnd = adapterHeader.index("};", panelStart) + 2
+    # Actual command-table and address-window logic, with transport I/O doubled.
     source = r'''
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 using std::uint8_t;
 using std::uint16_t;
 using std::uint32_t;
 #define NEONBYTE_ENABLE_DISPLAY 1
+#define PROGMEM
+#define ST_CMD_DELAY 0x80
+#define pgm_read_byte(address) (*(address))
+void delay(unsigned) {}
 constexpr uint8_t SPI_MODE3 = 0x11;
 constexpr int DISPLAY_BACKLIGHT = 5, OUTPUT = 1, HIGH = 1, LOW = 0;
 void pinMode(int, int) {}
 void digitalWrite(int, int) {}
-const uint8_t generic_st7789[] = {0};
-''' + constants + "\n" + frequency + r'''
+''' + constants + "\n" + frequency + "\n" + panelSource[tableStart:tableEnd] + r'''
 class Adafruit_ST77xx {
 public:
     uint8_t spiMode = 0, invertOnCommand = 0, invertOffCommand = 0;
     uint8_t _colstart = 0, _rowstart = 0, rotation = 0, madctl = 0;
     uint16_t _xstart = 0, _ystart = 0, _width = 0, _height = 0;
     uint32_t _freq = 0, busFrequency = 0, initializationFrequency = 0;
-    void begin(uint32_t freq = 0);
+    std::vector<uint8_t> commands;
+    std::vector<uint32_t> frequencies, windowWords;
+    virtual void begin(uint32_t freq = 0);
     void commonInit(const uint8_t* commands);
+    void setAddrWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
     void initSPI(uint32_t frequency, uint8_t) { busFrequency = frequency; }
-    void displayInit(const uint8_t*) { initializationFrequency = busFrequency; }
+    void displayInit(const uint8_t*);
     void sendCommand(uint8_t command, const uint8_t* data, unsigned) {
+        commands.push_back(command); frequencies.push_back(busFrequency);
+        if (!initializationFrequency) initializationFrequency = busFrequency;
         if (command == ST77XX_MADCTL) madctl = *data;
     }
+    void writeCommand(uint8_t command) { commands.push_back(command); }
+    void SPI_WRITE32(uint32_t value) { windowWords.push_back(value); }
     void setSPISpeed(uint32_t frequency) { busFrequency = frequency; }
     void invertDisplay(bool) {}
     void fillScreen(uint16_t) {}
 };
 class Adafruit_ST7789 : public Adafruit_ST77xx {
 public:
+    Adafruit_ST7789(int = -1, int = 0, int = 2) {}
     uint8_t _colstart2 = 0, _rowstart2 = 0;
     uint16_t windowWidth = 0, windowHeight = 0;
     void init(uint16_t width, uint16_t height, uint8_t mode);
     void setRotation(uint8_t m);
 };
+''' + adapterHeader[panelStart:panelEnd] + r'''
 class DeviceDisplay {
 public:
-    Adafruit_ST7789 panel_;
+    BoundedDisplayPanel panel_;
     bool initialized_ = false;
     void begin();
 };
@@ -96,6 +115,8 @@ public:
     for contents, signature in (
         (commonSource, "void Adafruit_ST77xx::begin("),
         (commonSource, "void Adafruit_ST77xx::commonInit("),
+        (commonSource, "void Adafruit_ST77xx::displayInit("),
+        (commonSource, "void Adafruit_ST77xx::setAddrWindow("),
         (panelSource, "void Adafruit_ST7789::init("),
         (panelSource, "void Adafruit_ST7789::setRotation("),
         (adapterSource, "void DeviceDisplay::begin("),
@@ -107,6 +128,20 @@ int main() {
     display.begin();
     assert(display.initialized_);
     assert(display.panel_._width == 240 && display.panel_._height == 240);
+    assert(display.panel_.initializationFrequency == 20000000);
+    assert(display.panel_.busFrequency == 20000000);
+    const std::vector<uint8_t> expected{0x01,0x11,0x3a,0x36,0x2a,0x2b,0x21,0x13,0x29,0x36,0x36,0x36};
+    assert(display.panel_.commands == expected);
+    for (auto frequency : display.panel_.frequencies) assert(frequency <= 20000000);
+    assert(display.panel_.madctl == 0xc8 && display.panel_._xstart == 0 && display.panel_._ystart == 80);
+    display.panel_.setAddrWindow(0,0,240,240);
+    assert(display.panel_.windowWords == std::vector<uint32_t>({0x000000ef,0x0050013f}));
+    display.panel_.windowWords.clear();
+    display.panel_.setAddrWindow(0,239,240,1);
+    assert(display.panel_.windowWords == std::vector<uint32_t>({0x000000ef,0x013f013f}));
+    display.panel_.windowWords.clear();
+    display.panel_.setAddrWindow(48,4,144,144);
+    assert(display.panel_.windowWords == std::vector<uint32_t>({0x003000bf,0x005400e3}));
     std::printf("{\"initializationRequestedHz\":%u,\"drawingRequestedHz\":%u,"
                 "\"madctl\":%u,\"columnOffset\":%u,\"rowOffset\":%u}\n",
                 display.panel_.initializationFrequency, display.panel_.busFrequency,
@@ -142,10 +177,16 @@ struct softap_config {
 struct ip_info { struct { uint32_t addr; } ip; };
 uint32_t currentIp = 0;
 unsigned configuredIpCount = 0, persistentWrites = 0;
+unsigned recordedAuthMode = 0;
+bool recordedPassword = false;
 void wifi_softap_get_config_default(softap_config* config) { *config = {}; }
 void wifi_softap_get_config(softap_config* config) { *config = {}; }
 bool wifi_softap_set_config(softap_config*) { ++persistentWrites; return true; }
-bool wifi_softap_set_config_current(softap_config*) { return true; }
+bool wifi_softap_set_config_current(softap_config* config) {
+    recordedAuthMode = config->authmode;
+    recordedPassword = std::strcmp(reinterpret_cast<const char*>(config->password),"synthetic-password") == 0;
+    return true;
+}
 void wifi_softap_dhcps_stop() {}
 void wifi_softap_dhcps_start() {}
 bool wifi_get_ip_info(int, ip_info* info) { info->ip.addr = currentIp; return true; }
@@ -173,10 +214,103 @@ int main() {
     assert(WiFi.softAP("Probe", "synthetic-password"));
     const bool nonzeroIpPreserved = currentIp == IPAddress(10,23,45,1).value;
     assert(nonzeroIpPreserved && configuredIpCount == 0 && persistentWrites == 0);
+    assert(recordedAuthMode == AUTH_WPA2_PSK && recordedPassword);
     std::puts("{\"emptyIpUsesDefault\":true,\"nonzeroIpPreserved\":true,\"persistentWrites\":0}");
 }
 '''
     return runProbe(directory, "ap-probe", source)
+
+
+def probeAccessPointAdapter(directory, repository):
+    adapter = (repository / "firmware/src/esp8266/main.cpp").read_text()
+    policy = (repository / "firmware/include/neonbyte/recovery_ap.h").read_text()
+    source = r'''
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <string>
+#include <string_view>
+using std::uint32_t;
+constexpr int HEX = 16, SOFTAP_IF = 1;
+class String : public std::string {
+public:
+    using std::string::string;
+    String(unsigned, int) : std::string("123") {}
+    String(const std::string& value) : std::string(value) {}
+};
+struct RecoveryIdentity { std::string_view token, apPassword; };
+class IPAddress {
+public:
+    IPAddress(unsigned a, unsigned b, unsigned c, unsigned d) : value_(a | b<<8 | c<<16 | d<<24) {}
+    uint32_t v4() const { return value_; }
+private:
+    uint32_t value_;
+};
+struct ip_info { struct { uint32_t addr; } ip, gw, netmask; };
+struct FakeEsp { unsigned getChipId() { return 123; } } ESP;
+struct FakeWifi {
+    bool startOk = true, configOk = true, disabled = false;
+    bool disableOk = true, disableRequested = false;
+    bool protectedPassword = false, persistence = false;
+    ip_info info{{0x012d170a},{0x012d170a},{0x00ffffff}};
+    bool softAP(const char*, const char* password) {
+        protectedPassword = std::string(password) == "synthetic-password";
+        return startOk;
+    }
+    bool softAPConfig(IPAddress ip, IPAddress gateway, IPAddress mask) {
+        if (!configOk) return false;
+        info = {{ip.v4()},{gateway.v4()},{mask.v4()}};
+        return true;
+    }
+    bool enableAP(bool enabled) {
+        disableRequested = !enabled;
+        if (!disableOk) return false;
+        disabled = !enabled;
+        return true;
+    }
+} WiFi;
+bool readOk = true, corruptAddress = false, corruptGateway = false, corruptMask = false;
+bool wifi_get_ip_info(int, ip_info* info) {
+    if (!readOk) return false;
+    *info = WiFi.info;
+    if (corruptAddress) info->ip.addr ^= 1;
+    if (corruptGateway) info->gw.addr ^= 1;
+    if (corruptMask) info->netmask.addr ^= 1;
+    return true;
+}
+struct StartupServices { virtual bool startRecoveryAp(RecoveryIdentity) = 0; };
+''' + policy.replace("#pragma once", "") + r'''
+using neonbyte::startCheckedRecoveryAp;
+class DeviceStartupServices : public StartupServices {
+public:
+''' + extractFunction(adapter, "bool startRecoveryAp(RecoveryIdentity identity) override") + r'''
+};
+int main() {
+    const RecoveryIdentity identity{"synthetic-token", "synthetic-password"};
+    DeviceStartupServices services;
+    assert(services.startRecoveryAp(identity));
+    assert(WiFi.protectedPassword && !WiFi.persistence && !WiFi.disabled);
+    assert(WiFi.info.ip.addr == IPAddress(192,168,4,1).v4());
+    assert(WiFi.info.gw.addr == IPAddress(192,168,4,1).v4());
+    assert(WiFi.info.netmask.addr == IPAddress(255,255,255,0).v4());
+    for (unsigned failure = 0; failure < 4; ++failure) {
+        WiFi = FakeWifi{};
+        WiFi.startOk = failure != 0;
+        WiFi.configOk = failure != 1;
+        readOk = failure != 2;
+        corruptGateway = failure == 3;
+        assert(!services.startRecoveryAp(identity) && WiFi.disabled);
+    }
+    corruptGateway = false; readOk = true; corruptMask = true; WiFi = FakeWifi{};
+    assert(!services.startRecoveryAp(identity) && WiFi.disabled);
+    corruptMask = false; corruptAddress = true; WiFi = FakeWifi{};
+    assert(!services.startRecoveryAp(identity) && WiFi.disabled);
+    corruptAddress = false; WiFi = FakeWifi{}; WiFi.configOk = false; WiFi.disableOk = false;
+    assert(!services.startRecoveryAp(identity) && WiFi.disableRequested && !WiFi.disabled);
+    std::puts("{\"existingAddressReplaced\":true,\"protectedPassword\":true,\"failurePathsChecked\":true}");
+}
+'''
+    return runProbe(directory, "ap-adapter-probe", source)
 
 
 def main():
@@ -191,6 +325,7 @@ def main():
             "evidence": "Extracted function bodies with host I/O doubles; no hardware validation",
             "display": probeDisplay(directory, repository, args.display_library),
             "accessPoint": probeAccessPoint(directory, args.framework),
+            "accessPointAdapter": probeAccessPointAdapter(directory, repository),
             "installationApproved": False,
         }
     print(json.dumps(result, indent=2))

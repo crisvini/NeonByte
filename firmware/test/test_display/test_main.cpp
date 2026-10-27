@@ -89,11 +89,25 @@ void testSlowFrameRenderingDoesNotAddASecondFullDelay() {
     TEST_ASSERT_EQUAL_UINT16(0xabcd, display_test::panelState.rows.back().firstPixel);
 }
 
+void testDisplayInitializationUsesBoundedSpiAndRetainsProvisionalProfile() {
+    display_test::panelState = {};
+    PersistentStorage storage;
+    DeviceDisplay display(storage);
+    display.begin();
+    TEST_ASSERT_EQUAL_UINT32(20000000, display_test::panelState.initializationFrequency);
+    TEST_ASSERT_EQUAL_UINT32(20000000, display_test::panelState.drawingFrequency);
+    TEST_ASSERT_EQUAL_UINT8(SPI_MODE3, display_test::panelState.mode);
+    TEST_ASSERT_EQUAL_UINT8(0, display_test::panelState.rotation);
+    TEST_ASSERT_EQUAL_HEX8(0xc8, display_test::panelState.madctl);
+    TEST_ASSERT_TRUE(display_test::panelState.inverted);
+}
+
 } // namespace
 
 int main() {
     UNITY_BEGIN();
     RUN_TEST(testGifFrameDelayAndLoopingUseDeviceDisplayTick);
     RUN_TEST(testSlowFrameRenderingDoesNotAddASecondFullDelay);
+    RUN_TEST(testDisplayInitializationUsesBoundedSpiAndRetainsProvisionalProfile);
     return UNITY_END();
 }

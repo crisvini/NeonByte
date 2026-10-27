@@ -1,8 +1,15 @@
 #ifdef ARDUINO_ARCH_ESP8266
 #include "neonbyte/esp8266/display.h"
 #include "neonbyte/esp8266/http_server.h"
+#include "neonbyte/recovery_ap.h"
 #include <sys/time.h>
 #include <new>
+#ifndef NEONBYTE_MAINTENANCE_ON_BOOT
+#define NEONBYTE_MAINTENANCE_ON_BOOT 0
+#endif
+#if NEONBYTE_MAINTENANCE_ON_BOOT != 0 && NEONBYTE_MAINTENANCE_ON_BOOT != 1
+#error NEONBYTE_MAINTENANCE_ON_BOOT must be 0 or 1
+#endif
 #if __has_include("neonbyte_private_identity.h")
 #include "neonbyte_private_identity.h"
 #endif
@@ -42,10 +49,20 @@ class DeviceStartupServices final : public StartupServices {
 public:
     bool startRecoveryAp(RecoveryIdentity identity) override {
         const String name = "NeonByte-" + String(ESP.getChipId(),HEX);
-        // Input is validated and refers to null-terminated private literals.
-        const bool configured = WiFi.softAP(name.c_str(),identity.apPassword.data());
-        if (!configured) WiFi.enableAP(false);
-        return configured;
+        struct Backend {
+            const String& name;
+            RecoveryIdentity identity;
+            const IPAddress address{192,168,4,1}, gateway{192,168,4,1}, mask{255,255,255,0};
+            bool startProtectedAp() { return WiFi.softAP(name.c_str(),identity.apPassword.data()); }
+            bool configureNetwork() { return WiFi.softAPConfig(address,gateway,mask); }
+            bool networkMatches() {
+                ip_info info{};
+                return wifi_get_ip_info(SOFTAP_IF,&info) && info.ip.addr == address.v4() &&
+                    info.gw.addr == gateway.v4() && info.netmask.addr == mask.v4();
+            }
+            void disableAp() { WiFi.enableAP(false); }
+        } backend{name,identity};
+        return startCheckedRecoveryAp(backend);
     }
     void startHttp() override;
     bool mountStorage() override { return storage.beginStorage(); }
@@ -136,7 +153,7 @@ bool previousStartupFailure() {
 void setup() {
     using namespace neonbyte;
     WiFi.persistent(false); WiFi.mode(WIFI_OFF);
-    startup.begin(deviceClock.monotonicMillis(),previousStartupFailure());
+    startup.begin(deviceClock.monotonicMillis(),previousStartupFailure(),NEONBYTE_MAINTENANCE_ON_BOOT == 1);
 }
 void loop() {
     using namespace neonbyte;

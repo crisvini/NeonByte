@@ -265,6 +265,8 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 
 **Independent OTA compatibility investigation (2026-10-27):** the [evidence delta](docs/ota-compatibility-investigation.md) records unchanged SmartClock AI/Mini-Display commits, an external failed first-installation/serial-recovery report, non-equivalent display rotation/offsets, a 32 MHz initialization request preceding the intended 20 MHz setting, and conditional recovery-AP address selection. Host probes reproduce library behavior; firmware corrections are proposed only. Direct OTA remains the conditional simplest candidate, with all hardware, full-backup, independent Wi-Fi recovery, and installation gates unchanged. No physical task is completed or later phase authorized.
 
+**Offline compatibility corrections (2026-10-27):** the [corrections report](docs/ota-compatibility-corrections.md) records the bounded initialization clock, checked recovery AP network, and explicitly selected maintenance-on-boot option. The default startup policy is unchanged; selected maintenance mode remains active on every reboot because a safe durable first-boot marker is not established. These software changes do not validate hardware or change the **NO-GO** decision.
+
 - [x] Connect the desktop agent components to the existing native firmware core through loopback HTTP v1 without a board build.
 - [x] Verify offline playback/artwork/progress, scene switching, expiry, simulated storage/restarts, and mocked provisioning/maintenance failures.
 - [x] Run native and agent regressions, sanitizer checks, repository validation, and synthetic deployment-guard checks; document defects and remaining hardware gaps.

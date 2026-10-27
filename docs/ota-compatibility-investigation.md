@@ -4,6 +4,11 @@
 library-boundary evidence and an upstream failure report to the existing research.
 It does not establish compatibility with the project unit or authorize installation.
 
+**Subsequent offline implementation:** [compatibility corrections](ota-compatibility-corrections.md)
+records the 20 MHz initialization, explicit AP network configuration, selectable
+maintenance-on-boot policy, new tests, and remaining limitations. The findings,
+probe outputs, and proposed changes below are the historical investigation state.
+
 ## Scope and Evidence Delta
 
 Read `AGENTS.md`, all of `PLANNING.md` and `NEXT_STEPS.md`, and the existing
