@@ -41,7 +41,7 @@ Converted GIFs and covers remain in memory for the local session and are discard
 
 - Use UTF-8, LF, and kebab-case filenames for documentation.
 - Keep schemas and examples in `contracts/v1/` aligned with `docs/protocol.md`.
-- The agent stores refresh tokens in the operating system's native credential manager and has no fallback to local files. On Linux, the adapter requires Secret Service for persistence across restarts.
+- The agent stores refresh tokens in the operating system's native credential manager and has no fallback to local files. On Linux, the installed keyring library can fall back silently to a nonpersistent kernel keyring when Secret Service is unavailable. The backend-selection argument is not supported by the installed version, so persistence is not guaranteed.
 - The `@napi-rs/keyring` 1.3.0 runtime dependency is MIT-licensed; upstream publishes notices for bundled libraries, including `libdbus` (AFL-2.1 or GPL-2.0-or-later in the Linux binary). Review upstream notices before redistributing binaries.
 - The agent calls only `GET /me/player/currently-playing` with the `user-read-currently-playing` scope.
 - `PlaybackPoller.currentSnapshot` and `subscribe()` form the in-process local interface for future consumers; it does not open a network port or transport tokens.
