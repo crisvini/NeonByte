@@ -320,6 +320,11 @@ physical acceptance criteria are verified.
 
 **Deliverables:** installers/startup scripts, Windows/Fedora instructions, and a release version.
 
+**Desktop preparation (2026-10-26):** opt-in Windows Task Scheduler scripts, a Fedora user-service template, local logging instructions, and a loopback instance guard are implemented. Actual Windows and Fedora login, credential-manager, shutdown, and restart validation remain pending; no startup settings were changed during development. Physical Phase 4/5 validation and deployment protections remain unchanged.
+
+- [x] Add and test an OS-released single-instance guard and safe generic startup errors.
+- [x] Prepare opt-in Windows and Fedora startup configurations and document their installation, removal, logs, and troubleshooting.
+
 - [ ] Windows 11: register a Task Scheduler task to start the agent at **login**; provide accessible logs without a persistent terminal window and document installation/removal.
 - [ ] Fedora: create a `systemd --user` service that starts at login, restarts on failure, and has documented enable/disable commands.
 - [ ] Prevent multiple concurrent instances, log errors without exposing tokens, and shut down cleanly.

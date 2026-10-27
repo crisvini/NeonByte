@@ -1,0 +1,13 @@
+[Unit]
+Description=NeonByte desktop agent
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=/absolute/path/to/NeonByte
+ExecStart=/absolute/path/to/node --env-file-if-exists=/absolute/path/to/NeonByte/.env /absolute/path/to/NeonByte/agent/dist/main.js run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

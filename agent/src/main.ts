@@ -1,3 +1,4 @@
+import { acquireInstance } from "./instance.js";
 import { DeviceIntegration, SystemDeviceConfigStore } from "./device/integration.js";
 import { ReauthorizationRequiredError, SpotifyOAuthError } from "./spotify/errors.js";
 import { startOAuthCallbackServer } from "./spotify/oauth-callback.js";
@@ -203,10 +204,13 @@ async function main(): Promise<void> {
   if (command && command !== "run") {
     throw new Error("Unknown command. Use 'auth' to authorize or 'run' to start the agent.");
   }
-  await runAgent();
+  const instance = await acquireInstance();
+  try { await runAgent(); } finally { await instance.close(); }
 }
 
 main().catch((error: unknown) => {
-  logger.error(error instanceof Error ? error.message : "Unexpected agent failure.");
+  logger.error(error instanceof Error && error.message.includes("already running")
+    ? "An agent is already running, or the instance port is unavailable."
+    : "Agent failed to start or stopped unexpectedly. Check configuration and local port availability.");
   process.exitCode = 1;
 });
