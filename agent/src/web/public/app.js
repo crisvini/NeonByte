@@ -85,7 +85,15 @@ function updateStatusText() {
   document.querySelector("#agent-label").textContent = status.snapshot.status === "unavailable"
     ? "Spotify unavailable"
     : status.demoEnabled ? "Agent demo mode" : "Local agent active";
-  document.querySelector("#device-status").textContent = status.deviceConnected ? "Connected" : "Simulation without a device";
+  const device = status.device;
+  const labels = { disabled: "Device disabled", connecting: "Connecting", connected: "Connected", disconnected: "Disconnected; retrying" };
+  document.querySelector("#device-status").textContent = labels[device.connection] ?? "Device unavailable";
+  document.querySelector("#device-config-status").textContent = device.paired ? "Pairing token saved securely." : "No pairing token saved.";
+  const form = document.querySelector("#device-form");
+  if (!form.contains(document.activeElement)) {
+    document.querySelector("#device-address").value = device.address;
+    document.querySelector("#device-enabled").checked = device.enabled;
+  }
 
   const badge = document.querySelector("#spotify-badge");
   badge.textContent = status.spotifyConnected ? "Connected" : status.spotifyConfigured ? "Waiting for connection" : "Configure .env";
@@ -407,6 +415,22 @@ async function uploadGif(file) {
     label.classList.add("error");
   }
 }
+
+document.querySelector("#device-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const tokenField = document.querySelector("#device-token");
+  const token = tokenField.value;
+  tokenField.value = "";
+  try {
+    await postJson("/api/device", {
+      address: document.querySelector("#device-address").value,
+      enabled: document.querySelector("#device-enabled").checked,
+      ...(token ? { token } : {}),
+    });
+    await refreshStatus();
+    notify("Device settings saved.");
+  } catch (error) { notify(error.message); }
+});
 
 document.querySelectorAll("[data-mode]").forEach((button) => {
   button.addEventListener("click", () => void chooseMode(button.dataset.mode));

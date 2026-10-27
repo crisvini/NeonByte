@@ -87,3 +87,27 @@ The portable integration is ready to inform a separately authorized hardware-val
 - Production LAN scheduling/address configuration, reboot identification beyond v1 status, OS startup/distribution, and the initial-null clearing gap remain integration work. No Phase 5 physical/LAN checklist or MVP hardware item is marked complete here.
 
 Stop at this offline boundary. See [recovery](recovery.md), [hardware](hardware.md), and [safe first-boot preparation](safe-first-boot.md) before proposing any physical work.
+
+## Phase 5 Desktop Integration
+
+The local dashboard accepts a device HTTP origin and an existing pairing token.
+Device connectivity is disabled until explicitly enabled. The address, token,
+and enabled state are stored together in the system credential manager; there
+is no plaintext fallback. On restart, a previously enabled configuration
+reconnects automatically. Changing the address requires entering a pairing
+token again. Disabling the connection stops the scheduler and persists that
+choice. The local status API reports the address, pairing presence, and
+connection state, but never returns the token. Credential-manager failures leave
+connectivity disabled and are reported without exposing credentials.
+
+The scheduler periodically sends current playback metadata and heartbeat via
+protocol v1 and retries after a failed connection. This does not yet deliver
+artwork, dashboard mode changes, or GIF uploads to the device. The browser
+continues to provide the 240 by 240 simulator and demo controls. The initial-null
+playback limitation described above remains unchanged. The dashboard accepts a
+pre-existing device token; it does not provision one on the firmware.
+
+Protocol v1 uses unencrypted HTTP: use it only on a trusted network. A configured
+hostname must continue to resolve to the intended device. Host-harness tests do
+not establish physical device compatibility or recovery readiness. All hardware
+and installation blockers remain in force.

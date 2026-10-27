@@ -1,3 +1,4 @@
+import type { DeviceIntegration } from "../device/integration.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { parseOAuthCallback } from "../spotify/oauth-callback.js";
@@ -23,6 +24,7 @@ export type MockPlaybackAction = "play" | "pause" | "next" | "offline";
 
 export interface LocalWebAppOptions {
   poller: PlaybackPoller;
+  device?: DeviceIntegration;
   oauth: Pick<SpotifyOAuthClient, "createAuthorizationRequest" | "exchangeAuthorizationCode"> | null;
   spotifyConfigured: boolean;
   getDemoEnabled(): boolean;
@@ -268,7 +270,8 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           } : { available: false },
           cover: cover ? { available: true, sizeBytes: cover.bytes.length, sha256: cover.sha256 } : { available: false },
           protocolVersion: "v1",
-          deviceConnected: false,
+          device: options.device?.status ?? { address: "", enabled: false, paired: false, connection: "disabled" },
+          deviceConnected: options.device?.status.connection === "connected",
         });
         return;
       }
@@ -330,6 +333,25 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
       }
       if (!trustedOrigin(request.headers.origin, port)) {
         sendError(response, 403, "The request origin is not authorized to modify the local interface.");
+        return;
+      }
+
+      if (url.pathname === "/api/device") {
+        if (!options.device) { sendError(response, 503, "Device configuration is unavailable."); return; }
+        try {
+          const payload = await readJson(request);
+          if (!payload || typeof payload !== "object") throw new Error();
+          const item = payload as Record<string, unknown>;
+          if (typeof item["address"] !== "string" || typeof item["enabled"] !== "boolean" ||
+              (item["token"] !== undefined && typeof item["token"] !== "string")) throw new Error();
+          await options.device.configure({ address: item["address"], enabled: item["enabled"],
+            ...(typeof item["token"] === "string" ? { token: item["token"] } : {}) });
+          response.writeHead(204, securityHeaders()); response.end();
+        } catch (error) {
+          const message = error instanceof Error && /pairing token|credential manager|valid device HTTP|stopping/.test(error.message)
+            ? error.message : "Unable to update device configuration.";
+          sendError(response, error instanceof PayloadTooLargeError ? 413 : 400, message);
+        }
         return;
       }
 

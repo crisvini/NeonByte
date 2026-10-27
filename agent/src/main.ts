@@ -1,3 +1,4 @@
+import { DeviceIntegration, SystemDeviceConfigStore } from "./device/integration.js";
 import { ReauthorizationRequiredError, SpotifyOAuthError } from "./spotify/errors.js";
 import { startOAuthCallbackServer } from "./spotify/oauth-callback.js";
 import { MockSpotifyProvider } from "./spotify/mock.js";
@@ -150,8 +151,10 @@ async function runAgent(): Promise<void> {
   if (!Number.isFinite(agentTimeoutMs) || agentTimeoutMs < 1000) {
     throw new Error("NEONBYTE_AGENT_TIMEOUT_MS must be at least 1000.");
   }
+  const device = new DeviceIntegration({ store: new SystemDeviceConfigStore(), poller, intervalMs: 15_000 });
   const webApp = await startLocalWebApp({
     poller,
+    device,
     oauth,
     spotifyConfigured: Boolean(oauth),
     getDemoEnabled: () => demoEnabled,
@@ -174,13 +177,17 @@ async function runAgent(): Promise<void> {
   logger.info(`Local interface available at ${webApp.url}.`);
   logger.info(`Agent started. Polling interval: ${pollIntervalMs} ms.${demoEnabled ? " Demo data active." : ""}`);
   poller.start();
+  try { await device.start(); }
+  catch { logger.warn("Device configuration is unavailable; device connectivity is disabled."); }
   await new Promise<void>((resolve) => {
     const stop = () => {
-      poller.stop();
-      void webApp.close();
       process.off("SIGINT", stop);
       process.off("SIGTERM", stop);
-      resolve();
+      poller.stop();
+      void Promise.all([device.stop(), webApp.close()]).then(() => resolve(), () => {
+        logger.error("Unable to shut down the local agent cleanly.");
+        resolve();
+      });
     };
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);

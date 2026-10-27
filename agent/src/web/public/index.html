@@ -40,6 +40,21 @@
         </article>
 
         <div class="control-column">
+          <article class="card device-card">
+            <div class="card-heading compact"><div><p class="eyebrow">DEVICE CONNECTION</p><h2>Device settings</h2></div></div>
+            <p class="card-copy">Device access is disabled until you enable it. Use a trusted network.</p>
+            <form id="device-form">
+              <label for="device-address">Device HTTP address</label>
+              <input id="device-address" type="url" placeholder="http://192.168.1.100" required autocomplete="off">
+              <label for="device-token">Pairing token</label>
+              <input id="device-token" type="password" placeholder="Enter pairing token" autocomplete="off">
+              <p class="card-copy">Enter the token when pairing or changing the address. Leave it blank to keep the saved token.</p>
+              <label><input id="device-enabled" type="checkbox"> Enable device connection</label>
+              <button class="button" type="submit">Save device settings</button>
+              <p id="device-config-status" class="card-copy" aria-live="polite"></p>
+            </form>
+          </article>
+
           <article class="card mode-card">
             <div class="card-heading compact"><div><p class="eyebrow">SCENE</p><h2>Display mode</h2></div></div>
             <div class="mode-switch" role="group" aria-label="Display mode">

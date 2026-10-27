@@ -114,3 +114,7 @@ h2 { margin: 0; font-size: 15px; letter-spacing: -.02em; }
   .mode-card { grid-column: auto; }
   .page-footer { flex-direction: column; gap: 7px; }
 }
+
+#device-form { display: grid; gap: 10px; }
+#device-form input[type="url"], #device-form input[type="password"] { width: 100%; padding: 10px; border: 1px solid #56566b; border-radius: 8px; background: #171721; color: #fff; }
+#device-form label { font-size: 0.9rem; }

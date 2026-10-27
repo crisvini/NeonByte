@@ -291,6 +291,18 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 
 **Deliverables:** agent ↔ SD PRO connection over LAN with synchronized scenes.
 
+**Software-only integration progress:** the agent can opt in to scheduled v1
+playback and heartbeat synchronization with a configured address and pairing
+credential. Configuration is stored in the operating system credential manager,
+and the native host harness covers restart, reconnect, address changes, and
+shutdown. The broader tasks below remain open until their remaining software and
+physical acceptance criteria are verified.
+
+- [x] Integrate the scheduler, v1 client, and synchronizer into the desktop lifecycle.
+- [x] Configure the address and pairing credential in the local dashboard, with device connectivity disabled until explicitly enabled.
+- [x] Store device settings and credentials in the system credential manager and exclude the token from dashboard responses and logs.
+- [x] Test configuration, startup restoration, reconnect, address changes, and shutdown using the native host harness and local tests.
+
 - [ ] Implement the agent HTTP client for v1 endpoints.
 - [ ] Pair and configure the device IP/hostname; handle IP changes.
 - [ ] Send the cover only when needed; ensure metadata and image ordering/consistency.

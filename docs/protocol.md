@@ -1,6 +1,6 @@
 # Local HTTP v1 Contract
 
-**Status:** the native core and provisional ESP8266 runtime implement v1. The runtime has compiled locally; no device endpoint has been contacted or deployed. An explicitly constructed agent client is validated against the native core in the [PC-only runner](offline-validation.md); production LAN integration remains Phase 5 work. The agent's simulator routes under `/api/*` are private to the local interface. Hardware compatibility and installation are PENDING.
+**Status:** the native core and provisional ESP8266 runtime implement v1. The runtime has compiled locally; no device endpoint has been contacted or deployed. An explicitly constructed agent client is validated against the native core in the [PC-only runner](offline-validation.md); the desktop agent can opt in to scheduled metadata and heartbeat synchronization; artwork, modes, and animation delivery remain Phase 5 work. The agent's simulator routes under `/api/*` are private to the local interface. Hardware compatibility and installation are PENDING.
 
 ## Transport and Compatibility
 
