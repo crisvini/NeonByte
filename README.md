@@ -8,6 +8,8 @@ NeonByte is an open-source project planned for a JUZIPi SD PRO Wi-Fi display and
 
 The 240 × 240 resolution is a planning expectation, not a measurement of this unit. See [hardware investigation](docs/hardware.md) before any work that depends on the board.
 
+On Windows 11, the maintainer reported successful automatic startup at login, hidden execution without a persistent terminal window, and Spotify reconnection after a PC restart. A separate agent-only restart, safe stop, failure-log inspection, and startup removal/restoration have not been manually verified. See the [pending Windows acceptance checklist](docs/installation.md#pending-manual-windows-acceptance).
+
 ## Planned Display Modes
 
 | Mode | With active playback and a connected agent | Without playback or when the agent is unavailable |
@@ -36,7 +38,7 @@ The simulator applies the modes to its local preview; the selected mode is store
 
 ## Validation
 
-Node.js 22 or later is required. On Fedora, a Secret Service session (for example, GNOME Keyring or KWallet) must be available to persist the refresh token. On Windows, the agent uses Credential Manager.
+Use Node.js 22.x or 24.x LTS; CI tests both release lines. The package engine metadata sets a minimum of Node.js 22, but other major versions are not currently validated. Check the [official Node.js release schedule](https://nodejs.org/en/about/previous-releases) for current LTS status. On Fedora, a Secret Service session (for example, GNOME Keyring or KWallet) must be available to persist the refresh token. On Windows, the agent uses Credential Manager.
 
 ~~~sh
 npm ci

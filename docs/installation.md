@@ -1,10 +1,10 @@
 # Installation
 
-**Status:** the Spotify agent and local interface with simulator are available; startup at login and firmware installation remain PENDING.
+**Status (2026-10-27):** the agent and local interface are available. The maintainer reported successful Windows 11 login startup, hidden execution, and Spotify reconnection after a Windows restart. Separate agent-only restart, safe stop, failure-log inspection, and task removal/restoration remain unverified. Firmware installation remains blocked.
 
 ## Spotify Agent (Windows 11)
 
-1. Install Node.js 22 or later.
+1. Install Node.js 22.x or 24.x LTS, the release lines verified by CI. The package engine metadata requires Node.js 22 or later, but other major versions are not currently validated. Check the [official Node.js release schedule](https://nodejs.org/en/about/previous-releases) before selecting a runtime.
 2. Use a Windows checkout, Windows Node.js, and Windows Credential Manager. Ubuntu WSL2 is for development; install dependencies separately in each environment.
 3. From the repository root, install dependencies with `npm ci` and `npm ci --prefix agent`.
 4. Copy `.env.example` to `.env`, set `SPOTIFY_CLIENT_ID`, and keep `SPOTIFY_REDIRECT_URI=http://127.0.0.1:8787/callback`. If you change the port, set `NEONBYTE_PORT` to the same value.
@@ -23,6 +23,8 @@ The agent starts polling with the interface. The default interval is 15 seconds;
 The refresh token is stored through the native keyring library, not in a plaintext token file. On Linux, the installed library may silently fall back to a nonpersistent kernel keyring if Secret Service is unavailable; reconnecting after a restart is therefore not guaranteed. Login startup is optional; see the instructions below.
 
 Without a valid `SPOTIFY_CLIENT_ID`, the agent starts in demo mode so you can test play, pause, track changes, GIFs, and display modes without external calls. With a Client ID configured, the interface offers demo data controls. GIFs must be animated and limited to 8 MiB, 20 frames, 30 seconds total duration, 1,048,576 pixels per logical dimension or frame descriptor, and 4,194,304 pixels total across descriptors. The preview is temporary and remains in memory until the agent exits.
+
+The `.env.example` file contains a placeholder Client ID and enables demo data; the placeholder is treated as unconfigured. Copying it supports a first run without Spotify credentials. Replace the Client ID and select **Connect Spotify** to authorize a real account. Because the sample enables `NEONBYTE_MOCK`, turn off **Demo data** in the interface after authorization to use Spotify playback. The Spotify credential store persists only the refresh token through Windows Credential Manager under the Windows account that runs the agent; access tokens remain in memory. Device synchronization settings are stored separately in the system credential manager. Do not put access tokens, refresh tokens, or a Spotify client secret in `.env`.
 
 These instructions do not install or configure the device. Any firmware depends on hardware identification, a tested backup and restore procedure, and explicit authorization to flash.
 
@@ -91,6 +93,16 @@ use the same Windows user profile. The maintainer confirmed Windows 11 automatic
 startup, hidden execution, and Spotify reconnection after restart; see the
 [manual validation record](../PLANNING.md#phase-6--automatic-startup-distribution-and-quality)
 for the remaining shutdown, logging, removal, and agent-only restart checks.
+
+### Pending Manual Windows Acceptance
+
+The checks below require the maintainer to run them on Windows 11 with the same user account that authorized Spotify. They are not covered by the synthetic launcher tests or by the reported PC restart test. Keep each item unchecked until it has been performed and reported.
+
+- [ ] With the PC session left running, stop and restart only the `NeonByte Agent` task; confirm Spotify reconnects without repeating OAuth authorization.
+- [ ] Stop the task, confirm the agent process exits and `http://localhost:8787` stops responding, then start it again; check for leftover processes or a terminal window.
+- [ ] Inspect `%LOCALAPPDATA%\NeonByte\agent.log` locally after a safe startup failure; confirm the error is useful and no token or credential value appears. Do not share the log without reviewing it.
+- [ ] Start the task again while the agent is already running; confirm only one agent process remains active and the running session is not disrupted.
+- [ ] If startup was enabled, unregister the task, confirm login no longer starts the agent, then restore it with the documented registration command and confirm the task has the expected account, trigger, and launch paths.
 
 ### Optional Ubuntu WSL2 Startup
 

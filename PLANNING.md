@@ -324,7 +324,7 @@ physical acceptance criteria are verified.
 
 **Windows priority:** the maintainer uses Windows-native Node.js for the agent and Ubuntu WSL2 for development. The Windows launcher was exercised with Windows PowerShell 5.1 and Node 22.4, and an isolated synthetic Windows credential was recovered by a second process. Automatic startup, hidden execution, and Spotify reconnection after restart are now maintainer-verified below. Safe shutdown, failure logging, startup removal, and separately exercised OAuth failure cases remain pending. WSL2 startup and Fedora configuration are optional references; Linux keyring persistence remains unverified.
 
-**Desktop preparation (2026-10-26):** opt-in Windows Task Scheduler scripts, a Fedora user-service template, local logging instructions, and a loopback instance guard are implemented. No startup settings were changed by the coding agent during development. The maintainer's later Windows manual results are recorded below; Fedora login/keyring, shutdown, and restart validation remain pending. Physical Phase 4/5 validation and deployment protections remain unchanged.
+**Desktop preparation (2026-10-26):** opt-in Windows Task Scheduler scripts, a Fedora user-service template, local logging instructions, and a loopback instance guard are implemented. No startup settings were changed by the coding agent during development. The maintainer's later Windows manual results are recorded below; Fedora login/keyring, shutdown, and restart validation remain pending. The CI workflow now includes an isolated Windows launcher process test; it does not register or change a scheduled task. Physical Phase 4/5 validation and deployment protections remain unchanged.
 
 **Manual Windows validation recorded on 2026-10-26:** the maintainer reported successful Windows 11 automatic startup, hidden execution without a persistent terminal window, and Spotify reconnection after restart. This is maintainer-supplied real-machine evidence, not a test rerun by the coding agent. The report does not separately identify an agent-only restart, forced token expiration, shutdown cleanup, log inspection, or startup removal; those broader checks remain open. No credentials or logs were supplied or recorded. These desktop results do not validate clock installation, LAN integration, or recovery.
 
@@ -333,11 +333,12 @@ physical acceptance criteria are verified.
 
 - [x] Windows 11: validate automatic agent startup at **login** and hidden execution without a persistent terminal window (maintainer report).
 - [x] Validate real Spotify reconnection after the reported Windows restart (maintainer report).
-- [ ] Validate safe shutdown, accessible failure logs, startup removal, and a separate agent-only restart with real Spotify credentials; installation/removal and logging instructions are already documented.
+- [ ] Validate safe shutdown, accessible failure logs, startup removal, and a separate agent-only restart with real Spotify credentials; follow the [pending manual Windows checklist](docs/installation.md#pending-manual-windows-acceptance). Installation/removal and logging instructions are documented.
 - [ ] Prevent multiple concurrent instances, log errors without exposing tokens, and shut down cleanly.
-- [ ] Package the agent or document a reproducible installation (supported Node LTS, dependencies, and configuration).
+- [x] Document a reproducible Windows installation on CI-verified Node.js LTS lines, including dependencies, configuration, credential storage, and optional startup removal.
 - [ ] Complete `README.md`, `docs/installation.md`, `docs/recovery.md`, simulator screenshots, and known limitations.
-- [ ] Add a CI workflow (lint, build, tests) and version `0.1.0` after the final checklist.
+- [x] Add CI workflows for lint, build, tests, and compilation-only firmware validation.
+- [ ] Select and prepare version `0.1.0` after the remaining quality and acceptance checks.
 
 **Acceptance:** restarting the PC and logging in starts the agent automatically; Spotify reconnects when possible; failures are visible; the uninstall procedure works; and language consistency is verified.
 

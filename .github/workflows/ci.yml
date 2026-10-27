@@ -9,6 +9,17 @@ permissions:
   contents: read
 
 jobs:
+  windows-startup:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Run isolated Windows startup launcher regression
+        run: npm test
+
   validate:
     runs-on: ubuntu-latest
     strategy:
