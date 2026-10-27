@@ -182,7 +182,7 @@ suite passed 11/11 in a direct host build, both normally and with
 AddressSanitizer/UndefinedBehaviorSanitizer. The PlatformIO CLI is unavailable
 in this environment, so `pio test -d firmware -e native` could not be run.
 
-`npm run check` passed Markdown validation on 39 files, the language check, 10
+`npm run check` passed Markdown validation on 39 files, the language check, 9
 root tests with one Windows-only skip, the TypeScript build/typecheck, and all
 62 agent tests. `npm run test:offline` passed all 20 scenarios. No ESP8266
 target compilation or firmware image generation was run.
