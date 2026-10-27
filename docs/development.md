@@ -2,14 +2,14 @@
 
 ## Repository Status
 
-Phases 1 through 3 are complete: documentation, the v1 contract, the Spotify agent, and the local interface with a 240 × 240 simulator. The interface uses the agent's state and works with either a Spotify account or demo data, without a connected device. `firmware/` contains a native core and provisional ESP8266 build profiles. The module is visually confirmed as ESP-12F / ESP8266; actual display settings, performance, flash capacity, and recovery remain PENDING. See [firmware development](firmware-development.md).
+**Release readiness: NOT RELEASE READY.** Part 6 is **NO-GO** and Part 7 physical acceptance is blocked by missing unit-specific evidence, complete backup/restore, and independent Wi-Fi-only failed-boot recovery. Phases 1 through 3 are complete: documentation, the v1 contract, the Spotify agent, and the local interface with a 240 × 240 simulator. The interface uses the agent's state and works with either a Spotify account or demo data, without a connected device. `firmware/` contains a native core and provisional ESP8266 build profiles. The module is visually confirmed as ESP-12F / ESP8266; actual display settings, performance, flash capacity, and recovery remain PENDING. See [firmware development](firmware-development.md) and the [release-readiness report](release-readiness.md).
 
 ## Current Requirements and Commands
 
-- Node.js 22 or later for linting and testing tools.
+- Node.js 22 or later according to package engine metadata. CI exercises major versions 22 and 24; it does not validate every major version allowed by the engine range.
 - npm compatible with the installed Node.js version.
 - `npm ci` installs the root lint and contract tools.
-- `npm ci --prefix agent` installs the agent, native credential-store, and GIF decoder dependencies.
+- `npm ci --prefix agent` installs the agent, native credential-store, GIF decoder, and image decoder dependencies.
 - `npm run lint` checks Markdown files.
 - `npm run language:check` checks for high-confidence Portuguese content in project text and source files.
 - `npm test` runs contract tests with the native Node.js test runner.
@@ -17,6 +17,8 @@ Phases 1 through 3 are complete: documentation, the v1 contract, the Spotify age
 - `npm --prefix agent test` runs unit and integration tests with mocked fetch and providers.
 - `npm run check` runs lint, language checks, contract tests, the TypeScript build, type checks, and agent tests; `make check` is an equivalent shortcut.
 - `npm run test:offline` compiles a host executable and exercises the agent against the native firmware core over loopback HTTP v1. A C++17 compiler and OpenSSL development headers/libcrypto are required; no device or Spotify credentials are used. See [offline validation](offline-validation.md) for results and limits.
+- `uv tool run --from platformio pio test -d firmware -e native` runs the C++ host test suites without selecting an ESP8266 board. This requires `uv` and PlatformIO; it does not validate physical hardware.
+- `npm run check` does not run the offline integration harness or PlatformIO tests. CI runs those separately and also compiles two provisional ESP8266 profiles as compile-only checks. CI does not upload a firmware artifact or publish a release; successful compilation does not establish installation readiness.
 
 Agent tests cover PKCE, the loopback callback, refresh, normalization, 204/401/429 responses, reconnects, caching, the simulator, display modes, uploads, media conversion, limits, and checksums. They do not call the Spotify Web API or validate a real account or hardware.
 
@@ -48,6 +50,22 @@ Converted GIFs and covers remain in memory for the local session and are discard
 - The Spotify cover URL remains internal agent metadata. The dashboard fetches the image only from the permitted media host and converts it for the preview; sending it to the device is for a later phase.
 - `gifuct-js` 2.1.2 is MIT-licensed; the original demo vector asset is covered by this repository's MIT license. The package's license files remain in `agent/node_modules` after installation.
 - Firmware language and build configuration depend on hardware identification.
+
+## Direct Dependency and License Notes
+
+The npm lockfiles pin the installed dependency tree. Direct package metadata and known redistribution considerations are summarized here; this is not a completed third-party notice bundle.
+
+| Package | Pinned version | License / notice status |
+|---|---:|---|
+| `@napi-rs/keyring` | 1.3.0 | MIT; Linux binaries may include `libdbus` notices under AFL-2.1 or GPL-2.0-or-later. |
+| `gifuct-js` | 2.1.2 | MIT. |
+| `sharp` | 0.35.5 | Apache-2.0; bundled libvips and image libraries have their own notices. |
+| `@types/node` | 22.15.30 | MIT; development types only. |
+| `tsx` | 4.19.4 | MIT; development/test runner only. |
+| `typescript` | 5.8.3 | Apache-2.0; development compiler only. |
+| `markdownlint-cli2` | 0.24.0 | MIT; development tool only. |
+
+PlatformIO declares pinned Adafruit ST7735/ST7789, GFX, and BusIO libraries in `firmware/platformio.ini`. Their redistribution notices, all transitive npm notices, and bundled native-library notices must be collected and reviewed before distributing desktop or firmware binaries. No distributable bundle was prepared in this review. The project license is [MIT](../LICENSE).
 
 ## Next Phases
 

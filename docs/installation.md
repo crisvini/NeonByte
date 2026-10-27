@@ -1,10 +1,10 @@
 # Installation
 
-**Status (2026-10-27):** the agent and local interface are available. The maintainer reported successful Windows 11 login startup, hidden execution, and Spotify reconnection after a Windows restart. Separate agent-only restart, safe stop, failure-log inspection, and task removal/restoration remain unverified. Firmware installation remains blocked.
+**Status (2026-10-27): NOT RELEASE READY.** The agent and local interface are available. The maintainer reported successful Windows 11 login startup, hidden execution, and Spotify reconnection after a Windows restart. Separate agent-only restart, safe stop, failure-log inspection, and task removal/restoration remain unverified. Part 6 is **NO-GO** and Part 7 is blocked; these instructions cover the desktop agent only and do not authorize firmware installation. See the [release-readiness report](release-readiness.md).
 
 ## Spotify Agent (Windows 11)
 
-1. Install Node.js 22.x or 24.x LTS, the release lines verified by CI. The package engine metadata requires Node.js 22 or later, but other major versions are not currently validated. Check the [official Node.js release schedule](https://nodejs.org/en/about/previous-releases) before selecting a runtime.
+1. Install Node.js 22 or 24, the major versions exercised by CI. Package engine metadata requires Node.js 22 or later; CI does not validate every supported major.
 2. Use a Windows checkout, Windows Node.js, and Windows Credential Manager. Ubuntu WSL2 is for development; install dependencies separately in each environment.
 3. From the repository root, install dependencies with `npm ci` and `npm ci --prefix agent`.
 4. Copy `.env.example` to `.env`, set `SPOTIFY_CLIENT_ID`, and keep `SPOTIFY_REDIRECT_URI=http://127.0.0.1:8787/callback`. If you change the port, set `NEONBYTE_PORT` to the same value.

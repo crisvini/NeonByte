@@ -1,6 +1,6 @@
 # NeonByte — Implementation Plan
 
-> **Status:** Phases 1, 2, and 3 are complete; the maintainer confirmed Windows 11 automatic startup, hidden execution, and real Spotify reconnection after restart on 2026-10-26. Phase 4 includes locally compiled ESP8266 adapters, host-validated safe first-boot preparation, and the maintenance-only raw staging implementation. The 2026-10-27 Part 6 decision is **NO-GO**; display/flash/boot validation and Wi-Fi-only installation/recovery remain pending · **Intended license:** MIT · **Target device:** JUZIPi SD PRO (ESP-12F / ESP8266 visually confirmed; remaining hardware identification pending)
+> **Status: NOT RELEASE READY.** Phases 1, 2, and 3 are complete; the maintainer confirmed Windows 11 automatic startup, hidden execution, and real Spotify reconnection after restart on 2026-10-26. Phase 4 includes locally compiled ESP8266 adapters, host-validated safe first-boot preparation, and the maintenance-only raw staging implementation. The 2026-10-27 Part 6 decision is **NO-GO** and Part 7 remains blocked; display/flash/boot validation and Wi-Fi-only installation/recovery remain pending. Part 8 documentation and offline quality results are recorded in [the readiness report](docs/release-readiness.md) · **Intended license:** MIT · **Target device:** JUZIPi SD PRO (ESP-12F / ESP8266 visually confirmed; remaining hardware identification pending)
 >
 > **Primary rule:** implement phases sequentially; do not flash firmware until the hardware is validated and recovery is documented.
 
@@ -261,6 +261,8 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 
 **Part 6 installation decision (2026-10-27):** [`docs/installation-go-no-go.md`](docs/installation-go-no-go.md) records **NO-GO** based on the evidence available from Parts 1–5. The installed stock version, exact board/flash/display/boot layout, matching stock verifier, preservation regions, complete restorable unit-specific backup, independent Wi-Fi-only failed-boot recovery, private recovery-identity delivery, runtime updater validation, and an identical spare remain unsupported or unknown. No Phase 4/5 hardware checklist item was completed; Part 7 was not started.
 
+**Part 8 documentation review (2026-10-27): NOT RELEASE READY.** The readiness report reconciles desktop installation guidance, Linux keyring limitations, Node.js and CI coverage, known hardware/recovery limits, and dependency notice obligations. `npm run check`, `npm run test:offline`, and the PlatformIO native host suite passed in this review. No ESP8266 target build, device operation, installation package, release, or tag was created. Physical acceptance, Windows-only manual checks, simulator screenshots, and complete redistribution notices remain pending.
+
 - [x] Connect the desktop agent components to the existing native firmware core through loopback HTTP v1 without a board build.
 - [x] Verify offline playback/artwork/progress, scene switching, expiry, simulated storage/restarts, and mocked provisioning/maintenance failures.
 - [x] Run native and agent regressions, sanitizer checks, repository validation, and synthetic deployment-guard checks; document defects and remaining hardware gaps.
@@ -346,8 +348,9 @@ physical acceptance criteria are verified.
 - [x] Validate real Spotify reconnection after the reported Windows restart (maintainer report).
 - [ ] Validate safe shutdown, accessible failure logs, startup removal, and a separate agent-only restart with real Spotify credentials; follow the [pending manual Windows checklist](docs/installation.md#pending-manual-windows-acceptance). Installation/removal and logging instructions are documented.
 - [ ] Prevent multiple concurrent instances, log errors without exposing tokens, and shut down cleanly.
-- [x] Document a reproducible Windows installation on CI-verified Node.js LTS lines, including dependencies, configuration, credential storage, and optional startup removal.
-- [ ] Complete `README.md`, `docs/installation.md`, `docs/recovery.md`, simulator screenshots, and known limitations.
+- [x] Document a reproducible Windows installation on the Node.js 22/24 major lines exercised by CI, including dependencies, configuration, credential storage, and optional startup removal.
+- [x] Reconcile `README.md`, desktop installation guidance, recovery status, and known limitations with the Part 6 **NO-GO** decision.
+- [ ] Add simulator screenshots; none are currently tracked, and no physical screenshot is available as hardware evidence.
 - [x] Add CI workflows for lint, build, tests, and compilation-only firmware validation.
 - [ ] Select and prepare version `0.1.0` after the remaining quality and acceptance checks.
 

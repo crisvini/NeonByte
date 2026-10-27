@@ -4,7 +4,9 @@ NeonByte is an open-source project planned for a JUZIPi SD PRO Wi-Fi display and
 
 ## Current Status
 
-**Phases 1, 2, and 3 are complete.** The Node.js/TypeScript Spotify agent uses OAuth PKCE, polling, and state compatible with the v1 contract. The local interface includes a responsive 240 × 240 simulator, Spotify and looping GIF previews, display modes, uploads, and demo data. Real-account OAuth validation still requires configured Spotify credentials. Phase 4 now includes the native C++ core and locally compiled ESP8266 runtime adapters. The [PC-only validation](docs/offline-validation.md) connects an explicitly constructed agent client to that core through loopback HTTP v1; production LAN synchronization remains Phase 5 work. No device has been contacted, flashed, or updated; Wi-Fi-only installation and recovery are blocked. See the [integration report](docs/esp8266-integration.md).
+**Release readiness: NOT RELEASE READY.** Part 6 concluded **NO-GO**, and Part 7 physical acceptance is blocked. A complete unit-specific backup/restore procedure and independent Wi-Fi-only failed-boot recovery have not been established. No firmware has been validated on the project clock. See the [release-readiness report](docs/release-readiness.md) and [installation decision](docs/installation-go-no-go.md).
+
+**Phases 1, 2, and 3 are complete.** The Node.js/TypeScript Spotify agent uses OAuth PKCE, polling, and state compatible with the v1 contract. The local interface includes a responsive 240 × 240 simulator, Spotify and looping GIF previews, display modes, uploads, and demo data. Real-account OAuth validation still requires configured Spotify credentials. Phase 4 includes the native C++ core and previously compiled ESP8266 runtime adapters under provisional assumptions. The [PC-only validation](docs/offline-validation.md) connects an explicitly constructed agent client to that core through loopback HTTP v1; production LAN synchronization remains Phase 5 work. No device has been contacted, flashed, or updated. These software checks do not establish hardware compatibility.
 
 The 240 × 240 resolution is a planning expectation, not a measurement of this unit. See [hardware investigation](docs/hardware.md) before any work that depends on the board.
 
@@ -38,7 +40,7 @@ The simulator applies the modes to its local preview; the selected mode is store
 
 ## Validation
 
-Use Node.js 22.x or 24.x LTS; CI tests both release lines. The package engine metadata sets a minimum of Node.js 22, but other major versions are not currently validated. Check the [official Node.js release schedule](https://nodejs.org/en/about/previous-releases) for current LTS status. On Fedora, a Secret Service session (for example, GNOME Keyring or KWallet) must be available to persist the refresh token. On Windows, the agent uses Credential Manager.
+Use Node.js 22 or 24, the major versions exercised by CI. Package metadata declares Node.js 22 or later, but CI does not validate every supported major. On Linux, the keyring library can fall back to a nonpersistent kernel keyring when Secret Service is unavailable, so refresh-token persistence across restarts is not guaranteed. On Windows, the agent uses Credential Manager. See [development requirements and dependency notes](docs/development.md).
 
 ~~~sh
 npm ci
@@ -58,7 +60,7 @@ npm --prefix agent run start
 
 Open [http://localhost:8787](http://localhost:8787), connect Spotify with the button, and choose a mode. Without a valid Client ID, the agent starts with mock data; the controls can simulate play, pause, next track, and unavailability. The `auth` command remains available if you prefer to authorize without opening the interface. The refresh token is stored in the system credential manager; tokens are not written to `.env` or logs. `SPOTIFY_POLL_INTERVAL_MS` configures the polling interval (15 seconds by default). See [development](docs/development.md) and [installation](docs/installation.md) for details.
 
-Run `npm run test:offline` for PC-only agent-to-native-firmware validation. It requires a C++17 compiler and OpenSSL development headers, uses loopback networking and mock Spotify data, and never builds or contacts a device. See the [results and remaining gaps](docs/offline-validation.md).
+Run `npm run test:offline` for PC-only agent-to-native-core validation. It builds a host test executable and requires a C++17 compiler and OpenSSL development headers. It uses loopback networking and mock Spotify data; it does not build firmware or contact a device. See the [results and remaining gaps](docs/offline-validation.md).
 
 ## Documentation
 
@@ -69,3 +71,5 @@ Run `npm run test:offline` for PC-only agent-to-native-firmware validation. It r
 - [Development](docs/development.md)
 - [Installation](docs/installation.md)
 - [Recovery](docs/recovery.md)
+- [Release readiness](docs/release-readiness.md)
+- [License](LICENSE)

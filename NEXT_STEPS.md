@@ -161,6 +161,8 @@ Where justified, also run the existing sanitizer suites. If tooling is missing, 
 
 ## Part 8 — Documentation and Release Readiness
 
+**Current result (2026-10-27): NOT RELEASE READY.** Part 6 is **NO-GO** and Part 7 is blocked by missing exact-unit evidence, a complete restorable backup, and independent Wi-Fi-only failed-boot recovery. The documentation and offline test review is recorded in [`docs/release-readiness.md`](docs/release-readiness.md). No installable firmware distribution, tag, or release was created.
+
 **Purpose:** Make a clean, reproducible release **only when** physical acceptance and outstanding quality criteria are met; otherwise produce an honest pre-release readiness report.
 
 **Prerequisites:** Review Part 6 and Part 7 outcomes. If device acceptance is blocked, stop before creating an installable firmware distribution, public recovery secrets, version tag, or release.
