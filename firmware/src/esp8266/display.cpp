@@ -8,8 +8,8 @@ void DeviceDisplay::begin() {
     if (initialized_) return;
     pinMode(DISPLAY_BACKLIGHT,OUTPUT); digitalWrite(DISPLAY_BACKLIGHT,HIGH);
     panel_.init(240,240,SPI_MODE3); panel_.setSPISpeed(20'000'000);
-    panel_.setRotation(0);
-    const std::uint8_t bgr = 0xc8; // Rotation-zero MADCTL plus BGR; validate physically.
+    panel_.setRotation(2); // Half turn with Adafruit's 240x240 offsets at (0, 0).
+    const std::uint8_t bgr = 0x08; // Keep BGR without restoring rotation-zero MX/MY.
     panel_.sendCommand(ST77XX_MADCTL,&bgr,1);
     panel_.invertDisplay(true); panel_.fillScreen(ST77XX_BLACK);
     digitalWrite(DISPLAY_BACKLIGHT,LOW); initialized_ = true;

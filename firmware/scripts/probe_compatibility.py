@@ -135,19 +135,28 @@ int main() {
     const std::vector<uint8_t> expected{0x01,0x11,0x3a,0x36,0x2a,0x2b,0x21,0x13,0x29,0x36,0x36,0x36};
     assert(display.panel_.commands == expected);
     for (auto frequency : display.panel_.frequencies) assert(frequency <= 20000000);
-    assert(display.panel_.madctl == 0xc8 && display.panel_._xstart == 0 && display.panel_._ystart == 80);
+    assert(display.panel_.rotation == 2);
+    assert(display.panel_.madctl == 0x08 && display.panel_._xstart == 0 && display.panel_._ystart == 0);
     display.panel_.setAddrWindow(0,0,240,240);
-    assert(display.panel_.windowWords == std::vector<uint32_t>({0x000000ef,0x0050013f}));
+    assert(display.panel_.windowWords == std::vector<uint32_t>({0x000000ef,0x000000ef}));
     display.panel_.windowWords.clear();
     display.panel_.setAddrWindow(0,239,240,1);
-    assert(display.panel_.windowWords == std::vector<uint32_t>({0x000000ef,0x013f013f}));
+    assert(display.panel_.windowWords == std::vector<uint32_t>({0x000000ef,0x00ef00ef}));
     display.panel_.windowWords.clear();
     display.panel_.setAddrWindow(48,4,144,144);
-    assert(display.panel_.windowWords == std::vector<uint32_t>({0x003000bf,0x005400e3}));
+    assert(display.panel_.windowWords == std::vector<uint32_t>({0x003000bf,0x00040093}));
+    struct Corner { uint16_t x, y; uint32_t column, row; };
+    const Corner corners[] = {{0,0,0x00000000,0x00000000}, {239,0,0x00ef00ef,0x00000000},
+                              {0,239,0x00000000,0x00ef00ef}, {239,239,0x00ef00ef,0x00ef00ef}};
+    for (const auto& corner : corners) {
+        display.panel_.windowWords.clear();
+        display.panel_.setAddrWindow(corner.x,corner.y,1,1);
+        assert(display.panel_.windowWords == std::vector<uint32_t>({corner.column,corner.row}));
+    }
     std::printf("{\"initializationRequestedHz\":%u,\"drawingRequestedHz\":%u,"
-                "\"madctl\":%u,\"columnOffset\":%u,\"rowOffset\":%u}\n",
+                "\"rotation\":%u,\"madctl\":%u,\"columnOffset\":%u,\"rowOffset\":%u}\n",
                 display.panel_.initializationFrequency, display.panel_.busFrequency,
-                display.panel_.madctl, display.panel_._xstart, display.panel_._ystart);
+                display.panel_.rotation, display.panel_.madctl, display.panel_._xstart, display.panel_._ystart);
 }
 '''
     return runProbe(directory, "display-probe", source)

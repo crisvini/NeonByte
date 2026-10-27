@@ -4,6 +4,11 @@
 testable corrections identified in [the investigation](ota-compatibility-investigation.md).
 No clock was accessed and no installation-ready image or private identity was created.
 
+**Later orientation correction (2026-10-27):** the maintainer reported upside-down
+text on the real SD PRO. The [display correction](display-orientation-correction.md)
+supersedes this report's historical rotation-zero profile with rotation 2,
+MADCTL `0x08` and offsets 0/0. SPI, pins, BGR and inversion remain unchanged.
+
 ## Display Initialization and Trace
 
 `BoundedDisplayPanel` overrides the pinned Adafruit library's virtual `begin()`

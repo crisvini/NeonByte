@@ -97,9 +97,17 @@ void testDisplayInitializationUsesBoundedSpiAndRetainsProvisionalProfile() {
     TEST_ASSERT_EQUAL_UINT32(20000000, display_test::panelState.initializationFrequency);
     TEST_ASSERT_EQUAL_UINT32(20000000, display_test::panelState.drawingFrequency);
     TEST_ASSERT_EQUAL_UINT8(SPI_MODE3, display_test::panelState.mode);
-    TEST_ASSERT_EQUAL_UINT8(0, display_test::panelState.rotation);
-    TEST_ASSERT_EQUAL_HEX8(0xc8, display_test::panelState.madctl);
     TEST_ASSERT_TRUE(display_test::panelState.inverted);
+}
+
+void testDisplayHalfTurnRetainsBgrWithoutOverridingRotation() {
+    display_test::panelState = {};
+    PersistentStorage storage;
+    DeviceDisplay display(storage);
+    display.begin();
+    TEST_ASSERT_EQUAL_UINT8(2, display_test::panelState.rotation);
+    // BGR stays selected, with neither axis mirrored and no axis exchange.
+    TEST_ASSERT_EQUAL_HEX8(0x08, display_test::panelState.madctl);
 }
 
 } // namespace
@@ -109,5 +117,6 @@ int main() {
     RUN_TEST(testGifFrameDelayAndLoopingUseDeviceDisplayTick);
     RUN_TEST(testSlowFrameRenderingDoesNotAddASecondFullDelay);
     RUN_TEST(testDisplayInitializationUsesBoundedSpiAndRetainsProvisionalProfile);
+    RUN_TEST(testDisplayHalfTurnRetainsBgrWithoutOverridingRotation);
     return UNITY_END();
 }
