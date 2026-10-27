@@ -147,7 +147,7 @@ runtime flash measurements are authoritative; do not hard-code the SD PRO
 model's name or assume its flash capacity.
 
 The write/erase range is the sector-rounded raw staging interval ending at
-`FS_start`. The intended eboot destination is `[0, exactLength)`, which
+`FS_start`. The actual eboot destination is sector-rounded `[0, roundedCandidate)`, which
 replaces the running application in place and provides no rollback slot. Before
 implementation, map and check all layout-reserved areas: the current sketch,
 LittleFS, EEPROM emulation, SDK/RF data, and flash tail. Do not erase or write

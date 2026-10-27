@@ -34,7 +34,13 @@ The [independent compatibility investigation](ota-compatibility-investigation.md
 
 The [final OTA safety audit](final-ota-safety-audit.md) corrects failed HTTP-listener startup/retry, automatic initialization before recovery networking, incomplete AP readback, and missing cooperative points in raw update verification. Its fresh offline stock probe confirms that the old image's valid legacy CRC and hypothetical staging fit do not make it acceptable to the current strict modern-image routes. A separate live return-to-stock operation is technically plausible while NeonByte works, but remains unimplemented and hardware-unverified. It would restore boot/application bytes only, replace the boot sector, and expose an interruption window with no independent Wi-Fi rescue. It cannot replace a complete unit backup or failed-boot recovery. **NO-GO remains unchanged.**
 
-## Part 6 Decision Gate
+## Final Offline Preparation Update
+
+The [final preparation report](final-offline-preparation.md) supersedes the earlier unimplemented-restoration statements above. A separate `PUT /maintenance/v1/stock-firmware` route is now implemented and tested offline. It requires recovery authentication, a paused application, the existing OTA gate and a new stock-restoration gate disabled by default. It pins the V1.0.6 length/SHA-256, verifies actual staged bytes and strict legacy structure/CRC, rechecks exact runtime geometry and uses the existing fail-closed raw transaction. The modern firmware validators and routes remain unchanged. No restore was executed on hardware.
+
+This restores only the allowlisted boot/application image while NeonByte is working; it cannot restore missing stock data or recover a nonbooting device. The full-backup and independent Wi-Fi failed-boot rescue gates remain blocked. The [conditional physical checklist](pre-installation-checklist.md) is a review artifact requested by the maintainer, not permission or eligibility to install. **NO-GO remains unchanged.**
+
+## Part 6 Decision Gate (Historical Assessment)
 
 The 2026-10-27 review found no newly supplied exact-unit evidence. The published stock image is not a unit-specific backup; host-tested maintenance OTA still requires an already-running application and has not been validated on an identical spare. There is no documented independent Wi-Fi rescue service for a failed application or boot copy. Installation and physical validation therefore remain **NO-GO**. See the [dated evidence checklist and minimum next actions](installation-go-no-go.md).
 

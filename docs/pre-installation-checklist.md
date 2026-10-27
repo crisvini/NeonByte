@@ -1,0 +1,50 @@
+# SD PRO Pre-Installation Checklist and Conditional Physical Test Proposal
+
+**Decision: NO-GO. Nothing in this document authorizes device contact or installation.** The maintainer requested a progressive proposal only. All physical items below are unrun. The final offline evidence is in [the preparation report](final-offline-preparation.md).
+
+## Mandatory Evidence Before Any Installation
+
+- [ ] Tie the project unit and an identical spare to a documented PCB revision/component population, including power, flash manufacturer/capacity and boot straps.
+- [ ] Establish the display controller, MOSI/SCLK/MISO/CS/DC/reset/backlight wiring, polarity, command profile, orientation, offsets and safe power/SPI settings. Other SD PRO reports are insufficient.
+- [ ] Identify the actual installed stock version and obtain matching, already-saved or vendor-supplied browser assets and verifier rules. V1.0.6 is the only supported return image; confirm it is appropriate for this revision and the intended original version.
+- [ ] Establish the complete physical flash map, including application/staging, filesystem, settings/activation, EEPROM, RF/SDK and flash tail, and the preservation requirements for each.
+- [ ] Obtain a vendor-documented coherent, nonmutating full-flash Wi-Fi export and a matching full-region restore method. Validate coverage and integrity; retain encrypted unit-specific backups outside Git. Neither method is established today. Do not install a dumper to manufacture this prerequisite.
+- [ ] Prove an independently booting Wi-Fi recovery mechanism that remains available after a failed main application or interrupted boot copy. It must already exist or be established through a separately approved architecture; the NeonByte AP does not qualify.
+- [ ] Establish restoration/recovery on an identified identical spare under separate operation-specific authorization. Do not use the project unit to discover whether rescue exists.
+- [ ] Review private identity generation, secure operator delivery/retention, candidate custody and future identity preservation. No private identity or installation candidate was generated in this cycle.
+- [ ] Separately authorize preparation of an exact confidential candidate and its non-secret manifest. Require complete modern E9 image, correct verified geometry, modern CRC, SHA-256 and no trailer/filesystem payload; at most 458,752 bytes under the existing first-install policy.
+- [ ] Require `NEONBYTE_MAINTENANCE_ON_BOOT=1` on that future candidate so every cold/warm boot remains in maintenance until an authenticated action. Do not rely on racing the ten-second default timer. Do not change the public provisional default or deploy either compilation artifact.
+- [ ] Review enabled features for that exact candidate: recovery identity, OTA, separate stock-restoration gate if needed, and display only after its wiring is established. Retain all existing deployment safeguards until a separately authorized operation provides its own reviewed execution mechanism.
+- [ ] Define how real heap, largest free allocation, stack high-water mark and reset cause will be observed without exposing secrets. The current maintenance status returns booleans; no heap/stack telemetry or stock export endpoint is invented here.
+- [ ] Obtain an explicit authorization naming the unit/spare, exact operation and artifact SHA-256 after all gates pass. Approval of this document alone is insufficient.
+
+**Current hard stop:** backup/full restore, independent failed-boot rescue, exact hardware/version/verifier and an identical spare remain unsupported. No physical installation is eligible under the current policy. If those cannot be established, keep the project unit on stock firmware.
+
+## Progressive Physical Validation Proposal
+
+Every stage requires the preceding evidence and its own bounded authorization. Stop on any unexpected result. The stages describe future acceptance criteria, not commands to execute now.
+
+| Stage | Proposed action after explicit authorization | Required evidence/result | Stop condition |
+|---|---|---|---|
+| 0: Existing evidence, offline | Review already-held photos, version records, saved UI files, source/artifacts and vendor documentation | Complete exact-unit evidence checklist above | An unknown mandatory item keeps NO-GO; no probing to guess it |
+| 1: Nonmutating observation | Observe ordinary existing display/labels and, only if documented nonmutating for this exact version, approved stock status/UI access | Record identity, normal display behavior and exact version without Save/Reset/Update or provisioning changes | Unclear route/JavaScript side effects, need to open the enclosure, change Wi-Fi or invoke a diagnostic action |
+| 2: Documented export and rescue evidence | Perform only an approved, existing nonmutating full export; inspect backup integrity/coverage offline; review independently retained rescue and the spare's records | Coherent full-region backup, documented restore and independent rescue already validated on an identical spare | Missing export/restore/rescue documentation; partial asset/application export; no spare equivalence |
+| 3: Exact candidate review, offline | Under separate packaging permission, inspect the confidential identity-bearing candidate/manifest and record length/hash/features/geometry | All gates satisfied; operator securely possesses AP password and recovery token; maintenance on every boot; suitable stock image retained | Public compile artifact, missing identity, unknown board, size/CRC/hash/layout mismatch or any unresolved mandatory gate |
+| 4: First installation on the spare only | Separately authorized exact stock-OTA operation using the verified installed browser/envelope and reviewed candidate | Capture transfer result and wait for expected reboot without interrupting power; verify AP before relying on LCD | First unexpected response/timeout, power instability or identity mismatch; do not submit a second image blindly |
+| 5: Maintenance access only | Join the private WPA2 AP; obtain authenticated maintenance status; verify unauthorized status is rejected; wait longer than the startup window | Correct address/DHCP/client access; `applicationRunning=false`, no automatic filesystem/display work, recovery remains reachable | No AP, wrong security, inaccessible token, reset loop, unexpected display/storage activity or unavailable HTTP |
+| 6: RAM-only station provisioning | Explicitly stage temporary Wi-Fi, require fresh association/GotIP and confirm without persistence while retaining AP access | `volatileWifi=true`; AP remains reachable across station channel changes and network loss | Stale connection confirmation, AP loss, resets, secret exposure or inadequate memory |
+| 7: Storage preparation and persistent setup | Only after preservation checks and separate write authorization, request storage preparation, then stage/confirm persistent Wi-Fi | No format; verified stock data remains recoverable; settings survive approved restart; failed save retains previous settings | Incompatible/unmountable volume, undocumented stock changes, low reserve or failed readback. Do not format or delete stock assets |
+| 8: Display and application | With verified wiring and explicit initialization authorization, request application run; check borders/orientation/RGB/backlight, scenes and streaming | Working display plus responsive AP/HTTP; measured memory/stack and no watchdog/reset faults; pause returns to maintenance | Any incorrect pin/power behavior, hang, repeated reset, memory exhaustion, display corruption or loss of maintenance |
+| 9: Application/persistence endurance | Test modes, GIF persistence, Spotify/heartbeat loss, ordinary reconnect/restart and a documented observation period on the spare | Required behavior and measured limits, including extended stability, are satisfied | Any reset/data-loss/reachability defect; no deliberate corruption, power cut or nonbooting image |
+| 10: Maintenance update and return-to-stock on the spare | Separately authorize each exact update/restore. Pause first. For stock use only the pinned V1.0.6 image through the separate authenticated route with both gates enabled | Verified staging/readback; successful reboot; normal stock UI/settings and preserved data compared with pretest records | Unexpected transfer/result/boot. After activation a lost HTTP response is not cancellation. NeonByte routes/credentials disappear on successful stock replacement |
+| 11: Project-unit decision | Review complete spare results, unit equivalence, backup/rescue and exact candidate again | Fresh documented GO eligibility plus a new explicit authorization for this unit and operation | Any unresolved item or failed spare criterion keeps NO-GO; spare success alone is insufficient |
+
+No upload command, automatic discovery, partition migration, flashing utility, or secret is included. Where diagnostics/export/rescue are unavailable, the acceptance criterion remains pending; an imaginary endpoint or future unreviewed firmware is not evidence.
+
+## First Irreversible Point
+
+The last safe stop is **before starting any firmware upload**, including selecting a file if the original UI submits it automatically. On the stock updater, accepting and streaming the first OTA body can erase/program the staging area before full reception or verification. This is the first persistent flash mutation and already changes the original full-flash state. A rejected or cancelled upload is not proof that nothing changed.
+
+The higher-consequence point follows successful activation and reboot: eboot erases/copies sector-rounded bytes over the existing boot/application. A power cut or write failure there can leave no bootable Wi-Fi service. Returning to stock rewrites the differing boot sector and has the same risk. Checksums and an intact backup cannot supply an executing recovery service after that failure.
+
+Do not deliberately cut power, install corrupt/nonbooting firmware, alter boot pins, or test erase behavior on the project unit. This proposal authorizes none of those actions on a spare either.

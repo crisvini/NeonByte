@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import os
 import struct
 import subprocess
 import tempfile
@@ -118,14 +119,23 @@ int main(int argc, char** argv) {
     with tempfile.TemporaryDirectory(prefix="neonbyte-stock-restore-probe-") as directory:
         code, binary = Path(directory) / "probe.cpp", Path(directory) / "probe"
         code.write_text(source, encoding="utf-8")
-        subprocess.run(["c++", "-std=c++17", "-Wall", "-Wextra", "-Werror", "-I" + str(repository / "firmware/include"),
+        sanitizerFlags = (["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie"]
+                          if os.environ.get("NEONBYTE_PROBE_SANITIZERS") == "1" else [])
+        subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-Wall", "-Wextra", "-Werror", *sanitizerFlags, "-I" + str(repository / "firmware/include"),
                         str(code), *(str(repository / "firmware/src" / (name + ".cpp"))
-                                     for name in ("firmware_image", "ota_staging", "http_headers", "transfer")),
+                                     for name in ("firmware_image", "ota_staging", "http_headers", "transfer", "stock_restore")),
                         "-o", str(binary)], check=True)
         completed = subprocess.run([str(binary), str(args.stockImage.resolve()), str(args.current_sketch_bytes)],
                                    check=True, capture_output=True, text=True)
         result["hostProbe"] = json.loads(completed.stdout)
-    result["restorationImplemented"] = False
+        subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-Wall", "-Wextra", "-Werror", *sanitizerFlags,
+                        "-I" + str(repository / "firmware/include"), str(repository / "firmware/scripts/validate_stock_transaction.cpp"),
+                        *(str(repository / "firmware/src" / (name + ".cpp"))
+                          for name in ("firmware_image", "ota_staging", "http_headers", "transfer", "stock_restore", "hash_job")),
+                        "-lcrypto", "-o", str(binary)], check=True)
+        subprocess.run([str(binary), str(args.stockImage.resolve())], check=True)
+    result["restorationImplementedOffline"] = True
+    result["restorationHardwareValidated"] = False
     result["installationApproved"] = False
     print(json.dumps(result, indent=2))
 

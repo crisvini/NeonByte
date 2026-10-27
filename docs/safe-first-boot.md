@@ -51,6 +51,8 @@ The RTC marker is not a rollback slot, a durable flash boot counter, or proof ag
 
 ### Maintenance Routes
 
+The subsequent [final preparation](final-offline-preparation.md) adds separately gated live stock restoration and records fresh resource/test results. A future first-install candidate must explicitly select maintenance on every boot; the public provisional default remains unchanged. Neither public compile profile is an installation candidate.
+
 These are additive device extensions outside the API v1 contract. All responses carry `Cache-Control: no-store`. Errors use the existing v1 error shape/codes; no response contains submitted credentials. Requests use strict HTTP/1.1 framing, exact `Content-Length`, no chunking, and no `Expect`.
 
 | Method | Route | Request and result |
@@ -63,6 +65,7 @@ These are additive device extensions outside the API v1 contract. All responses 
 | POST | `/maintenance/v1/run` | Empty body; explicitly try guarded storage/configuration/application initialization; 204, 409 for unavailable storage/configuration, or 500 for allocation/start failure |
 | POST | `/maintenance/v1/pause` | Empty body; 204 disables automatic/application display work until explicitly resumed or a clean boot |
 | PUT | `/maintenance/v1/firmware` | Recovery-authenticated, gated raw sketch staging; application must be paused; exact length, SHA-256, E9 image, CRC, and runtime geometry are checked before activation |
+| PUT | `/maintenance/v1/stock-firmware` | Separate recovery-authenticated raw restoration of only the pinned original V1.0.6; requires paused application, OTA and stock-restoration gates, actual staged SHA-256, strict legacy validation and exact rechecked 4m3m geometry |
 
 The operator keeps the AP session, stages Wi-Fi, checks status, and explicitly confirms after testing reachability. Confirmation requires a successful disconnect request, exact readback of the requested SDK SSID/password before connecting, and fresh matching association and GotIP events for the current credential attempt, as well as live station status. Merely reading `WiFi.SSID()` is insufficient because the pinned SDK accessor returns configured credentials. Beginning another attempt, including a changed password on the same SSID, invalidates earlier evidence. SDK event ordering is still a hardware validation item. A wrong SSID, failed association, lost response, malformed form, or failed persistent write does not remove the recovery AP. Wi-Fi confirmation proves association, not Internet access or long-term LAN reachability. Open station networks are accepted by the existing form policy; use a trusted protected network when confidentiality matters.
 

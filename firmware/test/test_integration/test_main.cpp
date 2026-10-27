@@ -7,6 +7,7 @@
 #include "neonbyte/firmware_image.h"
 #include "neonbyte/ota_staging.h"
 #include "neonbyte/safe_startup.h"
+#include "neonbyte/stock_restore.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -151,16 +152,21 @@ public:
 };
 class FixtureDigest : public ContentDigest {
 public:
-    explicit FixtureDigest(const std::vector<std::uint8_t>& expected) : expected_(expected) {}
+    explicit FixtureDigest(const std::vector<std::uint8_t>& expected, std::string_view hash = HASH) : expected_(expected), hash_(hash) {}
     void reset() override { offset_ = 0; matches_ = true; }
     void update(const std::uint8_t* bytes, std::size_t length) override {
         if (offset_ > expected_.size() || length > expected_.size()-offset_ ||
             !std::equal(bytes,bytes+length,expected_.begin()+offset_)) matches_ = false;
         offset_ += length;
     }
-    void finish(char* hex64) override { std::fill_n(hex64,64,matches_ && offset_ == expected_.size() ? 'a' : 'b'); }
+    void finish(char* hex64) override {
+        if (matches_ && offset_ == expected_.size()) std::copy(hash_.begin(),hash_.end(),hex64);
+        else std::fill_n(hex64,64,'b');
+    }
+    void expectHash(std::string_view hash) { hash_ = hash; }
 private:
     const std::vector<std::uint8_t>& expected_;
+    std::string hash_;
     std::size_t offset_ = 0;
     bool matches_ = true;
 };
@@ -319,12 +325,13 @@ std::vector<std::uint8_t> validMaintenanceImage() {
     return image;
 }
 bool streamMaintenanceImage(MaintenanceOtaTransaction& transaction, ContentDigest& digest, const std::vector<std::uint8_t>& image,
-                            std::string_view requestHash = HASH, std::size_t chunkSize = 512) {
+                            std::string_view requestHash = HASH, std::size_t chunkSize = 512,
+                            std::string_view path = "/maintenance/v1/firmware") {
     FakeUploadStorage storage;
     Sink storageSink;
     Transfer storageTransfer(storageSink), maintenanceTransfer(transaction);
-    if (!prepareUploadStorage("/maintenance/v1/firmware",[&] { return storage.selectAsset(); }) || storage.selectionCalls ||
-        &selectUploadTransfer("/maintenance/v1/firmware",storageTransfer,maintenanceTransfer) != &maintenanceTransfer) return false;
+    if (!prepareUploadStorage(path,[&] { return storage.selectAsset(); }) || storage.selectionCalls ||
+        &selectUploadTransfer(path,storageTransfer,maintenanceTransfer) != &maintenanceTransfer) return false;
     if (!transaction.setExpectedHash(requestHash)) return false;
     if (!maintenanceTransfer.begin(image.size(),FIRMWARE_BYTES_LIMIT,requestHash)) return false;
     for (std::size_t offset=0;offset<image.size();) {
@@ -340,6 +347,146 @@ bool streamMaintenanceImage(MaintenanceOtaTransaction& transaction, ContentDiges
     std::array<char,64> actualHash{};
     digest.finish(actualHash.data());
     return maintenanceTransfer.finish({actualHash.data(),actualHash.size()},true);
+}
+std::vector<std::uint8_t> syntheticLegacyImage() {
+    // Public test-only bytes, not the vendor image or its SHA-256.
+    std::vector<std::uint8_t> bytes(488304,0);
+    const auto put32 = [&](unsigned offset, std::uint32_t value) {
+        for (unsigned i=0;i<4;++i) bytes[offset+i] = value >> (8*i);
+    };
+    const std::uint8_t boot[] = {0xe9,1,2,0x40,0x5c,0xf4,0x10,0x40};
+    const std::uint8_t app[] = {0xe9,5,2,0x40,0xb8,0,0x10,0x40};
+    std::copy_n(boot,8,bytes.data()); std::copy_n(app,8,bytes.data()+0x1000);
+    put32(8,0x4010f000); put32(12,0xe00); bytes[0xe1f] = 0xef;
+    std::fill(bytes.begin()+0xe20,bytes.begin()+0xff8,0xaa);
+    const std::uint32_t segments[][2] = {{0x40201010,0x6d04c},{0x40100000,0x104},
+        {0x40100104,0x7044},{0x3ffe8000,0x6c8},{0x3ffe86d0,0x1ad8}};
+    unsigned position = 0x1008;
+    for (const auto& segment : segments) {
+        put32(position,segment[0]); put32(position+4,segment[1]); position += 8+segment[1];
+    }
+    bytes[0x1010] = 1; bytes[0x7736f] = 0xee;
+    put32(0xff8,488304); put32(0xffc,0xba7a3840); // Independently calculated fixture CRC.
+    return bytes;
+}
+void testLegacyStockValidationIsSeparateAndRejectsCorruption() {
+    Bytes source; source.bytes = syntheticLegacyImage();
+    TEST_ASSERT_TRUE(validateLegacyStockImage(source));
+    TEST_ASSERT_FALSE(validateEsp8266Image(source));
+    TEST_ASSERT_FALSE(validateArduinoImageCrc(source));
+    for (const auto offset : {0U,1U,2U,3U,4U,8U,12U,16U,0xe10U,0xe1fU,0xe20U,0xff8U,0xffcU,
+         0x1000U,0x1001U,0x1002U,0x1003U,0x1004U,0x1008U,0x100cU,0x1010U,
+         0x6e05cU,0x6e060U,0x6e168U,0x751b4U,0x75884U,0x77364U,0x7736fU}) {
+        source.bytes[offset] ^= 1;
+        TEST_ASSERT_FALSE(validateLegacyStockImage(source)); source.bytes[offset] ^= 1;
+    }
+    source.failRead = true; TEST_ASSERT_FALSE(validateLegacyStockImage(source));
+    source.failRead = false; source.bytes.push_back(0); TEST_ASSERT_FALSE(validateLegacyStockImage(source));
+    source.bytes.resize(488303); TEST_ASSERT_FALSE(validateLegacyStockImage(source));
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(256,source.largestRead);
+}
+void testStockRestoreAdmissionRequiresBothGatesAndPinnedRequest() {
+    for (unsigned fault=0;fault<9;++fault) {
+        const auto result = stockRestoreAdmission(fault != 0,fault != 1,fault != 2,fault != 3,
+            fault == 4 ? HttpMethod::post : HttpMethod::put,
+            fault == 5 ? "text/plain" : "application/octet-stream",
+            fault == 6 ? 488303 : fault == 7 ? 524289 : 488304,
+            fault == 8 ? std::string_view(HASH) : STOCK_V106_SHA256);
+        TEST_ASSERT_TRUE(result != OtaAdmissionError::none);
+    }
+    TEST_ASSERT_EQUAL(OtaAdmissionError::none,stockRestoreAdmission(true,true,true,true,
+        HttpMethod::put,"application/octet-stream",488304,STOCK_V106_SHA256));
+    TEST_ASSERT_TRUE(isStockRestorePath("/maintenance/v1/stock-firmware"));
+    TEST_ASSERT_FALSE(isStockRestorePath("/maintenance/v1/firmware"));
+    TEST_ASSERT_FALSE(isMaintenanceFirmwarePath("/maintenance/v1/stock-firmware"));
+    TEST_ASSERT_FALSE(isStockRestorePath("/maintenance/v1/stock-firmware/"));
+    for (unsigned fault=0;fault<4;++fault) {
+        FakeOtaBackend backend;
+        if (fault == 0) backend.flashGeometry.filesystemStartOffset = 0x200000;
+        if (fault == 1) backend.flashGeometry.filesystemEndOffset = 0x3f9000;
+        if (fault == 2) backend.flashGeometry.eepromStartOffset = 0x3fa000;
+        if (fault == 3) backend.flashGeometry.physicalFlashBytes = 0x200000;
+        const auto image = syntheticLegacyImage(); FixtureDigest digest(image,STOCK_V106_SHA256);
+        MaintenanceOtaTransaction transaction(backend,digest,MaintenanceImageKind::stockV106);
+        TEST_ASSERT_TRUE(transaction.setExpectedHash(STOCK_V106_SHA256));
+        TEST_ASSERT_FALSE(transaction.begin(image.size()));
+        TEST_ASSERT_EQUAL_UINT32(0,backend.begins); assertNoOtaFailureMutation(backend,transaction);
+    }
+}
+void testStockRestoreVerifiesReadbackAndPreservesReservedRegionsAndRtc() {
+    const auto image = syntheticLegacyImage();
+    FakeRtcMemory rtc{}; rtc.fill(0xa5); FakeStartupServices services(rtc);
+    SafeStartup startup(services,{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                                  "fedcba9876543210fedcba9876543210"});
+    startup.begin(0,false,true);
+    FakeOtaBackend backend(rtc); FixtureDigest digest(image,STOCK_V106_SHA256);
+    MaintenanceOtaTransaction transaction(backend,digest,MaintenanceImageKind::stockV106);
+    TEST_ASSERT_TRUE(streamMaintenanceImage(transaction,digest,image,STOCK_V106_SHA256,512,"/maintenance/v1/stock-firmware"));
+    TEST_ASSERT_EQUAL_UINT32(1,backend.bootCopyCommands);
+    TEST_ASSERT_TRUE(backend.verifiedBeforeBootCopy); TEST_ASSERT_TRUE(backend.reservedFlashUnchanged());
+    TEST_ASSERT_EQUAL_UINT32(0x88000,backend.bounds.start); TEST_ASSERT_EQUAL_UINT32(0x78000,backend.bounds.roundedLength);
+    startup.tick(120000);
+    TEST_ASSERT_TRUE(backend.ebootCommandPresent()); TEST_ASSERT_EQUAL_UINT32(0,services.guardWrites);
+    TEST_ASSERT_EQUAL_UINT32(0,services.storageMounts); TEST_ASSERT_TRUE(maintenanceOtaRestartAllowed(transaction.state()));
+    // The same legacy bytes must never acquire stock eligibility on modern OTA.
+    FakeOtaBackend modernBackend; FixtureDigest modernDigest(image,STOCK_V106_SHA256);
+    MaintenanceOtaTransaction modern(modernBackend,modernDigest);
+    TEST_ASSERT_FALSE(streamMaintenanceImage(modern,modernDigest,image,STOCK_V106_SHA256));
+    assertNoOtaFailureMutation(modernBackend,modern);
+}
+void testStockRestoreFailureMatrixNeverActivates() {
+    const auto image = syntheticLegacyImage();
+    for (unsigned fault=0;fault<15;++fault) {
+        auto candidate = image;
+        if (fault == 0) candidate[0x7736f] ^= 1;
+        FakeOtaBackend backend;
+        if (fault == 1) backend.failBegin = true;
+        if (fault == 2) backend.failFinalize = true;
+        if (fault >= 3 && fault <= 5) backend.failWriteOffset = fault == 3 ? 0 : fault == 4 ? 200000 : 488303;
+        if (fault >= 6 && fault <= 8) backend.failReadOffset = fault == 6 ? 0 : fault == 7 ? 200000 : 488303;
+        if (fault == 9) backend.flashGeometry.freeSketchBytes = 0x1000;
+        FixtureDigest digest(candidate,fault == 10 ? std::string_view(HASH) : STOCK_V106_SHA256);
+        MaintenanceOtaTransaction transaction(backend,digest,MaintenanceImageKind::stockV106);
+        if (fault < 11) {
+            TEST_ASSERT_FALSE(streamMaintenanceImage(transaction,digest,candidate,STOCK_V106_SHA256,512,"/maintenance/v1/stock-firmware"));
+        } else {
+            TEST_ASSERT_TRUE(transaction.setExpectedHash(STOCK_V106_SHA256));
+            TEST_ASSERT_TRUE(transaction.begin(candidate.size()));
+            TEST_ASSERT_TRUE(transaction.write(candidate.data(),fault == 11 ? 512 : candidate.size()));
+            if (fault == 12) backend.flash[backend.bounds.start+200000] ^= 1;
+            if (fault == 13) backend.flashGeometry.filesystemEndOffset -= 0x1000;
+            if (fault == 12 || fault == 13) TEST_ASSERT_FALSE(transaction.commit());
+            else transaction.abort(); // Includes complete-but-not-verified cleanup.
+        }
+        assertNoOtaFailureMutation(backend,transaction);
+    }
+    FakeOtaBackend backend; FixtureDigest digest(image,STOCK_V106_SHA256);
+    MaintenanceOtaTransaction transaction(backend,digest,MaintenanceImageKind::stockV106);
+    TEST_ASSERT_FALSE(transaction.setExpectedHash(HASH));
+    TEST_ASSERT_FALSE(transaction.begin(image.size())); TEST_ASSERT_EQUAL_UINT32(0,backend.begins);
+    TEST_ASSERT_TRUE(transaction.setExpectedHash(STOCK_V106_SHA256));
+    TEST_ASSERT_FALSE(transaction.begin(image.size()-1)); TEST_ASSERT_EQUAL_UINT32(0,backend.begins);
+    TEST_ASSERT_TRUE(transaction.begin(image.size())); TEST_ASSERT_TRUE(transaction.write(image.data(),image.size()));
+    const std::uint8_t extra = 0;
+    TEST_ASSERT_FALSE(transaction.write(&extra,1)); assertNoOtaFailureMutation(backend,transaction);
+}
+void testSharedRawBackendCanChangePoliciesAfterAbortedUpload() {
+    for (const bool stockFirst : {false,true}) {
+        auto image = stockFirst ? syntheticLegacyImage() : validMaintenanceImage();
+        const auto firstHash = stockFirst ? STOCK_V106_SHA256 : std::string_view(HASH);
+        FakeOtaBackend backend; FixtureDigest digest(image,firstHash);
+        MaintenanceOtaTransaction first(backend,digest,stockFirst ? MaintenanceImageKind::stockV106 : MaintenanceImageKind::modern);
+        TEST_ASSERT_TRUE(first.setExpectedHash(firstHash)); TEST_ASSERT_TRUE(first.begin(image.size()));
+        TEST_ASSERT_TRUE(first.write(image.data(),128)); first.abort();
+        TEST_ASSERT_FALSE(backend.active); assertNoOtaFailureMutation(backend,first);
+        image = stockFirst ? validMaintenanceImage() : syntheticLegacyImage();
+        const auto secondHash = stockFirst ? std::string_view(HASH) : STOCK_V106_SHA256;
+        digest.expectHash(secondHash);
+        MaintenanceOtaTransaction second(backend,digest,stockFirst ? MaintenanceImageKind::modern : MaintenanceImageKind::stockV106);
+        TEST_ASSERT_TRUE(streamMaintenanceImage(second,digest,image,secondHash,512,
+            stockFirst ? "/maintenance/v1/firmware" : "/maintenance/v1/stock-firmware"));
+        TEST_ASSERT_EQUAL_UINT32(1,backend.bootCopyCommands); TEST_ASSERT_TRUE(backend.reservedFlashUnchanged());
+    }
 }
 void testMaintenanceUploadAndDelayedStartupCannotOverwriteEbootCommand() {
     const auto image = validMaintenanceImage();
@@ -680,5 +827,10 @@ int main(int, char**) {
     RUN_TEST(testMaintenanceOtaDoesNotDependOnLittleFsAndPreservesOtherRegions);
     RUN_TEST(testMaintenanceOtaRejectsIncompleteExtraAndCompleteInvalidCandidates);
     RUN_TEST(testMaintenanceOtaRejectsGeometryWriteAndReadFaultsWithoutMutation);
+    RUN_TEST(testLegacyStockValidationIsSeparateAndRejectsCorruption);
+    RUN_TEST(testStockRestoreAdmissionRequiresBothGatesAndPinnedRequest);
+    RUN_TEST(testStockRestoreVerifiesReadbackAndPreservesReservedRegionsAndRtc);
+    RUN_TEST(testStockRestoreFailureMatrixNeverActivates);
+    RUN_TEST(testSharedRawBackendCanChangePoliciesAfterAbortedUpload);
     return UNITY_END();
 }

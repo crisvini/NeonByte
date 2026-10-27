@@ -8,6 +8,8 @@ NeonByte is an open-source project planned for a JUZIPi SD PRO Wi-Fi display and
 
 The [final OTA safety audit](docs/final-ota-safety-audit.md) records offline startup/recovery corrections, test evidence, and the remaining first-installation and return-to-stock blockers. Installation remains **NO-GO**.
 
+The subsequent [final offline preparation](docs/final-offline-preparation.md) implements a separate authenticated return to the pinned vendor V1.0.6 while NeonByte is running. It includes failure tests, remaining risks and a [conditional physical checklist](docs/pre-installation-checklist.md). It does not provide independent boot recovery or change NO-GO.
+
 **Phases 1, 2, and 3 are complete.** The Node.js/TypeScript Spotify agent uses OAuth PKCE, polling, and state compatible with the v1 contract. The local interface includes a responsive 240 × 240 simulator, Spotify and looping GIF previews, display modes, uploads, and demo data. Real-account OAuth validation still requires configured Spotify credentials. Phase 4 includes the native C++ core and previously compiled ESP8266 runtime adapters under provisional assumptions. The [PC-only validation](docs/offline-validation.md) connects an explicitly constructed agent client to that core through loopback HTTP v1; production LAN synchronization remains Phase 5 work. No device has been contacted, flashed, or updated. These software checks do not establish hardware compatibility.
 
 The 240 × 240 resolution is a planning expectation, not a measurement of this unit. See [hardware investigation](docs/hardware.md) before any work that depends on the board.

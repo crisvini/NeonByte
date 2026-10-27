@@ -16,7 +16,8 @@ void DeviceHttpServer::close() {
     activeTransfer_->abort(); hashJob_.reset(); fileHashSource_.reset(); hashSource_ = nullptr; client_.stop(); body_.reset();
     headerSize_ = received_ = sent_ = 0;
     activeTransfer_ = &transfer_;
-    finalizing_ = readingBody_ = sending_ = binary_ = firmware_ = maintenanceFirmware_ = false;
+    activeRawOta_ = &maintenanceOta_;
+    finalizing_ = readingBody_ = sending_ = binary_ = firmware_ = maintenanceFirmware_ = stockRestore_ = false;
 }
 void DeviceHttpServer::error(unsigned status, const char* code, const char* message) {
     activeTransfer_->abort(); hashJob_.reset(); fileHashSource_.reset(); hashSource_ = nullptr; finalizing_ = false; response_ = {}; response_.statusCode = status;
@@ -34,20 +35,25 @@ void DeviceHttpServer::prepareResponse() {
 void DeviceHttpServer::headersComplete() {
     if (!headers_.parse({headerBytes_.data(),headerSize_})) { error(400,"invalid_request","Use unambiguous HTTP/1.1 framing and Content-Length."); return; }
     maintenance_ = headers_.path.substr(0,16) == "/maintenance/v1/";
-    firmware_ = headers_.path == "/api/v1/firmware" || headers_.path == "/maintenance/v1/firmware";
-    maintenanceFirmware_ = isMaintenanceFirmwarePath(headers_.path);
+    stockRestore_ = isStockRestorePath(headers_.path);
+    maintenanceFirmware_ = isRawMaintenanceUploadPath(headers_.path);
+    firmware_ = headers_.path == "/api/v1/firmware" || maintenanceFirmware_;
     if (maintenanceFirmware_) {
-        const auto admission = maintenanceOtaAdmission(startup_.authorized(headers_.authorization),startup_.applicationPaused(),
-            NEONBYTE_ENABLE_OTA != 0,headers_.method,headers_.contentType,headers_.contentLength,headers_.sha256);
+        const auto admission = stockRestore_
+            ? stockRestoreAdmission(startup_.authorized(headers_.authorization),startup_.applicationPaused(),
+                NEONBYTE_ENABLE_OTA != 0,NEONBYTE_ENABLE_STOCK_RESTORE != 0,
+                headers_.method,headers_.contentType,headers_.contentLength,headers_.sha256)
+            : maintenanceOtaAdmission(startup_.authorized(headers_.authorization),startup_.applicationPaused(),
+                NEONBYTE_ENABLE_OTA != 0,headers_.method,headers_.contentType,headers_.contentLength,headers_.sha256);
         switch (admission) {
             case OtaAdmissionError::none: break;
             case OtaAdmissionError::unauthorized: error(401,"unauthorized","A valid recovery bearer token is required."); return;
             case OtaAdmissionError::applicationRunning: error(409,"conflict","Pause the application before a maintenance firmware upload."); return;
-            case OtaAdmissionError::disabled: error(409,"conflict","OTA is disabled pending installation and recovery validation."); return;
+            case OtaAdmissionError::disabled: error(409,"conflict","The requested update operation is disabled pending installation and recovery validation."); return;
             case OtaAdmissionError::method: error(400,"invalid_request","The upload route requires PUT."); return;
             case OtaAdmissionError::mediaType: error(415,"unsupported_media_type","Upload application/octet-stream."); return;
             case OtaAdmissionError::tooLarge: error(413,"payload_too_large","The asset exceeds this build's upload limit."); return;
-            case OtaAdmissionError::invalidBody: error(400,"invalid_request","Provide a nonzero length and lowercase SHA-256."); return;
+            case OtaAdmissionError::invalidBody: error(400,"invalid_request","Provide the supported image length and lowercase SHA-256."); return;
         }
     } else if (maintenance_ ? !startup_.authorized(headers_.authorization)
         : headers_.path != "/api/v1/status" && !authenticator_.isAuthorized(headers_.authorization)) {
@@ -65,8 +71,9 @@ void DeviceHttpServer::headersComplete() {
         if (!headers_.contentLength || !isSha256(headers_.sha256)) { error(400,"invalid_request","Provide a nonzero length and lowercase SHA-256."); return; }
         if (kind == AssetKind::cover && headers_.contentLength != COVER_BYTES) { error(422,"invalid_content","The cover must be NBIC v1 at 240 by 240."); return; }
         if (!prepareUploadStorage(headers_.path,[&] { return storage_.selectAsset(kind,headers_.trackId); })) { error(400,"invalid_request","Provide a percent-encoded UTF-8 X-Track-Id of 1 to 256 code points."); return; }
-        activeTransfer_ = &selectUploadTransfer(headers_.path,transfer_,maintenanceTransfer_);
-        if (maintenanceFirmware_ && !maintenanceOta_.setExpectedHash(headers_.sha256)) { error(400,"invalid_request","Provide a lowercase SHA-256 digest."); return; }
+        activeRawOta_ = stockRestore_ ? &stockRestoreOta_ : &maintenanceOta_;
+        activeTransfer_ = &selectUploadTransfer(headers_.path,transfer_,stockRestore_ ? stockRestoreTransfer_ : maintenanceTransfer_);
+        if (maintenanceFirmware_ && !activeRawOta_->setExpectedHash(headers_.sha256)) { error(400,"invalid_request","Provide a supported lowercase SHA-256 digest."); return; }
         if (!activeTransfer_->begin(headers_.contentLength,limit,headers_.sha256)) {
             error(409,"conflict",maintenanceFirmware_ ? "Raw flash staging is unavailable for this runtime layout." : "Storage is unavailable or insufficient for atomic replacement."); return;
         }
@@ -103,7 +110,7 @@ void DeviceHttpServer::finishBinary() {
     if (!activeTransfer_->finish({actualHash,sizeof(actualHash)},true)) { error(422,"invalid_content","Checksum validation or atomic installation failed."); return; }
     if (firmware_) {
         if (!maintenanceFirmware_ && !storage_.applyFirmware()) { error(500,"internal_error","Firmware staging was rejected; no restart was requested."); return; }
-        rebootPending_ = !maintenanceFirmware_ || maintenanceOtaRestartAllowed(maintenanceOta_.state());
+        rebootPending_ = !maintenanceFirmware_ || maintenanceOtaRestartAllowed(activeRawOta_->state());
         if (!rebootPending_) { error(500,"internal_error","Firmware staging was rejected; no restart was requested."); return; }
     }
     response_ = {}; response_.statusCode = 204; prepareResponse();
@@ -120,7 +127,7 @@ void DeviceHttpServer::bodyComplete() {
     if (!binary_) { dispatchJson(); return; }
     std::uint32_t prefix = 0;
     if (maintenanceFirmware_) {
-        hashSource_ = &maintenanceOta_;
+        hashSource_ = activeRawOta_;
     } else {
         storage_.sealStaged();
         if (!storage_.validateStaged()) { error(422,"invalid_content","The uploaded asset format is invalid."); return; }

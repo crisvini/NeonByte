@@ -4,6 +4,8 @@
 
 ## Findings and Offline Corrections
 
+**Subsequent authorized cycle:** [final offline preparation](final-offline-preparation.md) implements and fault-tests a separate authenticated legacy stock-restoration route. Statements below that restoration is unimplemented describe this earlier audit. Both modern routes still reject legacy images; independent Wi-Fi failed-boot recovery and full backup remain unestablished, so **NO-GO** is unchanged.
+
 | Finding | Failure consequence | Correction and evidence |
 |---|---|---|
 | HTTP startup discarded the result of listener creation | A transient TCP allocation/bind/listen failure left an AP with no provisioning or updater service for the rest of that boot | `DeviceHttpServer::begin()` now checks listener state. `SafeStartup` retries failed HTTP startup every five seconds, without restarting a successful listener. Native fault injection and the extracted real begin adapter cover failure and retry. |

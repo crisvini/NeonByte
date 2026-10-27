@@ -21,6 +21,8 @@ The [final first-installation safety audit](final-ota-safety-audit.md) records a
 
 ## Mandatory Evidence Checklist
 
+The maintainer subsequently requested [final offline technical preparation](final-offline-preparation.md) and a [conditional physical proposal](pre-installation-checklist.md). A separate authenticated, allowlisted legacy restoration route is now host/compile validated. This closes an offline implementation gap only: installed version, original-data backup/restore, independent failed-boot rescue, exact-unit hardware, private identity/candidate and spare runtime validation remain unsupported. The proposal authorizes no device operation and every mandatory installation gate below remains blocked.
+
 | Requirement | Source-supported | Mock-tested | Real-hardware-tested | Unknown | Gate |
 |---|---|---|---|---|---|
 | Actual installed stock version | The [vendor snapshot](https://github.com/JUZIPi-tech/SD_PRO/tree/5dc22a11d6ca5ffa8cc2aad103cd82e7c77d7e1d) includes V1.0.4 and V1.0.6 artifacts. The [V1.0.6 analysis](stock-firmware-analysis.md) identifies that published file only. | Not applicable. | No installed-version observation is recorded. | Installed version/build and a safe existing version-identification record. | **BLOCKER** |

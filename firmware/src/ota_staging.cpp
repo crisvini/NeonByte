@@ -1,4 +1,5 @@
 #include "neonbyte/ota_staging.h"
+#include "neonbyte/stock_restore.h"
 #include <algorithm>
 #include <limits>
 
@@ -35,7 +36,10 @@ bool isMaintenanceFirmwarePath(std::string_view path) {
 }
 
 Transfer& selectUploadTransfer(std::string_view path, Transfer& storageTransfer, Transfer& maintenanceTransfer) {
-    return isMaintenanceFirmwarePath(path) ? maintenanceTransfer : storageTransfer;
+    return isRawMaintenanceUploadPath(path) ? maintenanceTransfer : storageTransfer;
+}
+bool isRawMaintenanceUploadPath(std::string_view path) {
+    return isMaintenanceFirmwarePath(path) || isStockRestorePath(path);
 }
 
 bool maintenanceOtaBodyHasNoExtraBytes(std::uint32_t received, std::uint32_t expected, std::size_t extraBytes) {
@@ -61,6 +65,7 @@ bool maintenanceOtaRestartAllowed(OtaTransactionState state) {
 
 bool MaintenanceOtaTransaction::setExpectedHash(std::string_view hash) {
     if ((state_ != OtaTransactionState::idle && state_ != OtaTransactionState::failedInactive) || !isSha256(hash)) return false;
+    if (kind_ == MaintenanceImageKind::stockV106 && !stockRestoreRequestMatches(STOCK_V106_BYTES,hash)) return false;
     std::copy(hash.begin(),hash.end(),expectedHash_.begin());
     expectedHashSet_ = true;
     return true;
@@ -74,7 +79,9 @@ bool MaintenanceOtaTransaction::begin(std::uint32_t length) {
     headerReceived_ = 0;
     updaterStarted_ = activationRequested_ = false;
     header_.fill(0);
-    if (!backend_.geometry(geometry_) || !calculateOtaStageBounds(length,geometry_,bounds_)) {
+    if ((kind_ == MaintenanceImageKind::stockV106 && length != STOCK_V106_BYTES) ||
+        !backend_.geometry(geometry_) || !calculateOtaStageBounds(length,geometry_,bounds_) ||
+        (kind_ == MaintenanceImageKind::stockV106 && !stockRestoreGeometryMatches(geometry_))) {
         state_ = OtaTransactionState::failedInactive;
         return false;
     }
@@ -148,6 +155,13 @@ bool MaintenanceOtaTransaction::verifyForActivation() {
     std::array<char,64> actualHash{};
     digest_.finish(actualHash.data());
     if (!std::equal(actualHash.begin(),actualHash.end(),expectedHash_.begin())) return false;
+    if (kind_ == MaintenanceImageKind::stockV106) {
+        OtaGeometry current{}; OtaStageBounds bounds{};
+        return stockRestoreRequestMatches(length_,{actualHash.data(),actualHash.size()}) &&
+            backend_.geometry(current) && stockRestoreGeometryMatches(current) &&
+            calculateOtaStageBounds(length_,current,bounds) && bounds.start == bounds_.start && bounds.end == bounds_.end &&
+            validateLegacyStockImage(*this);
+    }
     return validateEsp8266Image(*this) && validateArduinoImageCrc(*this);
 }
 

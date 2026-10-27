@@ -34,11 +34,12 @@ struct OtaStageBounds {
 
 bool calculateOtaStageBounds(std::uint32_t length, const OtaGeometry& geometry, OtaStageBounds& bounds);
 bool isMaintenanceFirmwarePath(std::string_view path);
+bool isRawMaintenanceUploadPath(std::string_view path);
 bool maintenanceOtaBodyHasNoExtraBytes(std::uint32_t received, std::uint32_t expected, std::size_t extraBytes);
 
 template <typename SelectStorage>
 bool prepareUploadStorage(std::string_view path, SelectStorage&& selectStorage) {
-    return isMaintenanceFirmwarePath(path) || selectStorage();
+    return isRawMaintenanceUploadPath(path) || selectStorage();
 }
 
 Transfer& selectUploadTransfer(std::string_view path, Transfer& storageTransfer, Transfer& maintenanceTransfer);
@@ -59,6 +60,7 @@ OtaAdmissionError maintenanceOtaAdmission(bool authorized, bool applicationPause
                                           std::uint32_t contentLength, std::string_view sha256);
 
 enum class OtaTransactionState { idle, receiving, verifying, activated, failedInactive };
+enum class MaintenanceImageKind { modern, stockV106 };
 bool maintenanceOtaRestartAllowed(OtaTransactionState state);
 
 class OtaCandidateVerifier {
@@ -81,7 +83,8 @@ public:
 
 class MaintenanceOtaTransaction final : public TransferSink, public ImageSource, public OtaCandidateVerifier {
 public:
-    MaintenanceOtaTransaction(OtaFlashBackend& backend, ContentDigest& digest) : backend_(backend), digest_(digest) {}
+    MaintenanceOtaTransaction(OtaFlashBackend& backend, ContentDigest& digest,
+        MaintenanceImageKind kind = MaintenanceImageKind::modern) : backend_(backend), digest_(digest), kind_(kind) {}
 
     bool setExpectedHash(std::string_view hash);
     bool begin(std::uint32_t length) override;
@@ -100,6 +103,7 @@ private:
 
     OtaFlashBackend& backend_;
     ContentDigest& digest_;
+    const MaintenanceImageKind kind_;
     OtaGeometry geometry_{};
     OtaStageBounds bounds_{};
     std::array<std::uint8_t,4> header_{};

@@ -5,6 +5,7 @@
 #include "neonbyte/hash_job.h"
 #include "neonbyte/esp8266/ota_staging.h"
 #include "neonbyte/safe_startup.h"
+#include "neonbyte/stock_restore.h"
 #include <bearssl/bearssl_hash.h>
 #include <ESP8266WiFi.h>
 #include <memory>
@@ -21,7 +22,8 @@ class DeviceHttpServer {
 public:
     DeviceHttpServer(PersistentStorage& storage, SafeStartup& startup, RequestAuthenticator& authenticator)
         : storage_(storage), startup_(startup), authenticator_(authenticator), transfer_(storage),
-          maintenanceOta_(maintenanceBackend_,digest_), maintenanceTransfer_(maintenanceOta_) {}
+          maintenanceOta_(maintenanceBackend_,digest_), maintenanceTransfer_(maintenanceOta_),
+          stockRestoreOta_(maintenanceBackend_,digest_,MaintenanceImageKind::stockV106), stockRestoreTransfer_(stockRestoreOta_) {}
     void setProtocol(ProtocolHandler* protocol) { protocol_ = protocol; }
     bool begin() { server_.begin(); return server_.status() != 0; }
     void tick(std::uint64_t now);
@@ -44,6 +46,9 @@ private:
     Sha256Digest digest_{};
     MaintenanceOtaTransaction maintenanceOta_;
     Transfer maintenanceTransfer_;
+    MaintenanceOtaTransaction stockRestoreOta_;
+    Transfer stockRestoreTransfer_;
+    MaintenanceOtaTransaction* activeRawOta_ = &maintenanceOta_;
     Transfer* activeTransfer_ = &transfer_;
     WiFiServer server_{80};
     WiFiClient client_;
@@ -63,6 +68,7 @@ private:
     std::uint64_t started_ = 0, lastActivity_ = 0, restartAt_ = 0;
     bool maintenance_ = false;
     bool maintenanceFirmware_ = false;
+    bool stockRestore_ = false;
     bool rebootPending_ = false, finalizing_ = false, readingBody_ = false, sending_ = false, binary_ = false, firmware_ = false;
 };
 } // namespace neonbyte
