@@ -1,6 +1,6 @@
 # Device Backup and Recovery
 
-**Status (2026-10-26): BLOCKED for deployment.** The maintainer visually confirmed ESP-12F / ESP8266. No safe Wi-Fi-only backup, first installation, or recovery procedure has been established. No device requests, uploads, flashes, erases, or filesystem changes were performed.
+**Status (2026-10-27): BLOCKED for deployment.** The maintainer visually confirmed ESP-12F / ESP8266 on 2026-10-26. Part 6 recorded **NO-GO** in the [installation decision report](installation-go-no-go.md). No safe Wi-Fi-only backup, first installation, or independent failed-boot recovery procedure has been established. No device requests, uploads, flashes, erases, or filesystem changes were performed.
 
 The [OTA readiness review](ota-readiness-review.md) evaluates which evidence can be collected without device modification and why complete backup and independent Wi-Fi recovery remain unestablished. Its maintenance-only raw staging proposal was implemented offline in Part 4; that work preserves this deployment gate and authorizes no device operation.
 
@@ -29,6 +29,10 @@ The [safe first-boot preparation](safe-first-boot.md) now starts an authenticate
 Configuration readback and atomic rename protect against representative interrupted or failed writes. They do not repair corrupted/unmountable storage. The maintenance raw-staging transaction was fault-tested with native injected backends for unavailable/corrupt/full LittleFS, request and image failures, staging geometry, flash I/O, and fail-closed activation. It checks exact candidate length, request SHA-256, both E9 images, CRC, and checked raw flash reads before `Update.end(false)` can write an eboot command. Its compile-check passed for the existing integration profile. These results do not establish physical flash behavior, filesystem behavior, reset/power-loss safety, or successful boot; runtime staging validation on an identical spare remains pending. RTC/watchdog handling requires an application that boots; it cannot recover a failed bootloader, interrupted boot copy, or nonbooting firmware. Public compile-check artifacts have no usable recovery identity and must never be installed.
 
 The [stock OTA installation research](stock-ota-installation-research.md) documents direct installation and temporary bootstrap examples. Neither supplies independent Wi-Fi boot recovery, and the examined Mini-Display bootstrap changes EEPROM and formats its new filesystem. The existing preservation/recovery gate remains unchanged.
+
+## Part 6 Decision Gate
+
+The 2026-10-27 review found no newly supplied exact-unit evidence. The published stock image is not a unit-specific backup; host-tested maintenance OTA still requires an already-running application and has not been validated on an identical spare. There is no documented independent Wi-Fi rescue service for a failed application or boot copy. Installation and physical validation therefore remain **NO-GO**. See the [dated evidence checklist and minimum next actions](installation-go-no-go.md).
 
 ## Required Evidence Before Deployment
 

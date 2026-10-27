@@ -1,6 +1,6 @@
 # Hardware Investigation
 
-**Status (2026-10-26):** the maintainer visually confirmed an **ESP-12F / ESP8266** module in the project unit. Phase 4 local compilation and provisional adapters are authorized. Display wiring, physical flash capacity, installed layout, power, boot compatibility, backup, and recovery remain **PENDING**. No device endpoint has been contacted and no firmware has been uploaded.
+**Status (2026-10-27):** the maintainer visually confirmed an **ESP-12F / ESP8266** module in the project unit on 2026-10-26. Part 6 concluded **NO-GO**; the [installation decision report](installation-go-no-go.md) records the evidence and blockers. Display wiring, physical flash capacity, installed layout, power, boot compatibility, backup, and recovery remain **PENDING**. No device endpoint has been contacted and no firmware has been uploaded.
 
 ## Evidence and Its Limits
 
