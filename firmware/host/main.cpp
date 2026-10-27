@@ -32,7 +32,7 @@ public:
     std::unique_ptr<ProtocolHandler> protocol;
     BearerTokenAuthenticator auth{IDENTITY.token};
     bool startRecoveryAp(RecoveryIdentity) override { calls += 'N'; return apOk; }
-    void startHttp() override { calls += 'H'; }
+    bool startHttp() override { calls += 'H'; return true; }
     bool mountStorage() override { calls += 'F'; return mountOk && disk.mount(); }
     bool loadWifi(WifiCredentials& value) override {
         calls += 'C'; FileSource source(disk.directory / "wifi.bin");

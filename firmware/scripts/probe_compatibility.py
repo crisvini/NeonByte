@@ -34,7 +34,9 @@ def runProbe(directory, name, source):
                       if os.environ.get("NEONBYTE_PROBE_SANITIZERS") == "1" else [])
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-Wall", "-Wextra",
                     "-Werror", *sanitizerFlags, str(sourcePath), "-o", str(binaryPath)], check=True)
-    result = subprocess.run([str(binaryPath)], check=True, capture_output=True, text=True)
+    result = subprocess.run([str(binaryPath)], capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(f"{name} failed ({result.returncode}): {result.stderr.strip()}")
     return json.loads(result.stdout)
 
 
@@ -230,8 +232,10 @@ def probeAccessPointAdapter(directory, repository):
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include <cstring>
 using std::uint32_t;
-constexpr int HEX = 16, SOFTAP_IF = 1;
+constexpr int HEX = 16, SOFTAP_IF = 1, AUTH_WPA2_PSK = 3, DHCP_STARTED = 1;
+constexpr unsigned WIFI_AP = 2;
 class String : public std::string {
 public:
     using std::string::string;
@@ -247,14 +251,34 @@ private:
     uint32_t value_;
 };
 struct ip_info { struct { uint32_t addr; } ip, gw, netmask; };
+struct softap_config {
+    unsigned char ssid[32]{}, password[64]{};
+    unsigned ssid_len = 0, authmode = AUTH_WPA2_PSK;
+};
+softap_config apConfig{};
+bool configReadOk = true, dhcpRunning = true, modeEnabled = true;
+bool wrongSsid = false, wrongPassword = false, wrongAuth = false;
+bool wifi_softap_get_config(softap_config* value) {
+    *value = apConfig;
+    if (wrongSsid) value->ssid[0] ^= 1;
+    if (wrongPassword) value->password[0] ^= 1;
+    if (wrongAuth) value->authmode = 0;
+    return configReadOk;
+}
+unsigned wifi_softap_dhcps_status() { return dhcpRunning ? DHCP_STARTED : 0; }
 struct FakeEsp { unsigned getChipId() { return 123; } } ESP;
 struct FakeWifi {
     bool startOk = true, configOk = true, disabled = false;
     bool disableOk = true, disableRequested = false;
     bool protectedPassword = false, persistence = false;
     ip_info info{{0x012d170a},{0x012d170a},{0x00ffffff}};
-    bool softAP(const char*, const char* password) {
+    unsigned getMode() { return modeEnabled ? WIFI_AP : 0; }
+    bool softAP(const char* name, const char* password) {
         protectedPassword = std::string(password) == "synthetic-password";
+        apConfig = {};
+        apConfig.ssid_len = std::strlen(name);
+        std::memcpy(apConfig.ssid,name,apConfig.ssid_len);
+        std::memcpy(apConfig.password,password,std::strlen(password));
         return startOk;
     }
     bool softAPConfig(IPAddress ip, IPAddress gateway, IPAddress mask) {
@@ -307,10 +331,97 @@ int main() {
     assert(!services.startRecoveryAp(identity) && WiFi.disabled);
     corruptAddress = false; WiFi = FakeWifi{}; WiFi.configOk = false; WiFi.disableOk = false;
     assert(!services.startRecoveryAp(identity) && WiFi.disableRequested && !WiFi.disabled);
-    std::puts("{\"existingAddressReplaced\":true,\"protectedPassword\":true,\"failurePathsChecked\":true}");
+    for (unsigned failure = 0; failure < 6; ++failure) {
+        WiFi = FakeWifi{};
+        configReadOk = failure != 0; dhcpRunning = failure != 1;
+        modeEnabled = failure != 2; wrongSsid = failure == 3;
+        wrongPassword = failure == 4; wrongAuth = failure == 5;
+        assert(!services.startRecoveryAp(identity) && WiFi.disableRequested);
+    }
+    std::puts("{\"existingAddressReplaced\":true,\"protectedPassword\":true,\"failurePathsChecked\":true,\"securityAndDhcpReadback\":true}");
 }
 '''
     return runProbe(directory, "ap-adapter-probe", source)
+
+
+def probeRecoveryAdapters(directory, repository):
+    httpHeader = (repository / "firmware/include/neonbyte/esp8266/http_server.h").read_text()
+    otaHeader = (repository / "firmware/include/neonbyte/esp8266/ota_staging.h").read_text()
+    otaSource = (repository / "firmware/src/esp8266/ota_staging.cpp").read_text()
+    source = r'''
+#include <cassert>
+#include <cstdint>
+#include <cstddef>
+#include <cstdio>
+#include <cstring>
+unsigned serviceOpportunities = 0, hashCalls = 0, readCalls = 0;
+void yield() { ++serviceOpportunities; }
+void optimistic_yield(unsigned) { ++serviceOpportunities; }
+void br_sha256_update(int*, const void*, std::size_t) { ++hashCalls; }
+struct FakeServer {
+    bool canListen = false;
+    unsigned begins = 0;
+    void begin() { ++begins; }
+    unsigned status() { return canListen ? 10 : 0; }
+};
+class DeviceHttpServer {
+public:
+    FakeServer server_;
+''' + extractFunction(httpHeader, "bool begin()") + r'''
+};
+struct FakeEsp {
+    bool readOk = true;
+    bool flashRead(std::uint32_t address, std::uint8_t* out, std::size_t length) {
+        assert(address >= 0xa0000 && address + length <= 0xa0400);
+        ++readCalls;
+        std::memset(out,0x5a,length);
+        return readOk;
+    }
+} ESP;
+class Esp8266OtaBackend {
+public:
+    bool active_ = true;
+    struct { std::uint32_t start = 0xa0000, length = 1024; } bounds_;
+    bool readAt(std::uint32_t, std::uint8_t*, std::size_t);
+};
+class Hash {
+public:
+    int context_ = 0;
+''' + extractFunction(otaHeader, "void add(") + r'''
+};
+''' + extractFunction(otaSource, "bool Esp8266OtaBackend::readAt(") + r'''
+int main() {
+    DeviceHttpServer http;
+    assert(!http.begin());
+    http.server_.canListen = true;
+    assert(http.begin());
+    // Each bounded raw read and updater hash chunk must service the SDK.
+    Esp8266OtaBackend backend;
+    std::uint8_t bytes[256];
+    for (unsigned offset = 0; offset < 1024; offset += sizeof(bytes)) {
+        const auto before = serviceOpportunities;
+        assert(backend.readAt(offset,bytes,sizeof(bytes)));
+        assert(bytes[0] == 0x5a && serviceOpportunities > before);
+    }
+    const auto reads = readCalls;
+    assert(!backend.readAt(1024,bytes,1));
+    backend.active_ = false;
+    assert(!backend.readAt(0,bytes,sizeof(bytes)) && readCalls == reads);
+    backend.active_ = true; ESP.readOk = false;
+    assert(!backend.readAt(0,bytes,sizeof(bytes)));
+    Hash hash;
+    for (unsigned offset = 0; offset < 1024; offset += 128) {
+        const auto before = serviceOpportunities;
+        hash.add(bytes,128);
+        assert(serviceOpportunities > before);
+    }
+    assert(hashCalls == 8);
+    std::puts("{\"listenerFailureReported\":true,\"rawReadErrorsChecked\":true,\"cooperativeReadbackAndHash\":true}");
+}
+'''
+    # Remove the nested Hash override specifier in the standalone host class.
+    source = source.replace(" override", "")
+    return runProbe(directory, "recovery-adapters-probe", source)
 
 
 def main():
@@ -326,6 +437,7 @@ def main():
             "display": probeDisplay(directory, repository, args.display_library),
             "accessPoint": probeAccessPoint(directory, args.framework),
             "accessPointAdapter": probeAccessPointAdapter(directory, repository),
+            "recoveryAdapters": probeRecoveryAdapters(directory, repository),
             "installationApproved": False,
         }
     print(json.dumps(result, indent=2))

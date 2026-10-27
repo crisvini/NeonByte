@@ -51,6 +51,8 @@ jobs:
         run: pio run -d firmware -e esp8266-provisional
       - name: Compile enabled ESP8266 validation profile
         run: pio run -d firmware -e esp8266-integration-check
+      - name: Probe pinned display and recovery adapters offline
+        run: python firmware/scripts/probe_compatibility.py
       - name: Validate local images and deployment guard
         run: |
           python firmware/scripts/test_local_build_guard.py

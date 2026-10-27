@@ -17,8 +17,8 @@ void SafeStartup::begin(std::uint64_t now, bool previousFailure, bool maintenanc
         && identity_.token.find(identity_.apPassword) == std::string_view::npos;
     if (!identityValid_) return;
     apRunning_ = services_.startRecoveryAp(identity_);
-    services_.startHttp();
-    retryApAt_ = now+5000; initializeAt_ = now+10000;
+    httpRunning_ = services_.startHttp();
+    retryApAt_ = retryHttpAt_ = now+5000; initializeAt_ = now+10000;
     automaticStart_ = !previousFailure && !maintenanceOnBoot;
 }
 bool SafeStartup::authorized(std::string_view authorization) const {
@@ -59,8 +59,13 @@ void SafeStartup::tick(std::uint64_t now) {
     if (!identityValid_) return;
     if (!apRunning_ && now >= retryApAt_) {
         apRunning_ = services_.startRecoveryAp(identity_); retryApAt_ = now+5000;
+        if (apRunning_) initializeAt_ = now+10000;
     }
-    if (automaticStart_ && now >= initializeAt_) {
+    if (!httpRunning_ && now >= retryHttpAt_) {
+        httpRunning_ = services_.startHttp(); retryHttpAt_ = now+5000;
+        if (httpRunning_) initializeAt_ = now+10000;
+    }
+    if (automaticStart_ && apRunning_ && httpRunning_ && now >= initializeAt_) {
         automaticStart_ = false;
         if (initializeStorage() && configurationLoaded_) initializeApplication();
     }

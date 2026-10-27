@@ -23,7 +23,7 @@ public:
         : storage_(storage), startup_(startup), authenticator_(authenticator), transfer_(storage),
           maintenanceOta_(maintenanceBackend_,digest_), maintenanceTransfer_(maintenanceOta_) {}
     void setProtocol(ProtocolHandler* protocol) { protocol_ = protocol; }
-    void begin() { server_.begin(); }
+    bool begin() { server_.begin(); return server_.status() != 0; }
     void tick(std::uint64_t now);
 
 private:

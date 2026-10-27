@@ -4,6 +4,8 @@
 
 **Subsequent update (2026-10-27):** [offline compatibility corrections](ota-compatibility-corrections.md) explicitly configure and check the recovery AP network and add an opt-in maintenance-on-every-boot policy. The default startup policy remains unchanged; automatically switching the selected policy after first provisioning remains unresolved. Deployment is still **NO-GO**.
 
+**Final safety audit (2026-10-27):** [the audit report](final-ota-safety-audit.md) adds failed-listener retries, AP security/DHCP readback, and cooperative raw OTA verification. Automatic risky startup now waits for successful AP and HTTP startup; recovery from a startup failure leaves a fresh ten-second maintenance window. Actual radio/boot/flash behavior remains unverified and installation remains **NO-GO**. Historical results below identify their original artifacts.
+
 ## Startup Audit
 
 The previous `setup()` disabled Wi-Fi and returned before HTTP on any of these paths:

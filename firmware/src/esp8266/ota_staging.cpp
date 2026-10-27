@@ -71,6 +71,8 @@ bool Esp8266OtaBackend::write(const std::uint8_t* bytes, std::size_t length) {
 }
 
 bool Esp8266OtaBackend::readAt(std::uint32_t offset, std::uint8_t* destination, std::size_t length) {
+    // Full-image verification makes many bounded reads without returning to loop().
+    optimistic_yield(1000);
     return active_ && destination && offset <= bounds_.length && length <= bounds_.length-offset &&
         ESP.flashRead(bounds_.start+offset,destination,length);
 }

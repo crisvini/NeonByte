@@ -57,14 +57,22 @@ public:
             bool configureNetwork() { return WiFi.softAPConfig(address,gateway,mask); }
             bool networkMatches() {
                 ip_info info{};
+                softap_config configuration{};
                 return wifi_get_ip_info(SOFTAP_IF,&info) && info.ip.addr == address.v4() &&
-                    info.gw.addr == gateway.v4() && info.netmask.addr == mask.v4();
+                    info.gw.addr == gateway.v4() && info.netmask.addr == mask.v4() &&
+                    (WiFi.getMode() & WIFI_AP) && wifi_softap_get_config(&configuration) &&
+                    configuration.ssid_len == name.length() &&
+                    memcmp(configuration.ssid,name.c_str(),name.length()) == 0 &&
+                    configuration.authmode == AUTH_WPA2_PSK &&
+                    memcmp(configuration.password,identity.apPassword.data(),identity.apPassword.size()) == 0 &&
+                    configuration.password[identity.apPassword.size()] == 0 &&
+                    wifi_softap_dhcps_status() == DHCP_STARTED;
             }
             void disableAp() { WiFi.enableAP(false); }
         } backend{name,identity};
         return startCheckedRecoveryAp(backend);
     }
-    void startHttp() override;
+    bool startHttp() override;
     bool mountStorage() override { return storage.beginStorage(); }
     bool loadWifi(WifiCredentials& out) override {
         if (!storage.loadConfiguration()) return false;
@@ -122,7 +130,7 @@ DeviceStartupServices startupServices;
 SafeStartup startup(startupServices,privateRecoveryIdentity());
 // No application allocation or filesystem is needed to accept maintenance HTTP.
 DeviceHttpServer http(storage,startup,pairingAuthenticator);
-void DeviceStartupServices::startHttp() { http.begin(); }
+bool DeviceStartupServices::startHttp() { return http.begin(); }
 bool DeviceStartupServices::startApplication() {
     scenes.reset(new (std::nothrow) SceneManager(deviceClock,storage));
     if (!scenes) return false;

@@ -279,7 +279,7 @@ public:
     explicit FakeStartupServices(FakeRtcMemory& rtc) : rtc_(rtc) {}
     std::uint32_t guardWrites = 0, storageMounts = 0, applicationStarts = 0, applicationStops = 0;
     bool startRecoveryAp(RecoveryIdentity) override { return true; }
-    void startHttp() override {}
+    bool startHttp() override { return true; }
     bool mountStorage() override { ++storageMounts; return true; }
     bool loadWifi(WifiCredentials& credentials) override {
         strcpy(credentials.ssid,"Test network"); strcpy(credentials.password,"test-password"); return true;

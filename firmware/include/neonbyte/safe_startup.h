@@ -9,7 +9,7 @@ class StartupServices {
 public:
     virtual ~StartupServices() = default;
     virtual bool startRecoveryAp(RecoveryIdentity identity) = 0;
-    virtual void startHttp() = 0;
+    virtual bool startHttp() = 0;
     virtual bool mountStorage() = 0;
     virtual bool loadWifi(WifiCredentials& credentials) = 0;
     virtual bool saveWifi(const WifiCredentials& credentials) = 0;
@@ -49,8 +49,8 @@ private:
     RecoveryIdentity identity_;
     BearerTokenAuthenticator recoveryAuth_;
     WifiCredentials activeWifi_{}, candidateWifi_{};
-    std::uint64_t initializeAt_ = 0, retryApAt_ = 0, retryStationAt_ = 0;
-    bool identityValid_ = false, apRunning_ = false, automaticStart_ = false;
+    std::uint64_t initializeAt_ = 0, retryApAt_ = 0, retryHttpAt_ = 0, retryStationAt_ = 0;
+    bool identityValid_ = false, apRunning_ = false, httpRunning_ = false, automaticStart_ = false;
     bool storageAttempted_ = false, storageAvailable_ = false, configurationLoaded_ = false;
     bool applicationRunning_ = false, pendingWifi_ = false, candidateTemporary_ = false, volatileWifi_ = false;
 };

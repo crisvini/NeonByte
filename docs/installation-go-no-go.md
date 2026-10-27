@@ -17,6 +17,8 @@ The checklist is dated 2026-10-27. It preserves earlier evidence dates and does 
 
 The subsequent [independent compatibility investigation](ota-compatibility-investigation.md) adds library-boundary probes and an external first-installation failure report. It identifies further display and provisioning corrections, supplies no new exact-unit backup/recovery evidence, and leaves every mandatory gate and the **NO-GO** decision unchanged.
 
+The [final first-installation safety audit](final-ota-safety-audit.md) records additional offline startup/AP/OTA corrections, fresh test/build results, and the conditional feasibility of a separate live stock-restoration operation. Existing OTA routes still reject the legacy vendor image. No exact-unit evidence, full backup, independent failed-boot rescue, private installation identity, or spare-unit validation was added; all mandatory gates below remain blocked.
+
 ## Mandatory Evidence Checklist
 
 | Requirement | Source-supported | Mock-tested | Real-hardware-tested | Unknown | Gate |

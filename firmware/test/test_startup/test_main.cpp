@@ -36,12 +36,12 @@ void testRecoveryApRejectsSdkFailuresAndMismatchedNetwork() {
 class Services final : public StartupServices {
 public:
     std::string calls;
-    bool apOk = true, mountOk = true, loadOk = true, saveOk = true, appOk = true, guardOk = true, clearGuardOk = true, connected = false;
+    bool httpOk = true, apOk = true, mountOk = true, loadOk = true, saveOk = true, appOk = true, guardOk = true, clearGuardOk = true, connected = false;
     unsigned attempts = 0, saves = 0;
     WifiCredentials stored{}, target{};
     Services() { strcpy(stored.ssid,"Previous"); strcpy(stored.password,"previous-password"); }
     bool startRecoveryAp(RecoveryIdentity) override { calls += 'N'; return apOk; }
-    void startHttp() override { calls += 'H'; }
+    bool startHttp() override { calls += 'H'; return httpOk; }
     bool mountStorage() override { calls += 'F'; return mountOk; }
     bool loadWifi(WifiCredentials& out) override { calls += 'C'; out = stored; return loadOk; }
     bool saveWifi(const WifiCredentials& value) override { ++saves; if (!saveOk) return false; stored = value; return true; }
@@ -59,6 +59,42 @@ void testNetworkAndHttpStartBeforeStorageAndDisplay() {
     TEST_ASSERT_TRUE(services.calls.find('F') > services.calls.find('H'));
     TEST_ASSERT_TRUE(services.calls.find('A') > services.calls.find('H'));
     TEST_ASSERT_TRUE(startup.recoveryApRunning());
+}
+void testFailedRecoveryNetworkPreventsAutomaticRiskyStartup() {
+    for (unsigned fault=0;fault<2;++fault) {
+        Services services;
+        services.apOk = fault != 0; services.httpOk = fault != 1;
+        SafeStartup startup(services,IDENTITY);
+        startup.begin(0,false);
+        startup.tick(4999);
+        TEST_ASSERT_EQUAL_STRING("NH",services.calls.c_str());
+        startup.tick(5000); startup.tick(10000); startup.tick(60000);
+        TEST_ASSERT_FALSE(startup.applicationRunning());
+        TEST_ASSERT_EQUAL(std::string::npos,services.calls.find('F'));
+        TEST_ASSERT_EQUAL(std::string::npos,services.calls.find('G'));
+        // Successful recovery must provide a fresh maintenance window.
+        services.apOk = services.httpOk = true;
+        startup.tick(65000);
+        TEST_ASSERT_FALSE(startup.applicationRunning());
+        startup.tick(74999);
+        TEST_ASSERT_FALSE(startup.applicationRunning());
+        startup.tick(75000);
+        TEST_ASSERT_TRUE(startup.applicationRunning());
+    }
+}
+void testHttpStartupRetriesOnlyUntilListenerSucceeds() {
+    Services services; services.httpOk = false;
+    SafeStartup startup(services,IDENTITY);
+    startup.begin(0,false,true);
+    startup.tick(4999);
+    TEST_ASSERT_EQUAL_STRING("NH",services.calls.c_str());
+    startup.tick(5000);
+    TEST_ASSERT_EQUAL_STRING("NHH",services.calls.c_str());
+    startup.tick(9999);
+    TEST_ASSERT_EQUAL_STRING("NHH",services.calls.c_str());
+    services.httpOk = true; startup.tick(10000); startup.tick(60000);
+    TEST_ASSERT_EQUAL_STRING("NHHH",services.calls.c_str());
+    TEST_ASSERT_FALSE(startup.applicationRunning());
 }
 void testExplicitMaintenanceBootDoesNotMountUntilAuthorizedAndDefaultStillStarts() {
     Services services;
@@ -151,9 +187,10 @@ void testApAndStationRetryAreBoundedAndApRemainsAfterConnection() {
     SafeStartup startup(services,IDENTITY); startup.begin(0,false); startup.tick(4999);
     TEST_ASSERT_EQUAL_STRING("NH",services.calls.c_str());
     services.apOk = true; startup.tick(5000); TEST_ASSERT_TRUE(startup.recoveryApRunning());
-    startup.tick(10000); TEST_ASSERT_EQUAL(1,services.attempts);
-    startup.tick(39999); TEST_ASSERT_EQUAL(1,services.attempts);
-    startup.tick(40000); TEST_ASSERT_EQUAL(2,services.attempts);
+    startup.tick(10000); TEST_ASSERT_EQUAL(0,services.attempts);
+    startup.tick(15000); TEST_ASSERT_EQUAL(1,services.attempts);
+    startup.tick(44999); TEST_ASSERT_EQUAL(1,services.attempts);
+    startup.tick(45000); TEST_ASSERT_EQUAL(2,services.attempts);
     services.connected = true; startup.tick(70000); TEST_ASSERT_EQUAL(2,services.attempts);
     TEST_ASSERT_TRUE(startup.recoveryApRunning());
 }
@@ -288,6 +325,8 @@ void tearDown() {}
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(testNetworkAndHttpStartBeforeStorageAndDisplay);
+    RUN_TEST(testFailedRecoveryNetworkPreventsAutomaticRiskyStartup);
+    RUN_TEST(testHttpStartupRetriesOnlyUntilListenerSucceeds);
     RUN_TEST(testRecoveryApRejectsSdkFailuresAndMismatchedNetwork);
     RUN_TEST(testExplicitMaintenanceBootDoesNotMountUntilAuthorizedAndDefaultStillStarts);
     RUN_TEST(testMaintenanceBootProvisioningAndColdRestartRemainExplicit);

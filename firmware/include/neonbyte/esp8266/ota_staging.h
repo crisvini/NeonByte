@@ -21,7 +21,10 @@ private:
     class Hash final : public UpdaterHashClass {
     public:
         void begin() override { br_sha256_init(&context_); }
-        void add(const void* data, std::uint32_t length) override { br_sha256_update(&context_,data,length); }
+        void add(const void* data, std::uint32_t length) override {
+            br_sha256_update(&context_,data,length);
+            optimistic_yield(1000);
+        }
         void end() override { br_sha256_out(&context_,bytes_.data()); }
         int len() override { return bytes_.size(); }
         const void* hash() override { return bytes_.data(); }
