@@ -1,6 +1,6 @@
 # LCD Colors, Maintenance Wi-Fi, and Windows OTA Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans, or superpowers:subagent-driven-development if separately selected, to implement an approved stage task by task. All execution checkboxes below remain unchecked. This document authorizes no implementation or device operation.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans, or superpowers:subagent-driven-development if separately selected, to implement an approved stage task by task. The maintainer separately authorized Stage 1 offline execution on 2026-10-27. Stage 2/3, target compilation, firmware or installation images, and device operations remain outside that authorization.
 
 **Goal:** Correct LCD color reproduction without changing the validated orientation, reconnect saved Wi-Fi while remaining in maintenance, and operate the existing authenticated OTA transaction from the Windows dashboard.
 
@@ -10,11 +10,11 @@
 
 **Spec:** Maintainer's analysis-only request and subsequent planning refinements dated 2026-10-27, captured in the requirements and evidence below; [project planning](../../../PLANNING.md), [protocol](../../protocol.md), [safe startup](../../safe-first-boot.md), [maintenance OTA](../../maintenance-ota-design.md), [HTTP correction](../../http-recovery-investigation.md), and [display report](../../spotify-gif-display.md).
 
-**Status:** The three-stage architecture is approved; the refinements below are submitted for review before implementation of Stage 1. Initial analysis baseline: `014ec6241193ca568cc9c3edd518b4456b1c7dd2`; revision baseline: local `main` at `afcf390`, which records the original plan. These identify inspected checkouts, not a newly fetched remote head or the installed device image. Only this existing planning document is modified by this revision. No stage implementation, source changes, credential migration, hardware operation, or `PLANNING.md` completion mark is authorized or performed.
+**Status:** The three-stage architecture is approved. The maintainer authorized Stage 1 offline execution on 2026-10-27. Host tests validate RGB565 conversion and SPI byte order, but the controlled physical color signature is not established; MADCTL remains `0x08` and physical color acceptance is **PENDING**. Stages 2 and 3 remain unauthorized. Initial analysis baseline: `014ec6241193ca568cc9c3edd518b4456b1c7dd2`; revision baseline: local `main` at `afcf390`, which records the original plan. These identify inspected checkouts, not a newly fetched remote head or the installed device image. The planning revision itself changed only this document; it involved no credential migration or hardware operation.
 
 ## Global Constraints
 
-- Current authorization is analysis and planning only: no implementation, target compilation, firmware generation, discovery, clock requests, restart, OTA, erase, formatting, partition change, serial access, UART, or soldering.
+- Current execution authorization is Stage 1 offline source, test, and documentation work only. Target compilation, firmware generation, discovery, clock requests, restart, OTA, erase, formatting, partition changes, serial access, UART, and soldering are not authorized.
 - Future stages require separate authorization. Physical operations also require their own bounded authorization and the existing evidence/recovery gates; approving source work does not approve deployment.
 - Preserve 180-degree orientation: Adafruit rotation 2, 240 by 240 bounds, offsets 0/0, and the current geometry bits. A color correction may change MADCTL bit 3 alone if justified.
 - Preserve Spotify's centered 176 by 176 cover, current font sizes, no progress bar, content-based redraw, and Auto behavior: confirmed playback selects Spotify; pause/no playback selects the installed GIF.
@@ -81,8 +81,8 @@ The leading hypothesis is a panel RGB/BGR mismatch introduced by the explicit fi
 
 This remains a hypothesis: a pure RGB/BGR swap exchanges both red and blue, leaves green unchanged, and preserves white, black, and magenta. If controlled blue really remains blue while red becomes blue, that observation does not fit a simple symmetric swap. Do not mark the root cause confirmed from the reported symptom alone.
 
-- [ ] Revalidate the packing and command traces against the exact dependency bytes intended for any later candidate. The previous report records a GFX/BusIO discrepancy between declared and cached versions; preserve and record the actual reviewed inputs rather than upgrading during diagnosis.
-- [ ] Compare the unchanged reference chart through both cover and animation paths. Record each expected patch's observed color, not only whether an album cover looks plausible.
+- [x] Revalidate the packing and command traces against the exact dependency bytes intended for any later candidate. The previous report records a GFX/BusIO discrepancy between declared and cached versions; preserve and record the actual reviewed inputs rather than upgrading during diagnosis. The reviewed versions and source hashes are recorded in [the display report](../../spotify-gif-display.md#stage-1-offline-color-execution).
+- [x] Compare the unchanged reference chart through the software cover and animation paths. Record each expected host RGB565 word and byte sequence in [the display report](../../spotify-gif-display.md#stage-1-offline-color-execution); physical patch appearance remains pending.
 - [ ] If the chart confirms symmetric red/blue exchange with neutral black/white, propose changing the final MADCTL byte from `0x08` to `0x00`. Keep `setRotation(2)`, offsets, bounds, SPI mode/frequency, inversion, and geometry bits unchanged. Do not restore historical `0xC8`.
 - [ ] If the chart does not match that signature, retain the current setting and investigate the first differing boundary. Byte reversal affects RGB565 fields differently from a channel swap; inversion would also disturb neutrals/complements. Recheck those before considering any evidenced initialization difference.
 - [ ] Compare with factory initialization only if an exact relevant command sequence/source or a defensible trace from an already supplied factory artifact becomes available. The reviewed stock reports do not establish that sequence for this unit. Another project's TFT_eSPI BGR/gamma table is not factory evidence. Do not alter gamma, voltage, porch settings, or pins from that comparison alone.
@@ -102,10 +102,10 @@ Use the existing eight-strip generator; its requested minimum colors have these 
 
 Cyan and yellow remain useful additional controls. Use an asymmetric orientation/border reference alongside the color chart; strips alone do not adequately establish a half turn.
 
-- [ ] Keep exact-word assertions for both RGBA cover and decoded GIF paths, including neutral and secondary colors and SHA-256 verification.
+- [x] Keep exact-word assertions for both RGBA cover and decoded GIF paths, including neutral and secondary colors and SHA-256 verification.
 - [ ] If the bit change is justified, update the native expectation to final `0x00` and add a trace assertion that the before/after bytes differ only by `0x08`; retain rotation 2, COLMOD `0x55`, inversion and literal full-screen/corner/cover windows.
-- [ ] Retain byte-reversal and stale-`0xC8` mutation checks so a test proves the incorrect variant would be rejected.
-- [ ] Retain 176 by 176 incremental cover, no-progress redraw, track-bound artwork, GIF timing/looping, and Auto play/pause regressions.
+- [x] Retain byte-reversal and stale-`0xC8` mutation checks so a test proves the incorrect variant would be rejected.
+- [x] Retain 176 by 176 incremental cover, no-progress redraw, track-bound artwork, GIF timing/looping, and Auto play/pause regressions.
 
 ### Physical Risks, Protection, and Acceptance
 
@@ -116,6 +116,8 @@ Future physical observation is separately authorized. First observe the unchange
 Uploading a chart as the installed animation replaces the user's GIF. Require a retained original GIF/NBIF and checksum on the PC plus an explicitly authorized restoration step before that test. If unavailable, use a track-bound cover first and leave the full-screen criterion pending. Do not assume the device offers an asset-backup endpoint.
 
 **Exit condition:** a source-level cause is supported by controlled observations; focused and repository checks pass; visual criteria are recorded for the exact candidate. Host checks alone do not complete physical color acceptance. Stop for separate Stage 2 authorization; if only independent offline Stage 2 work is authorized while visual testing is blocked, leave this stage's physical criteria pending.
+
+**Stage 1 offline execution result:** the color conversion and SPI byte path passed host checks for the declared and cached GFX versions, and the compatibility probe rejects the stale `0xC8` mutation. The physical chart signature did not become available in this offline execution, so no MADCTL change or source-level cause is claimed. Physical color acceptance and this stage's exit condition remain **PENDING**; the next stage is not authorized by this record.
 
 ## Stage 2: Wi-Fi During Maintenance
 

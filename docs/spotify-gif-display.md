@@ -131,6 +131,72 @@ Only then compare one controlled setting at a time, preserving rotation 2 and
 all geometry bits; do not combine byte order, BGR and inversion changes.
 No such test was performed in this task.
 
+## Stage 1 Offline Color Execution
+
+**Date:** 2026-10-27. The unchanged eight-strip reference chart was generated
+locally as an NBIC cover and an NBIF animation. Their byte lengths and SHA-256
+values match the generator manifest and independent `sha256sum` output:
+
+| Fixture | Bytes | SHA-256 |
+|---|---:|---|
+| `primary-colors.nbic` | 115,209 | `d3f4b6b29ca9f1fa613ff6cabbe2b73ffd07dee34799d8e16e40f9534dabb908` |
+| `primary-colors.nbif` | 115,213 | `53a6d6793c8920700c7c582bc825483d66464a8deeb5fb718ffff355c09af113` |
+
+| Patch | RGB565 | NBIC/NBIF bytes | SPI bytes | LCD appearance |
+|---|---|---|---|---|
+| Red | `0xF800` | `00 F8` | `F8 00` | PENDING |
+| Green | `0x07E0` | `E0 07` | `07 E0` | PENDING |
+| Blue | `0x001F` | `1F 00` | `00 1F` | PENDING |
+| White | `0xFFFF` | `FF FF` | `FF FF` | PENDING |
+| Black | `0x0000` | `00 00` | `00 00` | PENDING |
+| Cyan | `0x07FF` | `FF 07` | `07 FF` | PENDING |
+| Magenta | `0xF81F` | `1F F8` | `F8 1F` | PENDING |
+| Yellow | `0xFFE0` | `E0 FF` | `FF E0` | PENDING |
+
+All eight software patches retain their expected RGB565 words and little-endian
+NBIC/NBIF bytes through both cover and decoded GIF conversion. The host SPI
+trace emits the expected high byte first for every word. Physical appearance
+has not been observed; each patch remains **PENDING** on the LCD.
+
+The probes used the existing cached sources without upgrading dependencies.
+`firmware/platformio.ini` declares ST7735/ST7789 1.11.0, GFX 1.11.11, and
+BusIO 1.17.0. The integration-check cache also has GFX 1.13.0 and BusIO
+1.17.4; both declared and cached GFX source paths were checked. BusIO is not
+used by the SPI word trace. Arduino ESP8266 core 3.1.2 supplies the `SPI.cpp`
+write path. Reviewed dependency source hashes:
+
+| Source | Version | SHA-256 |
+|---|---|---|
+| `Adafruit_SPITFT.cpp` | GFX 1.11.11 | `17ed08ec557650e7c68885d9faeffe9c68c0ce117860dd6ecaba11236581f95b` |
+| `Adafruit_SPITFT.cpp` | cached GFX 1.13.0 | `7bd0deccfa0517d75135bae4eac331c690d0700ef6deabb873115183ba0de597` |
+| `Adafruit_ST7789.cpp` | ST7735/ST7789 1.11.0 | `832045ba8b7fbdc0ebdb4ea7730c664e4fe2d7d50bd7bc076aada4bdddae58f3` |
+| `SPI.cpp` | Arduino ESP8266 3.1.2 | `4fe5c75f4a892bafefda3239f1e6cf447d20c7c6defaac231ebfe3b7bfab1c01` |
+
+Both GFX versions passed the eight-color wire-byte probe, including its
+byte-reversal mutation check. The compatibility probe confirms 20 MHz
+initialization/drawing requests, rotation 2, MADCTL `0x08`, offsets 0/0, and
+the full-screen, corner, and 176 by 176 cover windows. It now also changes the
+adapter to stale MADCTL `0xC8` in a host-only mutation and confirms the trace
+assertion rejects it. The focused media tests passed 10/10; the native display
+suite passed 11/11 in a direct host build, both normally and with
+AddressSanitizer/UndefinedBehaviorSanitizer. The PlatformIO CLI is unavailable
+in this environment, so `pio test -d firmware -e native` could not be run.
+
+`npm run check` passed Markdown validation on 39 files, the language check, 10
+root tests with one Windows-only skip, the TypeScript build/typecheck, and all
+62 agent tests. `npm run test:offline` passed all 20 scenarios. No ESP8266
+target compilation or firmware image generation was run.
+
+The reported red-to-blue symptom, with green and blue described as apparently
+correct, does not establish the plan's symmetric red/blue-swap signature. The
+offline cover, GIF, and SPI boundaries match their expected values, but none
+observes panel scanout. MADCTL therefore remains `0x08`; no source-level cause
+or color correction is claimed. Physical comparison of the unchanged chart in
+both display paths, neutral and secondary colors, the asymmetric orientation
+reference, borders, current layout, and flicker remains pending. Before any
+full-screen animation test, retain the original GIF/NBIF and its checksum and
+obtain separate authorization for restoration.
+
 ## Offline Verification and Private Artifact
 
 Repository checks passed 62 agent tests, TypeScript build/type checks, Markdown,

@@ -34,19 +34,21 @@ def runProbe(directory, name, source):
                       if os.environ.get("NEONBYTE_PROBE_SANITIZERS") == "1" else [])
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-Wall", "-Wextra",
                     "-Werror", *sanitizerFlags, str(sourcePath), "-o", str(binaryPath)], check=True)
-    result = subprocess.run([str(binaryPath)], capture_output=True, text=True)
+    result = subprocess.run([str(binaryPath)], capture_output=True, text=True, cwd=directory)
     if result.returncode:
         raise RuntimeError(f"{name} failed ({result.returncode}): {result.stderr.strip()}")
     return json.loads(result.stdout)
 
 
-def probeDisplay(directory, repository, library):
+def probeDisplay(directory, repository, library, adapterSourceOverride=None):
     properties = (library / "library.properties").read_text()
     if "version=1.11.0\n" not in properties:
         raise ValueError("This probe requires Adafruit ST7735/ST7789 1.11.0")
     commonSource = (library / "Adafruit_ST77xx.cpp").read_text()
     panelSource = (library / "Adafruit_ST7789.cpp").read_text()
-    adapterSource = (repository / "firmware/src/esp8266/display.cpp").read_text()
+    adapterSource = adapterSourceOverride
+    if adapterSource is None:
+        adapterSource = (repository / "firmware/src/esp8266/display.cpp").read_text()
     adapterHeader = (repository / "firmware/include/neonbyte/esp8266/display.h").read_text()
     header = (library / "Adafruit_ST77xx.h").read_text()
     constants = "\n".join(line for line in header.splitlines() if line.startswith("#define ST77XX_"))
@@ -160,6 +162,23 @@ int main() {
 }
 '''
     return runProbe(directory, "display-probe", source)
+
+
+def probeStaleMadctlMutation(directory, repository, library):
+    adapterSource = (repository / "firmware/src/esp8266/display.cpp").read_text()
+    currentSetting = "const std::uint8_t bgr = 0x08;"
+    if adapterSource.count(currentSetting) != 1:
+        raise ValueError("Expected one current MADCTL color-order setting")
+    mutatedSource = adapterSource.replace(currentSetting, "const std::uint8_t bgr = 0xc8;", 1)
+    mutationDirectory = directory / "stale-madctl-mutation"
+    mutationDirectory.mkdir()
+    try:
+        probeDisplay(mutationDirectory, repository, library, mutatedSource)
+    except RuntimeError as error:
+        if "display.panel_.madctl == 0x08" not in str(error):
+            raise
+        return True
+    raise AssertionError("The stale MADCTL 0xc8 mutation was accepted")
 
 
 def probeAccessPoint(directory, framework):
@@ -441,9 +460,13 @@ def main():
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="neonbyte-compatibility-") as temporary:
         directory = Path(temporary)
+        display = probeDisplay(directory, repository, args.display_library)
         result = {
             "evidence": "Extracted function bodies with host I/O doubles; no hardware validation",
-            "display": probeDisplay(directory, repository, args.display_library),
+            "display": display,
+            "staleMadctlMutationDetected": probeStaleMadctlMutation(
+                directory, repository, args.display_library
+            ),
             "accessPoint": probeAccessPoint(directory, args.framework),
             "accessPointAdapter": probeAccessPointAdapter(directory, repository),
             "recoveryAdapters": probeRecoveryAdapters(directory, repository),
