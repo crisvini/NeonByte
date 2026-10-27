@@ -1,6 +1,6 @@
 # Local HTTP v1 Contract
 
-**Status:** the native core and provisional ESP8266 runtime implement v1. The runtime has compiled locally; no device endpoint has been contacted or deployed. The agent client remains Phase 5 work. The agent's simulator routes under `/api/*` are private to the local interface. Hardware compatibility and installation are PENDING.
+**Status:** the native core and provisional ESP8266 runtime implement v1. The runtime has compiled locally; no device endpoint has been contacted or deployed. An explicitly constructed agent client is validated against the native core in the [PC-only runner](offline-validation.md); production LAN integration remains Phase 5 work. The agent's simulator routes under `/api/*` are private to the local interface. Hardware compatibility and installation are PENDING.
 
 ## Transport and Compatibility
 
@@ -56,6 +56,8 @@ The suggested Spotify polling interval is 15 seconds and will be configurable in
 ~~~
 
 The agent must clamp `progressMs` to `durationMs`. The firmware advances progress locally between updates and corrects it when it receives another timestamp. Initial text limits are 256 characters for `trackId`, `title`, and `artist`; keep them aligned across schemas, agent, and firmware.
+
+There is no clear-playback operation in v1, and `trackId` must be nonempty. The offline client sends the last known track with `isPlaying: false` when playback becomes idle or unavailable. A newly started agent with no track history cannot immediately clear unknown playback already on the device; independent metadata expiry still selects GIF after the timeout even if heartbeats continue. No invented track ID or schema change is introduced by offline validation.
 
 ## Routes
 

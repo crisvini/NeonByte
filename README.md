@@ -4,7 +4,7 @@ NeonByte is an open-source project planned for a JUZIPi SD PRO Wi-Fi display and
 
 ## Current Status
 
-**Phases 1, 2, and 3 are complete.** The Node.js/TypeScript Spotify agent uses OAuth PKCE, polling, and state compatible with the v1 contract. The local interface includes a responsive 240 × 240 simulator, Spotify and looping GIF previews, display modes, uploads, and demo data. Real-account OAuth validation still requires configured Spotify credentials. Phase 4 now includes the native C++ core and locally compiled ESP8266 runtime adapters. Device synchronization remains Phase 5 work. No device has been contacted, flashed, or updated; Wi-Fi-only installation and recovery are blocked. See the [integration report](docs/esp8266-integration.md).
+**Phases 1, 2, and 3 are complete.** The Node.js/TypeScript Spotify agent uses OAuth PKCE, polling, and state compatible with the v1 contract. The local interface includes a responsive 240 × 240 simulator, Spotify and looping GIF previews, display modes, uploads, and demo data. Real-account OAuth validation still requires configured Spotify credentials. Phase 4 now includes the native C++ core and locally compiled ESP8266 runtime adapters. The [PC-only validation](docs/offline-validation.md) connects an explicitly constructed agent client to that core through loopback HTTP v1; production LAN synchronization remains Phase 5 work. No device has been contacted, flashed, or updated; Wi-Fi-only installation and recovery are blocked. See the [integration report](docs/esp8266-integration.md).
 
 The 240 × 240 resolution is a planning expectation, not a measurement of this unit. See [hardware investigation](docs/hardware.md) before any work that depends on the board.
 
@@ -16,7 +16,7 @@ The 240 × 240 resolution is a planning expectation, not a measurement of this u
 | **spotify** | Spotify Now Playing | Spotify waiting screen |
 | **gif** | Fullscreen GIF | Fullscreen GIF |
 
-The simulator applies the modes to its local preview; the selected mode is stored in the browser. The agent reads and normalizes playback. Firmware persistence and runtime adapters are implemented and compile-validated; physical behavior and end-to-end integration remain pending.
+The simulator applies the modes to its local preview; the selected mode is stored in the browser. The agent reads and normalizes playback. Firmware persistence and runtime adapters are implemented and compile-validated; physical behavior and production LAN integration remain pending.
 
 ## Repository Structure
 
@@ -55,6 +55,8 @@ npm --prefix agent run start
 ~~~
 
 Open [http://localhost:8787](http://localhost:8787), connect Spotify with the button, and choose a mode. Without a valid Client ID, the agent starts with mock data; the controls can simulate play, pause, next track, and unavailability. The `auth` command remains available if you prefer to authorize without opening the interface. The refresh token is stored in the system credential manager; tokens are not written to `.env` or logs. `SPOTIFY_POLL_INTERVAL_MS` configures the polling interval (15 seconds by default). See [development](docs/development.md) and [installation](docs/installation.md) for details.
+
+Run `npm run test:offline` for PC-only agent-to-native-firmware validation. It requires a C++17 compiler and OpenSSL development headers, uses loopback networking and mock Spotify data, and never builds or contacts a device. See the [results and remaining gaps](docs/offline-validation.md).
 
 ## Documentation
 

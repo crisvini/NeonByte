@@ -16,6 +16,7 @@ Phases 1 through 3 are complete: documentation, the v1 contract, the Spotify age
 - `npm --prefix agent run build` compiles the TypeScript agent and copies static dashboard files.
 - `npm --prefix agent test` runs unit and integration tests with mocked fetch and providers.
 - `npm run check` runs lint, language checks, contract tests, the TypeScript build, type checks, and agent tests; `make check` is an equivalent shortcut.
+- `npm run test:offline` compiles a host executable and exercises the agent against the native firmware core over loopback HTTP v1. A C++17 compiler and OpenSSL development headers/libcrypto are required; no device or Spotify credentials are used. See [offline validation](offline-validation.md) for results and limits.
 
 Agent tests cover PKCE, the loopback callback, refresh, normalization, 204/401/429 responses, reconnects, caching, the simulator, display modes, uploads, media conversion, limits, and checksums. They do not call the Spotify Web API or validate a real account or hardware.
 

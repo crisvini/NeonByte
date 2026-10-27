@@ -6,6 +6,8 @@
 
 PlatformIO remains defaulted to `native`. Use `uv tool run --from platformio pio` in place of `pio` when PlatformIO is not on PATH.
 
+For the separately authorized PC-only integration runner, use `npm run test:offline`. It builds only `firmware/host/` plus portable core sources with the host compiler; no PlatformIO board profile is selected. See [offline validation](offline-validation.md) for dependencies, simulated storage/restarts, fault scenarios, and remaining hardware gaps.
+
 ~~~sh
 pio test -d firmware -e native
 pio run -d firmware -e esp8266-provisional

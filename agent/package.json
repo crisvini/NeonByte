@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json && node scripts/copy-web-assets.mjs",
     "typecheck": "tsc -p tsconfig.tests.json",
     "test": "node --import tsx --test tests/*.test.ts",
+    "test:offline": "node --import tsx --test tests/offline/*.test.ts",
     "check": "npm run build && npm run typecheck && npm test",
     "dev": "node --env-file=../.env --import tsx src/main.ts",
     "start": "node --env-file=../.env dist/main.js",

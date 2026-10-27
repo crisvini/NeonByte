@@ -251,6 +251,12 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 
 **Safe first-boot preparation authorization (2026-10-26):** the maintainer authorized Phase 4 startup/provisioning/maintenance implementation, host fault injection, target compilation, and CI checks only. The [preparation report](docs/safe-first-boot.md) records the private recovery-identity design and residual limits. No device contact, installation package, release, safety-gate removal, or Phase 5 work is authorized. Hardware, full backup, independent Wi-Fi-only boot recovery, and filesystem-independent verified maintenance updates remain deployment blockers.
 
+**End-to-end offline validation authorization (2026-10-26):** the maintainer separately authorized a native host harness, agent communication through existing v1, playback/media/timeout/persistence validation, and mocked provisioning/maintenance failures. The [offline report](docs/offline-validation.md) records 16 integration scenarios, an existing Unicode normalization defect fixed with regressions, and the remaining initial-null playback-clearing gap. This narrowly authorizes the PC-only client and runner, not production LAN activation, physical installation, installation-ready packages, or deployment-protection changes. All hardware acceptance and later phase checklists remain pending.
+
+- [x] Connect the desktop agent components to the existing native firmware core through loopback HTTP v1 without a board build.
+- [x] Verify offline playback/artwork/progress, scene switching, expiry, simulated storage/restarts, and mocked provisioning/maintenance failures.
+- [x] Run native and agent regressions, sanitizer checks, repository validation, and synthetic deployment-guard checks; document defects and remaining hardware gaps.
+
 - [x] Start authenticated recovery networking before filesystem/configuration/display dependencies; verify with native fault injection.
 - [x] Add explicit confirmed/temporary provisioning, guarded application maintenance, and private secret-delivery requirements without changing API v1 contracts.
 - [x] Add native firmware tests and both compilation-only ESP8266 profiles to CI; validate locally and document remaining deployment risks.

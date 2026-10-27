@@ -23,6 +23,8 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix agent
       - run: npm run check
+      - name: Run PC-only end-to-end validation
+        run: npm run test:offline
 
   firmware:
     runs-on: ubuntu-latest

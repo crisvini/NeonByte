@@ -8,7 +8,15 @@ import type {
 const MAX_TEXT_LENGTH = 256;
 
 function boundedText(value: unknown): string {
-  return typeof value === "string" ? value.slice(0, MAX_TEXT_LENGTH) : "";
+  if (typeof value !== "string") return "";
+  let text = "";
+  let length = 0;
+  for (const character of value) {
+    if (length === MAX_TEXT_LENGTH) break;
+    text += character;
+    length += 1;
+  }
+  return text;
 }
 
 function nonNegativeInteger(value: unknown): number {
