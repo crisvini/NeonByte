@@ -6,22 +6,15 @@ namespace neonbyte {
 namespace {
 void metadataText(std::string_view text, SpotifyText& result) {
     result.length = 0;
+    bool truncated = false;
     for (unsigned char character : text) {
         if ((character & 0xc0) == 0x80) continue;
-        if (result.length == result.bytes.size()) break;
-        // One replacement cell per unsupported Unicode code point; no split UTF-8.
+        if (result.length == result.bytes.size()) { truncated = true; break; }
         result.bytes[result.length++] = character >= 32 && character < 127 ? character : '?';
     }
-}
-bool metadataMatches(std::string_view text, const SpotifyText& displayed) {
-    unsigned index = 0;
-    for (unsigned char character : text) {
-        if ((character & 0xc0) == 0x80) continue;
-        if (index == displayed.length) return false;
-        const char visible = character >= 32 && character < 127 ? character : '?';
-        if (displayed.bytes[index++] != visible) return false;
+    if (truncated) {
+        for (unsigned index = 0; index < 3; ++index) result.bytes[result.length - 3 + index] = '.';
     }
-    return index == displayed.length;
 }
 } // namespace
 
@@ -69,56 +62,9 @@ void DeviceDisplay::showSpotifyWaiting() {
         panel_.fillScreen(ST77XX_BLACK); textLine("Waiting for playback",20,116,32,ST77XX_WHITE); scene_ = 1;
     }
 }
-void DeviceDisplay::resetMarquee(SpotifyMarquee& marquee, std::uint64_t nowMs) {
-    marquee.textWidth = static_cast<std::uint16_t>(marquee.text.length * 6 * SPOTIFY_TEXT_SIZE);
-    marquee.offset = 0;
-    marquee.phaseStartedMs = nowMs;
-    marquee.lastStepMs = nowMs;
-    marquee.scrolls = marquee.textWidth > SPOTIFY_TEXT_VIEWPORT_WIDTH;
-    marquee.scrolling = false;
-}
-void DeviceDisplay::drawMarquee(const SpotifyMarquee& marquee, int y, std::uint16_t color, bool clear) {
+void DeviceDisplay::drawSpotifyText(const SpotifyText& text, int y, std::uint16_t color, bool clear) {
     if (clear) panel_.fillRect(0,y,240,SPOTIFY_TEXT_LINE_HEIGHT,ST77XX_BLACK);
-    constexpr int cellWidth = 6 * SPOTIFY_TEXT_SIZE;
-    const auto drawCopy = [&](int x) {
-        if (x >= 240 || x + marquee.textWidth <= 0) return;
-        const unsigned first = x < 0 ? static_cast<unsigned>(-x / cellWidth) : 0;
-        const int endAtScreen = (240 - x + cellWidth - 1) / cellWidth;
-        const unsigned end = std::min<unsigned>(marquee.text.length,
-                                                 static_cast<unsigned>(std::max(0,endAtScreen)));
-        if (first >= end) return;
-        const auto visible = marquee.text.view().substr(first,end-first);
-        textLine(visible,x + static_cast<int>(first) * cellWidth,y,
-                 static_cast<unsigned>(visible.size()),color,SPOTIFY_TEXT_SIZE);
-    };
-    const int x = static_cast<int>(SPOTIFY_TEXT_X) - marquee.offset;
-    drawCopy(x);
-    if (marquee.scrolls) drawCopy(x + marquee.textWidth + SPOTIFY_TEXT_GAP);
-}
-void DeviceDisplay::updateMarquee(SpotifyMarquee& marquee, int y, std::uint16_t color,
-                                  std::uint64_t nowMs) {
-    if (!marquee.scrolls) return;
-    if (!marquee.scrolling) {
-        if (nowMs - marquee.phaseStartedMs < SPOTIFY_MARQUEE_START_DELAY_MS) return;
-        marquee.scrolling = true;
-        marquee.lastStepMs = nowMs;
-        return;
-    }
-    const auto elapsed = nowMs - marquee.lastStepMs;
-    if (elapsed < SPOTIFY_MARQUEE_INTERVAL_MS) return;
-    const auto steps = elapsed / SPOTIFY_MARQUEE_INTERVAL_MS;
-    marquee.lastStepMs += steps * SPOTIFY_MARQUEE_INTERVAL_MS;
-    const auto nextOffset = static_cast<std::uint64_t>(marquee.offset) +
-        steps * SPOTIFY_MARQUEE_STEP_PIXELS;
-    const auto cycleDistance = static_cast<std::uint64_t>(marquee.textWidth) + SPOTIFY_TEXT_GAP;
-    if (nextOffset >= cycleDistance) {
-        marquee.offset = 0;
-        marquee.scrolling = false;
-        marquee.phaseStartedMs = nowMs;
-    } else {
-        marquee.offset = static_cast<std::uint16_t>(nextOffset);
-    }
-    drawMarquee(marquee,y,color,true);
+    textLine(text.view(),SPOTIFY_TEXT_X,y,text.length,color,SPOTIFY_TEXT_SIZE);
 }
 void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t) {
     if (!initialized_) return;
@@ -131,19 +77,16 @@ void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t) {
         coverRow_ = 0; revision_ = storage_.assetRevision;
     }
     scene_ = 2;
-    if (entering || trackChanged || !metadataMatches(track.title.view(),titleMarquee_.text)) {
-        if (!metadataMatches(track.title.view(),titleMarquee_.text)) {
-            metadataText(track.title.view(),titleMarquee_.text);
-        }
-        resetMarquee(titleMarquee_,displayNowMs_);
-        drawMarquee(titleMarquee_,SPOTIFY_TITLE_Y,ST77XX_WHITE,!entering);
+    SpotifyText title, artist;
+    metadataText(track.title.view(),title);
+    metadataText(track.artist.view(),artist);
+    if (entering || title.view() != titleText_.view()) {
+        titleText_ = title;
+        drawSpotifyText(titleText_,SPOTIFY_TITLE_Y,ST77XX_WHITE,!entering);
     }
-    if (entering || trackChanged || !metadataMatches(track.artist.view(),artistMarquee_.text)) {
-        if (!metadataMatches(track.artist.view(),artistMarquee_.text)) {
-            metadataText(track.artist.view(),artistMarquee_.text);
-        }
-        resetMarquee(artistMarquee_,displayNowMs_);
-        drawMarquee(artistMarquee_,SPOTIFY_ARTIST_Y,0x9cf3,!entering);
+    if (entering || artist.view() != artistText_.view()) {
+        artistText_ = artist;
+        drawSpotifyText(artistText_,SPOTIFY_ARTIST_Y,0x9cf3,!entering);
     }
 }
 void DeviceDisplay::beginAnimationFrame(std::uint16_t, std::uint16_t) {}
@@ -157,14 +100,11 @@ void DeviceDisplay::writeAnimationPixels(std::uint32_t offset, const std::uint8_
 void DeviceDisplay::endAnimationFrame(std::uint16_t) {}
 void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
     if (!initialized_) return;
-    displayNowMs_ = now;
     const auto state = scenes.currentState();
     if (state.activeScene == ActiveScene::spotify) {
         if (state.waiting) showSpotifyWaiting();
         else {
             showSpotify(*state.nowPlaying,state.progressMs);
-            updateMarquee(titleMarquee_,SPOTIFY_TITLE_Y,ST77XX_WHITE,now);
-            updateMarquee(artistMarquee_,SPOTIFY_ARTIST_Y,0x9cf3,now);
             // One cover row per loop leaves the HTTP and Wi-Fi services runnable.
             if (coverRow_ < SPOTIFY_COVER_SIZE) {
                 if (!storage_.readCover(displayedTrack_.view(),(coverRow_*240/SPOTIFY_COVER_SIZE)*480,pixels_.data(),pixels_.size())) {

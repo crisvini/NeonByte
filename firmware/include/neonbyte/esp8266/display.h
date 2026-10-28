@@ -15,21 +15,9 @@ constexpr unsigned SPOTIFY_TEXT_X = 8;
 constexpr unsigned SPOTIFY_TITLE_Y = 190;
 constexpr unsigned SPOTIFY_ARTIST_Y = 211;
 constexpr unsigned SPOTIFY_TEXT_LINE_HEIGHT = 20;
-constexpr unsigned SPOTIFY_TEXT_GAP = 24;
-constexpr unsigned SPOTIFY_MARQUEE_START_DELAY_MS = 1500;
-constexpr unsigned SPOTIFY_MARQUEE_INTERVAL_MS = 125;
-constexpr unsigned SPOTIFY_MARQUEE_STEP_PIXELS = 3;
-using SpotifyText = BoundedText<MAX_TEXT_CODE_POINTS>;
+constexpr unsigned SPOTIFY_TEXT_MAX_CELLS = SPOTIFY_TEXT_VIEWPORT_WIDTH / (6 * SPOTIFY_TEXT_SIZE);
+using SpotifyText = BoundedText<SPOTIFY_TEXT_MAX_CELLS>;
 
-struct SpotifyMarquee {
-    SpotifyText text{};
-    std::uint16_t textWidth = 0;
-    std::uint16_t offset = 0;
-    std::uint64_t phaseStartedMs = 0;
-    std::uint64_t lastStepMs = 0;
-    bool scrolls = false;
-    bool scrolling = false;
-};
 class BoundedDisplayPanel final : public Adafruit_ST7789 {
 public:
     using Adafruit_ST7789::Adafruit_ST7789;
@@ -51,9 +39,7 @@ public:
 private:
     void textLine(std::string_view text, int x, int y, unsigned limit, std::uint16_t color,
                   unsigned size = 1);
-    void resetMarquee(SpotifyMarquee& marquee, std::uint64_t nowMs);
-    void drawMarquee(const SpotifyMarquee& marquee, int y, std::uint16_t color, bool clear);
-    void updateMarquee(SpotifyMarquee& marquee, int y, std::uint16_t color, std::uint64_t nowMs);
+    void drawSpotifyText(const SpotifyText& text, int y, std::uint16_t color, bool clear);
     PersistentStorage& storage_;
     AnimationReader animation_;
     BoundedDisplayPanel panel_;
@@ -62,9 +48,8 @@ private:
     std::uint32_t revision_ = 0, offset_ = 0;
     std::uint16_t frame_ = 0, coverRow_ = SPOTIFY_COVER_SIZE;
     FixedText displayedTrack_{};
-    SpotifyMarquee titleMarquee_{}, artistMarquee_{};
+    SpotifyText titleText_{}, artistText_{};
     std::uint64_t nextFrame_ = 0, frameStarted_ = 0;
-    std::uint64_t displayNowMs_ = 0;
     int scene_ = -1;
     bool initialized_ = false;
 };

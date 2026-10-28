@@ -8,6 +8,26 @@ Other physical acceptance and backup/recovery gates remain pending. A later
 pre-correction color-chart observation is recorded below; the corrected candidate
 still needs visual confirmation.
 
+## Current Firmware Text Behavior (2026-10-28)
+
+The firmware now keeps title and artist fixed at x=8, y=190 and y=211,
+using the existing 2x font and colors. Each 224-pixel field fits 18 font
+cells; longer text displays the first 15 cells followed by `...`. Unsupported
+Unicode code points still occupy one replacement cell. Only the visible text is
+cached and redrawn when it changes or the scene is entered. The full metadata
+and track ID remain in the scene state, and cover reads still require the full
+matching track ID. The browser preview retains its earlier marquee behavior.
+
+Native display tests cover short and long text, boundary lengths, unchanged
+visible prefixes, late artwork, rapid track changes and mismatched cover IDs.
+The integration-check profile is compilation-only and is not an installation
+artifact. Actual LCD rendering, runtime memory and cover transfers remain pending
+physical verification. A missing or mismatched cover, storage read failure, or
+failed artwork preparation or transfer can independently leave the cover black;
+no physical failure was diagnosed in this offline run.
+
+The following sections describe earlier revisions and their historical results.
+
 ## Spotify Composition and Invalidation
 
 The cover grows from 144 by 144 to 176 by 176 at (32, 4), horizontally centered
