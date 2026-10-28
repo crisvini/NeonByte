@@ -9,8 +9,9 @@ import type { PlaybackPoller } from "../spotify/poller.js";
 import type { PlaybackSnapshot } from "../spotify/types.js";
 import { resolveActiveScene, type DisplayMode } from "./scene.js";
 import type { FirmwareUpdateService, FirmwareUpdateState, FirmwareUpdateView } from "../device/firmware-update.js";
+import { MaintenanceRequestError, MaintenanceTransportError } from "../device/maintenance-client.js";
 
-export type FirmwareUpdateControl = Pick<FirmwareUpdateService, "view" | "getStatus" | "prepare" | "confirm" | "verify" | "correctAddress" | "runApplication">;
+export type FirmwareUpdateControl = Pick<FirmwareUpdateService, "view" | "getStatus" | "prepare" | "confirm" | "verify" | "correctAddress" | "runApplication" | "reconcileRunning">;
 
 const JSON_LIMIT_BYTES = 16 * 1024;
 const GIF_LIMIT_BYTES = 8 * 1024 * 1024;
@@ -92,8 +93,8 @@ function isMockAction(value: unknown): value is MockPlaybackAction {
 
 function otaLocksMutations(view: FirmwareUpdateView | null | undefined): boolean {
   if (!view) return false;
-  if (view.putAttempted) return view.state !== "started";
-  return !["idle", "started", "rejected", "transferFailed"].includes(view.state);
+  if (view.putAttempted) return !["started", "manuallyReconciled"].includes(view.state);
+  return !["idle", "started", "manuallyReconciled", "rejected", "transferFailed"].includes(view.state);
 }
 
 function rejectOtaMutation(response: ServerResponse, request: IncomingMessage, update: FirmwareUpdateControl | undefined): boolean {
@@ -391,6 +392,15 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
             sendJson(response, 200, await options.firmwareUpdate.correctAddress(item["address"]));
             return;
           }
+          if (url.pathname === "/api/ota/reconcile") {
+            const payload = await readJson(request);
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error();
+            const item = payload as Record<string, unknown>;
+            if (Object.keys(item).length !== 2 || item["confirmed"] !== true ||
+                typeof item["expectedBuildId"] !== "string" || !/^[A-Za-z0-9._:-]{1,96}$/.test(item["expectedBuildId"])) throw new Error();
+            sendJson(response, 200, await options.firmwareUpdate.reconcileRunning(item["expectedBuildId"], true));
+            return;
+          }
           if (url.pathname === "/api/ota/verify" || url.pathname === "/api/ota/run") {
             if (Number(request.headers["content-length"] ?? 0) !== 0 || request.headers["transfer-encoding"]) {
               request.resume(); sendError(response, 400, "This maintenance action accepts no request body."); return;
@@ -401,7 +411,8 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           }
           request.resume(); sendError(response, 404, "Local route not found.");
         } catch (error) {
-          const message = error instanceof Error && /^(Prepare firmware again|A firmware update operation|A firmware update|There is no attempted firmware|Only verified firmware|Maintenance credentials required|Maintenance credentials could)/.test(error.message)
+          const message = error instanceof MaintenanceRequestError || error instanceof MaintenanceTransportError ||
+            (error instanceof Error && /^(Prepare firmware again|A firmware update operation|A firmware update|There is no attempted firmware|Only verified firmware|Maintenance credentials required|Maintenance credentials could|Verify, explicitly start|Confirm the expected build|The device cannot be reconciled|The previous firmware transfer|The protected firmware update journal|The protected update history|The reconciled device|The enrolled recovery identity|The responding device|The device identity|The device does not|The device is not|The firmware target|This device build|The application did not|Running-firmware reconciliation failed)/.test(error.message))
             ? error.message : "The maintenance operation was not completed. Check update status before taking another action.";
           sendError(response, 409, message);
         }

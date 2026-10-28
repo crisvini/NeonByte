@@ -158,6 +158,10 @@ export class DeviceIntegration {
     this.releaseMaintenanceHold();
   }
 
+  resumeAfterManualReconciliation(): void {
+    this.releaseMaintenanceHold();
+  }
+
   resumeAfterSafePreflightAbort(): void {
     this.releaseMaintenanceHold();
   }

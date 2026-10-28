@@ -75,6 +75,7 @@ test("serves the local panel and protects mode changes with a loopback origin ch
     assert.match(html, /exact RGB565 colors with palettes, row compression, and frame differences/);
     assert.match(html, /20 frames and 30 seconds/);
     assert.match(html, /32 KiB reserve/);
+    assert.match(html, /id="ota-reconcile"/);
     assert.doesNotMatch(html, /device-token|Pairing token/);
 
     const rejected = await fetch(`${origin}/api/mode`, {
@@ -101,7 +102,7 @@ test("dashboard OTA accepts only loopback-origin metadata actions and never rece
   const candidateId = "11111111-2222-4333-8444-555555555555";
   let prepareCalls = 0;
   let confirmCalls = 0;
-  let state: "idle" | "ready" | "rejected" | "transferFailed" | "started" = "idle";
+  let state: "idle" | "ready" | "rejected" | "transferFailed" | "started" | "manuallyReconciled" = "idle";
   let putAttempted = false;
   const candidate = { id: candidateId, fileName: "firmware.bin" as const, byteLength: 4096, sha256: "a".repeat(64),
     expectedBuildId: "build-20261027-a1b2", deviceId: "esp8266-a1b2c3" };
@@ -112,6 +113,7 @@ test("dashboard OTA accepts only loopback-origin metadata actions and never rece
     async prepare() { prepareCalls++; state = "ready"; return this.view; },
     async confirm(value) { confirmCalls++; assert.equal(value, candidateId); return this.view; },
     async verify() { return this.view; }, async correctAddress() { return this.view; }, async runApplication() { return this.view; },
+    async reconcileRunning() { return this.view; },
   };
   const { app, origin } = await makeApp(update);
   const post = (path: string, body?: string, withOrigin = true) => fetch(`${origin}${path}`, { method: "POST",
@@ -139,6 +141,35 @@ test("dashboard OTA accepts only loopback-origin metadata actions and never rece
     }
     state = "started";
     assert.equal((await post("/api/device", JSON.stringify({ address: "http://192.168.1.20", enabled: true }))).status, 503);
+    state = "manuallyReconciled";
+    assert.notEqual((await post("/api/mode", JSON.stringify({ mode: "gif" }))).status, 423);
+  } finally { await app.close(); }
+});
+
+test("dashboard reconciliation requires an explicit confirmed expected build and returns safe OTA errors", async () => {
+  let reconciliations = 0;
+  const view = { state: "verificationFailed" as const, candidate: null, bytesSent: 0, totalBytes: 4096,
+    message: "Previous update needs review.", putAttempted: true, effectiveAddress: "http://192.168.1.20" };
+  const update: FirmwareUpdateControl = {
+    view, async getStatus() { return view; },
+    async prepare() { throw new Error("Verify, explicitly start, or manually reconcile the previous firmware before preparing another update."); },
+    async confirm() { return view; }, async verify() { return view; }, async correctAddress() { return view; }, async runApplication() { return view; },
+    async reconcileRunning(buildId, confirmed) { assert.equal(buildId, "build-new"); assert.equal(confirmed, true); reconciliations++; return view; },
+  };
+  const { app, origin } = await makeApp(update);
+  const post = (path: string, body?: unknown, authorized = true) => fetch(`${origin}${path}`, { method: "POST",
+    headers: { ...(authorized ? { Origin: origin } : {}), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+  try {
+    const blocked = await post("/api/ota/prepare");
+    assert.equal(blocked.status, 409);
+    assert.match((await blocked.json() as { message: string }).message, /manually reconcile the previous firmware/);
+    assert.equal((await post("/api/ota/reconcile", { expectedBuildId: "build-new", confirmed: true }, false)).status, 403);
+    assert.equal((await post("/api/ota/reconcile", { expectedBuildId: "build-new", confirmed: false })).status, 409);
+    assert.equal((await post("/api/ota/reconcile", { expectedBuildId: "build-new", confirmed: true, token: "secret" })).status, 409);
+    assert.equal(reconciliations, 0);
+    assert.equal((await post("/api/ota/reconcile", { expectedBuildId: "build-new", confirmed: true })).status, 200);
+    assert.equal(reconciliations, 1);
   } finally { await app.close(); }
 });
 

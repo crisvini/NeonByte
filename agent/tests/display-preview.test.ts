@@ -44,6 +44,7 @@ async function preview() {
     document: { querySelector: element, querySelectorAll: () => [] },
     window: { setInterval() {}, requestAnimationFrame() {}, location: { search: "" } },
     URLSearchParams,
+    AbortSignal: { timeout: () => ({ aborted: false }) },
     localStorage: { getItem: () => null },
     fetch: () => new Promise(() => {}),
   });

@@ -76,6 +76,34 @@ The agent reads the fixed inbox only after **Prepare local firmware** is selecte
 6. If DHCP changed the address, enter the device's private IPv4 HTTP origin in **Verified maintenance IPv4 address** and select **Verify and save device address**. The agent authenticates and checks the same device identity before persisting the maintenance-only address. After any PUT attempt, changing the address only resumes read-only reconciliation; it never re-sends the image.
 7. Only after the panel reports **verified**, select **Start application** and confirm. This sends the separate maintenance `/run` request. The dashboard scheduler resumes only after the application is confirmed running, and only if its existing `enabled` setting is true.
 
+### Reconcile a Previously Running Build
+
+If an attempted update remains unresolved in the protected journal but the
+expected firmware is already running, the original verification still requires
+a paused application and cannot mark that attempt verified. The panel offers
+**Reconcile running firmware** for an eligible unresolved attempt. It displays
+the journaled device and expected build and requires a separate confirmation.
+
+After confirmation, the agent holds its scheduler and performs two independent,
+authenticated maintenance observations at least two seconds apart. Both must
+report the enrolled device, profile and recovery fingerprint, the expected
+build, the same new boot ID, an active application and recovery AP, connected
+station, loaded configuration and storage, no pending or volatile Wi-Fi, OTA
+capacity, and the original journaled memory floors. A mismatched identity,
+failed or rejected transfer, changed boot, unhealthy diagnostics, timeout, or
+journal write failure keeps the update blocked. The action does not send a
+firmware upload, pause the clock, or request application startup.
+
+Successful reconciliation records a distinct `manuallyReconciled` result and
+both observations' memory evidence; it does **not** mark the previous OTA as
+verified or prove flashed bytes match the original hash. The protected journal
+retains the earlier attempt and the manual result when the next candidate is
+prepared. History is bounded to eight snapshots; if full, preparation or
+reconciliation fails rather than silently discarding an entry. The scheduler
+resumes only after the reconciliation record is saved. The panel then permits a
+new candidate to be prepared, subject to all normal identity, preflight, OTA,
+and post-boot checks.
+
 ### Transition to Automatic Power-On Startup
 
 Update the local agent before selecting an automatic-start candidate; older

@@ -14,6 +14,10 @@ const toast = document.querySelector("#toast");
 let status = null;
 let firmwareUpdate = null;
 let firmwareStatusPending = false;
+let statusPending = false;
+let agentOfflineNotified = false;
+let otaActionPending = false;
+let otaActionError = null;
 let mode = "auto";
 let animationFrames = [];
 let animationSha256 = "";
@@ -33,23 +37,31 @@ function notify(message) {
 }
 
 async function request(path, options = {}) {
-  const response = await fetch(path, { cache: "no-store", ...options });
-  if (!response.ok) {
-    let message = `The request failed (${response.status}).`;
-    try {
-      const body = await response.json();
-      if (typeof body.message === "string") message = body.message;
-    } catch {}
-    throw new Error(message);
+  const { timeoutMs = 15_000, ...fetchOptions } = options;
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    const response = await fetch(path, { cache: "no-store", ...fetchOptions, signal });
+    if (!response.ok) {
+      let message = `The request failed (${response.status}).`;
+      try {
+        const body = await response.json();
+        if (typeof body.message === "string") message = body.message;
+      } catch {}
+      throw new Error(message);
+    }
+    return response;
+  } catch (error) {
+    if (signal.aborted) throw new Error("The local request timed out. Check the update status before another action.");
+    throw error;
   }
-  return response;
 }
 
-async function postJson(path, value) {
+async function postJson(path, value, timeoutMs = 15_000) {
   return request(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(value),
+    timeoutMs,
   });
 }
 
@@ -124,7 +136,7 @@ function updateStatusText() {
 function otaMutationLocked() {
   if (!firmwareUpdate) return false;
   return ["ready", "preflight", "pausing", "uploading", "waitingForReboot", "reconnecting", "verifying", "outcomeUnknown", "verificationFailed", "verified"].includes(firmwareUpdate.state) ||
-    (firmwareUpdate.putAttempted && firmwareUpdate.state !== "started");
+    (firmwareUpdate.putAttempted && !["started", "manuallyReconciled"].includes(firmwareUpdate.state));
 }
 
 function setOtaMutationLock() {
@@ -134,6 +146,26 @@ function setOtaMutationLock() {
   });
 }
 
+function updateOtaControls() {
+  if (!firmwareUpdate) return;
+  const state = firmwareUpdate.state;
+  const pending = otaActionPending || ["preparing", "preflight", "pausing", "uploading", "reconnecting", "verifying", "reconciling"].includes(state);
+  const candidate = firmwareUpdate.candidate;
+  document.querySelector("#ota-prepare").disabled = pending || (firmwareUpdate.putAttempted && !["started", "manuallyReconciled"].includes(state));
+  const confirm = document.querySelector("#ota-confirm");
+  confirm.hidden = state !== "ready" || !candidate;
+  confirm.disabled = pending;
+  const verify = document.querySelector("#ota-verify");
+  verify.hidden = !firmwareUpdate.putAttempted || ["verified", "started", "manuallyReconciled"].includes(state);
+  verify.disabled = pending;
+  const reconcile = document.querySelector("#ota-reconcile");
+  reconcile.hidden = !firmwareUpdate.recoverableAttempt;
+  reconcile.disabled = pending;
+  document.querySelector("#ota-run").hidden = state !== "verified";
+  document.querySelector("#ota-run").disabled = pending;
+  document.querySelector("#ota-address-save").disabled = pending;
+}
+
 async function refreshFirmwareStatus() {
   if (firmwareStatusPending) return;
   firmwareStatusPending = true;
@@ -141,34 +173,27 @@ async function refreshFirmwareStatus() {
     const response = await request("/api/ota/status");
     firmwareUpdate = await response.json();
     const state = firmwareUpdate.state;
-    const pending = ["preparing", "preflight", "pausing", "uploading", "reconnecting", "verifying"].includes(state);
     const candidate = firmwareUpdate.candidate;
     const candidateBox = document.querySelector("#ota-candidate");
     candidateBox.hidden = !candidate;
     candidateBox.textContent = candidate
       ? `${candidate.fileName} · ${formatBytes(candidate.byteLength)} · SHA-256 ${candidate.sha256} · build ${candidate.expectedBuildId} · device ${candidate.deviceId}`
       : "";
-    document.querySelector("#ota-status").textContent = state === "uploading"
+    document.querySelector("#ota-status").textContent = otaActionError || (state === "uploading"
       ? `${firmwareUpdate.message} ${formatBytes(firmwareUpdate.bytesSent)} of ${formatBytes(firmwareUpdate.totalBytes)} handed to the transport.`
-      : firmwareUpdate.message;
+      : firmwareUpdate.message);
     const progress = document.querySelector("#ota-progress");
     progress.hidden = !firmwareUpdate.putAttempted || !["uploading", "waitingForReboot", "reconnecting", "verifying", "outcomeUnknown", "verificationFailed", "verified", "started"].includes(state);
     progress.max = 1;
     progress.value = firmwareUpdate.totalBytes ? Math.min(1, firmwareUpdate.bytesSent / firmwareUpdate.totalBytes) : 0;
-    document.querySelector("#ota-prepare").disabled = pending || (firmwareUpdate.putAttempted && state !== "started");
-    const confirm = document.querySelector("#ota-confirm");
-    confirm.hidden = state !== "ready" || !candidate;
-    confirm.disabled = pending;
-    const verify = document.querySelector("#ota-verify");
-    verify.hidden = !firmwareUpdate.putAttempted || ["verified", "started"].includes(state);
-    verify.disabled = pending;
-    document.querySelector("#ota-run").hidden = state !== "verified";
+    updateOtaControls();
     const addressPanel = document.querySelector("#ota-address-panel");
-    addressPanel.hidden = !firmwareUpdate.effectiveAddress || ["started"].includes(state);
+    addressPanel.hidden = !firmwareUpdate.effectiveAddress || ["started", "manuallyReconciled"].includes(state);
     if (!addressPanel.contains(document.activeElement)) document.querySelector("#ota-address").value = firmwareUpdate.effectiveAddress;
     setOtaMutationLock();
-  } catch {
-    document.querySelector("#ota-status").textContent = "Dashboard firmware status is unavailable.";
+  } catch (error) {
+    document.querySelector("#ota-status").textContent = otaActionError || `Dashboard firmware status is unavailable: ${error.message}`;
+    updateOtaControls();
   } finally { firmwareStatusPending = false; }
 }
 
@@ -177,6 +202,8 @@ function formatBytes(value) {
 }
 
 async function refreshStatus() {
+  if (statusPending) return;
+  statusPending = true;
   try {
     const response = await request("/api/status");
     status = await response.json();
@@ -189,11 +216,12 @@ async function refreshStatus() {
     await refreshFirmwareStatus();
     await refreshAnimation();
     loadCover(status.snapshot.coverUrl);
+    agentOfflineNotified = false;
   } catch (error) {
     document.querySelector("#agent-dot").classList.add("offline");
     document.querySelector("#agent-label").textContent = "Local agent unavailable";
-    if (status) notify(error.message);
-  }
+    if (status && !agentOfflineNotified) { notify(error.message); agentOfflineNotified = true; }
+  } finally { statusPending = false; }
 }
 
 async function refreshAnimation() {
@@ -698,6 +726,7 @@ async function uploadGif(file) {
       method: "POST",
       headers: { "Content-Type": "image/gif" },
       body: file,
+      timeoutMs: 120_000,
     });
     const result = await response.json();
     await refreshStatus();
@@ -721,46 +750,64 @@ document.querySelector("#device-form").addEventListener("submit", async (event) 
   } catch (error) { notify(error.message); }
 });
 
-document.querySelector("#ota-prepare").addEventListener("click", async () => {
+async function runOtaAction(action) {
+  if (otaActionPending) return false;
+  otaActionPending = true;
+  otaActionError = null;
+  document.querySelectorAll("#ota-prepare, #ota-confirm, #ota-verify, #ota-reconcile, #ota-address-save, #ota-run")
+    .forEach((button) => { button.disabled = true; });
   try {
-    await request("/api/ota/prepare", { method: "POST" });
+    await action();
+    return true;
+  } catch (error) {
+    otaActionError = error.message;
+    notify(error.message);
+    return false;
+  } finally {
+    otaActionPending = false;
+    updateOtaControls();
     await refreshFirmwareStatus();
-  } catch (error) { notify(error.message); await refreshFirmwareStatus(); }
+    if (otaActionError) document.querySelector("#ota-status").textContent = otaActionError;
+  }
+}
+
+document.querySelector("#ota-prepare").addEventListener("click", async () => {
+  await runOtaAction(() => request("/api/ota/prepare", { method: "POST", timeoutMs: 30_000 }));
 });
 
 document.querySelector("#ota-confirm").addEventListener("click", async () => {
+  if (otaActionPending) return;
   const candidate = firmwareUpdate?.candidate;
   if (!candidate) return;
   const accepted = window.confirm(`Install build ${candidate.expectedBuildId} (${formatBytes(candidate.byteLength)}, SHA-256 ${candidate.sha256}) on device ${candidate.deviceId}? The application will pause and the image will be sent once.`);
   if (!accepted) return;
-  try {
-    await postJson("/api/ota/confirm", { candidateId: candidate.id });
-    await refreshFirmwareStatus();
-  } catch (error) { notify(error.message); await refreshFirmwareStatus(); }
+  await runOtaAction(() => postJson("/api/ota/confirm", { candidateId: candidate.id }, 150_000));
 });
 
 document.querySelector("#ota-verify").addEventListener("click", async () => {
   document.querySelector("#ota-status").textContent = "Reconnecting and checking the device for up to two minutes…";
-  try {
-    await request("/api/ota/verify", { method: "POST" });
-    await refreshFirmwareStatus();
-  } catch (error) { notify(error.message); await refreshFirmwareStatus(); }
+  await runOtaAction(() => request("/api/ota/verify", { method: "POST", timeoutMs: 140_000 }));
+});
+
+document.querySelector("#ota-reconcile").addEventListener("click", async () => {
+  if (otaActionPending) return;
+  const attempt = firmwareUpdate?.recoverableAttempt;
+  if (!attempt) return;
+  const accepted = window.confirm(`Reconcile running build ${attempt.expectedBuildId} on device ${attempt.deviceId}? Two authenticated observations will be required. This does not verify the previous OTA or send firmware.`);
+  if (!accepted) return;
+  await runOtaAction(() => postJson("/api/ota/reconcile", { expectedBuildId: attempt.expectedBuildId, confirmed: true }, 40_000));
 });
 
 document.querySelector("#ota-address-save").addEventListener("click", async () => {
-  try {
-    await postJson("/api/ota/address", { address: document.querySelector("#ota-address").value });
-    await refreshFirmwareStatus();
+  if (await runOtaAction(() => postJson("/api/ota/address", { address: document.querySelector("#ota-address").value }, 30_000))) {
     notify("The maintenance address was verified and saved.");
-  } catch (error) { notify(error.message); await refreshFirmwareStatus(); }
+  }
 });
 
 document.querySelector("#ota-run").addEventListener("click", async () => {
+  if (otaActionPending) return;
   if (!window.confirm("Start the verified application now?")) return;
-  try {
-    await request("/api/ota/run", { method: "POST" });
-    await refreshFirmwareStatus();
-  } catch (error) { notify(error.message); await refreshFirmwareStatus(); }
+  await runOtaAction(() => request("/api/ota/run", { method: "POST", timeoutMs: 30_000 }));
 });
 
 document.querySelectorAll("[data-mode]").forEach((button) => {
