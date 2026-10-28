@@ -46,13 +46,28 @@
             <form id="device-form">
               <label for="device-address">Private device IPv4 address</label>
               <input id="device-address" type="url" placeholder="http://192.168.1.100" required autocomplete="off">
-              <label for="device-token">Pairing token</label>
-              <input id="device-token" type="password" placeholder="Enter pairing token" autocomplete="off">
-              <p class="card-copy">Enter the token when pairing or changing the address. Leave it blank to keep the saved token.</p>
+              <p class="card-copy">Pairing credentials stay in the Windows credential manager. For new credentials, use <code>node agent/dist/main.js configure-device</code> in a foreground terminal.</p>
               <label><input id="device-enabled" type="checkbox"> Enable device connection</label>
               <button class="button" type="submit">Save device settings</button>
               <p id="device-config-status" class="card-copy" aria-live="polite"></p>
             </form>
+          </article>
+
+          <article class="card ota-card">
+            <div class="card-heading compact"><div><p class="eyebrow">MAINTENANCE</p><h2>Firmware update</h2></div></div>
+            <p class="card-copy">Copy the approved <code>firmware.bin</code> and matching <code>manifest.json</code> into <code>%LOCALAPPDATA%\NeonByte\firmware-inbox</code>. Preparation reads only this fixed folder.</p>
+            <button class="button" id="ota-prepare" type="button">Prepare local firmware</button>
+            <div class="ota-candidate" id="ota-candidate" hidden></div>
+            <button class="button" id="ota-confirm" type="button" hidden>Confirm firmware update</button>
+            <progress id="ota-progress" max="1" value="0" aria-label="Firmware bytes sent" hidden></progress>
+            <p class="card-copy" id="ota-status" aria-live="polite">Maintenance credentials required.</p>
+            <button class="button" id="ota-verify" type="button" hidden>Verify device</button>
+            <div id="ota-address-panel" hidden>
+              <label for="ota-address">Verified maintenance IPv4 address</label>
+              <input id="ota-address" type="url" placeholder="http://192.168.1.100" autocomplete="off">
+              <button class="button" id="ota-address-save" type="button">Verify and save device address</button>
+            </div>
+            <button class="button" id="ota-run" type="button" hidden>Start application</button>
           </article>
 
           <article class="card mode-card">

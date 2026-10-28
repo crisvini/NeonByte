@@ -3,7 +3,10 @@
 #include "neonbyte/esp8266/http_server.h"
 #include "neonbyte/recovery_ap.h"
 #include "neonbyte/startup_guard_layout.h"
+#include <bearssl/bearssl_hash.h>
 #include <sys/time.h>
+#include <cstdio>
+#include <string_view>
 #include <new>
 #ifndef NEONBYTE_MAINTENANCE_ON_BOOT
 #define NEONBYTE_MAINTENANCE_ON_BOOT 0
@@ -132,6 +135,44 @@ DeviceStartupServices startupServices;
 SafeStartup startup(startupServices,privateRecoveryIdentity());
 // No application allocation or filesystem is needed to accept maintenance HTTP.
 DeviceHttpServer http(storage,startup,pairingAuthenticator);
+std::array<char,33> bootId{};
+std::array<char,65> recoveryFingerprint{};
+std::string_view privateBuildId() {
+#if defined(NEONBYTE_PRIVATE_BUILD_ID)
+    return NEONBYTE_PRIVATE_BUILD_ID;
+#else
+    return {};
+#endif
+}
+std::string_view privateProfile() {
+#if defined(NEONBYTE_PRIVATE_PROFILE)
+    return NEONBYTE_PRIVATE_PROFILE;
+#else
+    return {};
+#endif
+}
+void initializeBuildIdentity() {
+    constexpr char HEX_DIGITS[] = "0123456789abcdef";
+    for (std::size_t word=0;word<4;++word) {
+        const auto random = os_random();
+        for (std::size_t nibble=0;nibble<8;++nibble) bootId[word*8+nibble] = HEX_DIGITS[(random >> (28-nibble*4)) & 15];
+    }
+    const auto identity = privateRecoveryIdentity();
+    if (identity.token.empty() || identity.apPassword.empty()) return;
+    br_sha256_context context{}; std::uint8_t hash[32]{};
+    constexpr char PREFIX[] = "NeonByte recovery identity v1";
+    constexpr std::uint8_t separator = 0;
+    br_sha256_init(&context);
+    br_sha256_update(&context,PREFIX,sizeof(PREFIX));
+    br_sha256_update(&context,identity.token.data(),identity.token.size());
+    br_sha256_update(&context,&separator,1);
+    br_sha256_update(&context,identity.apPassword.data(),identity.apPassword.size());
+    br_sha256_out(&context,hash);
+    for (std::size_t index=0;index<32;++index) {
+        recoveryFingerprint[index*2] = HEX_DIGITS[hash[index] >> 4];
+        recoveryFingerprint[index*2+1] = HEX_DIGITS[hash[index] & 15];
+    }
+}
 bool DeviceStartupServices::startHttp() { return http.begin(); }
 bool DeviceStartupServices::backgroundStartupWorkAllowed() const { return http.backgroundStartupWorkAllowed(); }
 bool DeviceStartupServices::startApplication() {
@@ -166,6 +207,8 @@ bool previousStartupFailure() {
 void setup() {
     using namespace neonbyte;
     WiFi.persistent(false); WiFi.mode(WIFI_OFF);
+    initializeBuildIdentity();
+    http.setBuildIdentity(bootId.data(),privateBuildId(),privateProfile(),recoveryFingerprint.data());
     startup.begin(deviceClock.monotonicMillis(),previousStartupFailure(),NEONBYTE_MAINTENANCE_ON_BOOT == 1);
 }
 void loop() {

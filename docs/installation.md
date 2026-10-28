@@ -32,6 +32,8 @@ These instructions do not install or configure the device. Any firmware depends 
 
 [Safe first-boot preparation](safe-first-boot.md) documents the implemented maintenance/provisioning logic, validation, unresolved risks, and exact future OTA package requirements. The maintenance-only raw staging path is implemented and host/compile validated, but has not been exercised on a device. No installation package has been generated. Public compile-check binaries have no usable recovery identity and must not be installed. Hardware, complete backup, independent Wi-Fi-only boot recovery, and spare-device validation remain deployment blockers. Installation-related work requires separate maintainer approval.
 
+The [Windows dashboard OTA procedure](windows-dashboard-ota.md) describes the protected inbox, foreground credential commands, final confirmation, read-only reboot verification, manual DHCP correction, and explicit application startup. It documents the offline implementation only; it does not provide an installable image or authorize a device update.
+
 ## Optional Startup at Windows Login
 
 Run the agent natively on Windows. Startup is opt-in; installation and tests do

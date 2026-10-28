@@ -23,6 +23,10 @@ export class DeviceScheduler {
   }
 
   async stop(): Promise<void> {
+    await this.suspendAndDrain();
+  }
+
+  async suspendAndDrain(): Promise<void> {
     this.running = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;

@@ -7,6 +7,9 @@ import type { SpotifyOAuthClient } from "../spotify/oauth.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 import type { PlaybackSnapshot } from "../spotify/types.js";
 import { resolveActiveScene, type DisplayMode } from "./scene.js";
+import type { FirmwareUpdateService, FirmwareUpdateState, FirmwareUpdateView } from "../device/firmware-update.js";
+
+export type FirmwareUpdateControl = Pick<FirmwareUpdateService, "view" | "getStatus" | "prepare" | "confirm" | "verify" | "correctAddress" | "runApplication">;
 
 const JSON_LIMIT_BYTES = 16 * 1024;
 const GIF_LIMIT_BYTES = 8 * 1024 * 1024;
@@ -25,6 +28,7 @@ export type MockPlaybackAction = "play" | "pause" | "next" | "offline";
 export interface LocalWebAppOptions {
   poller: PlaybackPoller;
   device?: DeviceIntegration;
+  firmwareUpdate?: FirmwareUpdateControl;
   oauth: Pick<SpotifyOAuthClient, "createAuthorizationRequest" | "exchangeAuthorizationCode"> | null;
   spotifyConfigured: boolean;
   getDemoEnabled(): boolean;
@@ -83,6 +87,19 @@ function isDisplayMode(value: unknown): value is DisplayMode {
 
 function isMockAction(value: unknown): value is MockPlaybackAction {
   return value === "play" || value === "pause" || value === "next" || value === "offline";
+}
+
+function otaLocksMutations(view: FirmwareUpdateView | null | undefined): boolean {
+  if (!view) return false;
+  if (view.putAttempted) return view.state !== "started";
+  return !["idle", "started", "rejected", "transferFailed"].includes(view.state);
+}
+
+function rejectOtaMutation(response: ServerResponse, request: IncomingMessage, update: FirmwareUpdateControl | undefined): boolean {
+  if (!otaLocksMutations(update?.view)) return false;
+  request.resume();
+  sendError(response, 423, "Finish or cancel the firmware update before changing device, display, or animation settings.");
+  return true;
 }
 
 async function readBody(request: IncomingMessage, limit: number): Promise<Buffer> {
@@ -272,7 +289,14 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           protocolVersion: "v1",
           device: options.device?.status ?? { address: "", enabled: false, paired: false, connection: "disabled", animation: { state: "none", attempts: 0 } },
           deviceConnected: options.device?.status.connection === "connected",
+          firmwareUpdate: options.firmwareUpdate?.view ?? null,
         });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/ota/status") {
+        sendJson(response, 200, options.firmwareUpdate ? await options.firmwareUpdate.getStatus() : { state: "idle", candidate: null, bytesSent: 0, totalBytes: 0,
+          message: "Dashboard firmware updates are unavailable.", putAttempted: false, effectiveAddress: "" });
         return;
       }
 
@@ -336,16 +360,59 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
         return;
       }
 
+      if (url.pathname.startsWith("/api/ota/")) {
+        if (!options.firmwareUpdate) { request.resume(); sendError(response, 503, "Dashboard firmware updates are unavailable."); return; }
+        try {
+          if (url.pathname === "/api/ota/prepare") {
+            if (Number(request.headers["content-length"] ?? 0) !== 0 || request.headers["transfer-encoding"]) {
+              request.resume(); sendError(response, 400, "Firmware preparation accepts no browser-supplied files or paths."); return;
+            }
+            sendJson(response, 200, await options.firmwareUpdate.prepare());
+            return;
+          }
+          if (url.pathname === "/api/ota/confirm") {
+            const payload = await readJson(request);
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error();
+            const item = payload as Record<string, unknown>;
+            if (Object.keys(item).length !== 1 || !/^[0-9a-f-]{36}$/.test(String(item["candidateId"]))) throw new Error();
+            sendJson(response, 200, await options.firmwareUpdate.confirm(item["candidateId"] as string));
+            return;
+          }
+          if (url.pathname === "/api/ota/address") {
+            const payload = await readJson(request);
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error();
+            const item = payload as Record<string, unknown>;
+            if (Object.keys(item).length !== 1 || typeof item["address"] !== "string") throw new Error();
+            sendJson(response, 200, await options.firmwareUpdate.correctAddress(item["address"]));
+            return;
+          }
+          if (url.pathname === "/api/ota/verify" || url.pathname === "/api/ota/run") {
+            if (Number(request.headers["content-length"] ?? 0) !== 0 || request.headers["transfer-encoding"]) {
+              request.resume(); sendError(response, 400, "This maintenance action accepts no request body."); return;
+            }
+            if (url.pathname.endsWith("/verify")) sendJson(response, 200, await options.firmwareUpdate.verify());
+            else sendJson(response, 200, await options.firmwareUpdate.runApplication());
+            return;
+          }
+          request.resume(); sendError(response, 404, "Local route not found.");
+        } catch (error) {
+          const message = error instanceof Error && /^(Prepare firmware again|A firmware update operation|A firmware update|There is no attempted firmware|Only verified firmware|Maintenance credentials required|Maintenance credentials could)/.test(error.message)
+            ? error.message : "The maintenance operation was not completed. Check update status before taking another action.";
+          sendError(response, 409, message);
+        }
+        return;
+      }
+
+      if (rejectOtaMutation(response, request, options.firmwareUpdate)) return;
+
       if (url.pathname === "/api/device") {
         if (!options.device) { sendError(response, 503, "Device configuration is unavailable."); return; }
         try {
           const payload = await readJson(request);
           if (!payload || typeof payload !== "object") throw new Error();
           const item = payload as Record<string, unknown>;
-          if (typeof item["address"] !== "string" || typeof item["enabled"] !== "boolean" ||
-              (item["token"] !== undefined && typeof item["token"] !== "string")) throw new Error();
-          await options.device.configure({ address: item["address"], enabled: item["enabled"],
-            ...(typeof item["token"] === "string" ? { token: item["token"] } : {}) });
+          if (Object.keys(item).length !== 2 || typeof item["address"] !== "string" || typeof item["enabled"] !== "boolean") throw new Error();
+          await options.device.configure({ address: item["address"], enabled: item["enabled"] });
           response.writeHead(204, securityHeaders()); response.end();
         } catch (error) {
           const message = error instanceof Error && /pairing token|credential manager|valid device HTTP|stopping/.test(error.message)

@@ -29,6 +29,10 @@ public:
         : storage_(storage), startup_(startup), authenticator_(authenticator), transfer_(storage),
           maintenanceOta_(maintenanceBackend_,digest_), maintenanceTransfer_(maintenanceOta_),
           stockRestoreOta_(maintenanceBackend_,digest_,MaintenanceImageKind::stockV106), stockRestoreTransfer_(stockRestoreOta_) {}
+    void setBuildIdentity(std::string_view bootId, std::string_view buildId, std::string_view profile,
+                          std::string_view recoveryIdentityFingerprint) {
+        bootId_ = bootId; buildId_ = buildId; profile_ = profile; recoveryIdentityFingerprint_ = recoveryIdentityFingerprint;
+    }
     void setProtocol(ProtocolHandler* protocol) { protocol_ = protocol; }
     bool begin() { server_.begin(); return server_.status() != 0; }
     bool backgroundStartupWorkAllowed() const {
@@ -79,6 +83,7 @@ private:
     std::uint64_t requestDeadlineMs_ = 60000;
     std::uint64_t lastTick_ = 0;
     HttpDiagnostics diagnostics_{};
+    std::string_view bootId_{}, buildId_{}, profile_{}, recoveryIdentityFingerprint_{};
     bool clientActive_ = false, uploadActive_ = false, lastTickValid_ = false;
     bool maintenance_ = false;
     bool maintenanceFirmware_ = false;

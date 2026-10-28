@@ -129,7 +129,7 @@ export class Harness {
   async associate(ssid: string): Promise<void> { await this.native.send(`ASSOCIATE ${Buffer.from(ssid).toString("hex")}\n`); }
   frame(index: number): Promise<Frame> { return this.native.send(`FRAME ${index}\n`); }
   async maintenance(path: string, body?: string, token = TOKEN): Promise<Response> {
-    const method = path === "status" ? "GET" : body === undefined ? "POST" : "PUT";
+    const method = path === "status" || path === "info" ? "GET" : body === undefined ? "POST" : "PUT";
     return fetch(`${this.url}/maintenance/v1/${path}`, {
       method, headers: { Authorization: `Bearer ${token}`, ...(method === "GET" ? {} : { "Content-Length": String(Buffer.byteLength(body ?? "")) }),
         ...(body === undefined ? {} : { "Content-Type": "application/x-www-form-urlencoded" }) },

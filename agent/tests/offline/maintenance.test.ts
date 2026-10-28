@@ -82,6 +82,26 @@ test("crash-start maintenance avoids automatic storage and display access, rejec
   assert.equal((await harness.maintenance("wifi", "ssid=Lab&password=%00bad-password")).status, 400);
 });
 
+test("maintenance information is authenticated and identifies the running build without credentials", async (t) => {
+  const harness = await startHarness(t);
+  const denied = await harness.maintenance("info", undefined, "wrong");
+  assert.equal(denied.status, 401);
+
+  const response = await harness.maintenance("info");
+  assert.equal(response.status, 200);
+  const info = await response.json() as Record<string, unknown>;
+  assert.equal(info["deviceId"], "host-device-01");
+  assert.equal(info["bootId"], "host-boot-01");
+  assert.equal(info["buildId"], "host-offline-build-01");
+  assert.equal(info["profile"], "esp8266-dio40-4mb");
+  assert.equal(info["otaEnabled"], true);
+  assert.equal(info["maxFirmwareBytes"], 458_752);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  const serialized = JSON.stringify(info);
+  assert.equal(serialized.includes(harness.token), false);
+  assert.equal(serialized.includes("password"), false);
+});
+
 test("crash-start maintenance leaves staged disk files untouched until explicit storage preparation", async (t) => {
   const harness = await startHarness(t, { bootstrap: false });
   await writeFile(join(harness.directory, "animation.part"), "incomplete test candidate");

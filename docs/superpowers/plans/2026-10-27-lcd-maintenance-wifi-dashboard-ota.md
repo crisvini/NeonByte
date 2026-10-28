@@ -1,6 +1,6 @@
 # LCD Colors, Maintenance Wi-Fi, and Windows OTA Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans, or superpowers:subagent-driven-development if separately selected, to implement an approved stage task by task. Stage 1 source work is complete. The maintainer authorized Stage 2 offline implementation, tests, and documentation in the current request. Stage 2 physical acceptance and installation remain pending. Stage 3 remains unauthorized; device access and OTA remain prohibited.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans, or superpowers:subagent-driven-development if separately selected, to implement an approved stage task by task. Stage 1 source work is complete. Stage 2 offline implementation is complete; physical acceptance and installation remain pending. The maintainer has separately authorized Stage 3 offline implementation, tests, and documentation. Physical acceptance and all device access/OTA remain prohibited unless separately authorized.
 
 **Goal:** Correct LCD color reproduction without changing the validated orientation, reconnect saved Wi-Fi while remaining in maintenance, and operate the existing authenticated OTA transaction from the Windows dashboard.
 
@@ -10,7 +10,7 @@
 
 **Spec:** Maintainer's analysis-only request and subsequent planning refinements dated 2026-10-27, captured in the requirements and evidence below; [project planning](../../../PLANNING.md), [protocol](../../protocol.md), [safe startup](../../safe-first-boot.md), [maintenance OTA](../../maintenance-ota-design.md), [HTTP correction](../../http-recovery-investigation.md), and [display report](../../spotify-gif-display.md).
 
-**Status:** The three-stage architecture is approved. Stage 1 source work and offline validation are complete; its physical color acceptance remains **PENDING**. The maintainer authorized Stage 2 offline source, test, and documentation work in the current request; its hardware acceptance and installation remain **PENDING**. Stage 3 remains unauthorized. Device access and OTA remain prohibited. Initial analysis baseline: `014ec6241193ca568cc9c3edd518b4456b1c7dd2`; revision baseline: local `main` at `afcf390`, which records the original plan. These identify inspected checkouts, not a newly fetched remote head or the installed device image. The planning revision itself changed only this document; it involved no credential migration or hardware operation.
+**Status:** The three-stage architecture is approved. Stage 1 source work and offline validation are complete; its physical color acceptance remains **PENDING**. Stage 2 offline implementation is complete; its hardware acceptance and installation remain **PENDING**. The maintainer has authorized Stage 3 offline source, test, and documentation work; Windows and physical update acceptance remain **PENDING**. Device access and OTA remain prohibited unless separately authorized. Initial analysis baseline: `014ec6241193ca568cc9c3edd518b4456b1c7dd2`; revision baseline: local `main` at `afcf390`, which records the original plan. These identify inspected checkouts, not a newly fetched remote head or the installed device image. The planning revision itself changed only this document; it involved no credential migration or hardware operation.
 
 ## Global Constraints
 
@@ -61,7 +61,7 @@ The maintainer confirms that factory firmware displayed all colors correctly and
 
 ### Recommended Approach and Alternatives
 
-Retain the evidence-justified one-bit LCD correction, guarded configuration-only maintenance boot path, and agent orchestration around the existing updater. The refinements make last-IP/manual reconnection the baseline, file selection independent of GUI availability, and credential enrollment additive. Stage 1 is authorized; Stage 2 and Stage 3 require separate approval.
+Retain the evidence-justified one-bit LCD correction, guarded configuration-only maintenance boot path, and agent orchestration around the existing updater. The refinements make last-IP/manual reconnection the baseline, file selection independent of GUI availability, and credential enrollment additive. Stage 1 is authorized; Stage 2 and Stage 3 were separate approval boundaries. Offline source work for both is now authorized; hardware acceptance remains separately gated.
 
 Changing the global RGB565 format would affect both asset types and hide a panel-profile mismatch. Replacing Adafruit or importing another project's gamma/power table would expand the physical risk without exact factory evidence. SDK credential persistence/import, a second settings store, a second updater, partition migration, and a full embedded dashboard add unnecessary dependencies or preservation questions. Reconsider an alternative only if controlled evidence rules out the smaller approach.
 
@@ -326,9 +326,7 @@ Under separate operation-specific authorization and the existing gates, validate
 
 ## Verification Commands and Stage Boundaries
 
-For this planning task, run `npm run check` and `git diff --check`; these validate documentation/contracts and the existing host agent suite. The TypeScript build is not firmware generation. Source changes and target builds remain prohibited. Existing read-only host dependency probes may be run to check the software evidence; they compile temporary host executables, never an ESP8266 image.
-
-For a later approved source stage, use its focused tests plus `npm run check`, `npm run test:offline`, and native-only `pio test -d firmware -e native`, with existing sanitizers/probes as relevant. Target compilation/private packaging needs separate explicit authorization; do not copy build commands from historical work orders as authority. Never run upload/device/discovery commands as part of offline validation.
+The original planning revision authorized only `npm run check` and `git diff --check`; source changes were outside that boundary. The maintainer later separately authorized Stage 3 offline source, test, and documentation work, recorded below. For an authorized source stage, use focused tests plus `npm run check`, `npm run test:offline`, and native-only `pio test -d firmware -e native` when PlatformIO is available. Target compilation/private packaging still requires separate authorization; never run upload/device/discovery commands as part of offline validation.
 
 Every stage ends with an evidence review and an approval boundary. Keep the three changes independently reviewable; do not combine speculative LCD settings, startup behavior and a new panel operation into one physical experiment. Approval can explicitly allow an independent later stage's offline work while a previous physical criterion remains pending; it cannot turn a pending criterion into a pass. Update `PLANNING.md` only for separately implemented and verified work, never for this proposal.
 
@@ -349,13 +347,25 @@ Every stage ends with an evidence review and an approval boundary. Keep the thre
 - **Hardware pending:** controlled LCD colors with unchanged orientation; AP+STA radio/channel behavior, HSPOT outage/recovery and RAM; RTC retention across the legacy bridge and subsequent OTA; authenticated new-build/boot verification and same-device manual DHCP correction. No source/mock result supplies these observations.
 - **Existing gates preserved:** full backup, independent Wi-Fi failed-boot recovery, exact flash/layout and operation-specific authorization. Neither GUI fallback nor simpler address handling reduces those requirements.
 
-Stage 1's source correction and host validation are complete; the pre-correction physical color signature is confirmed, while post-correction visual acceptance remains pending. Stage 2 offline implementation is now authorized and recorded below; physical PC/phone/radio/filesystem/RTC acceptance remains pending. Stage 3 remains unauthorized. Device access and OTA were not performed in this Stage 2 work. Windows selection/enrollment questions remain Stage 3 acceptance dependencies.
+Stage 1's source correction and host validation are complete; the pre-correction physical color signature is confirmed, while post-correction visual acceptance remains pending. Stage 2 offline implementation and its physical pending boundary are recorded below. Stage 3 offline work is now authorized and recorded separately below. Device access and OTA were not performed in either offline stage. Windows selection/enrollment questions remain Stage 3 acceptance dependencies.
 
 ### Stage 2 Offline Execution Record (2026-10-27)
 
 Implemented the clean-maintenance configuration-only load, saved-Wi-Fi retry while keeping the recovery AP and application pause, conservative crash/legacy handling, nonoverlapping versioned RTC guard, explicit storage preparation, and OTA/reboot interlocks. Updated the host harness and the safe-startup, recovery, and protocol documentation. All marked Stage 2 offline baseline tasks above are verified. Optional PC-side `.env` provisioning and hardware acceptance remain outside the completed baseline. This record does not validate filesystem writes, AP+STA behavior, eboot/reset retention, target identity, or installation eligibility. A private manual-installation image was not produced because the private identity header is absent and the only documented target profiles rely on unverified hardware assumptions.
 
-Final verification for this execution: `npm run check`, `npm run test:offline`, PlatformIO native tests, and `git diff --check` are recorded in the execution response. No target image build, clock access, OTA, device operation, or commit was performed.
+Final verification for the Stage 2 execution: `npm run check`, `npm run test:offline`, PlatformIO native tests, and `git diff --check` are recorded in that execution response. No target image build, clock access, OTA, device operation, or commit was performed.
+
+### Stage 3 Offline Execution Record (2026-10-27)
+
+Implemented the authenticated maintenance information route and host fixture, strict maintenance HTTP client, protected fixed-name firmware inbox and manifest/hash binding, additive recovery credential store and foreground enrollment/configuration commands, exclusive scheduler suspension, non-secret protected update journal, single-confirmation firmware state machine, last-IP/manual-address reconciliation, two-round same-boot verification, explicit application startup, and loopback-origin-protected Windows UI. Updated protocol, safe-startup, installation, recovery, and dashboard OTA documentation. Existing API v1 contracts and legacy/Spotify credential stores remain unchanged; no native file picker was added.
+
+Final review tightened maintenance destinations to RFC1918 IPv4 (loopback is rejected outside explicit host tests), retained the UI mutation lock after any consumed firmware PUT, prevented configuration from restarting a maintenance-held scheduler, serialized foreground credential commands with the existing exclusive process lock, and made each verification read honor the remaining absolute reconnect window. A no-response timeout remains `outcomeUnknown`.
+
+Offline tests verify strict upload framing/deadlines/no retry, inbox rejection and immutable snapshots, identity binding, one PUT per confirmed job, restart non-replay, candidate expiration, same-boot verification rounds, scheduler draining/hold, startup address revalidation, journal permissions/content, token-free browser payloads, and loopback Origin enforcement. See [the Windows dashboard OTA procedure](../../windows-dashboard-ota.md).
+
+The private image was not prepared: the private identity header, approved build identity/profile, and PlatformIO CLI are absent, and the repository does not provide evidence to select or compile an installation target. No device or credential store was accessed. Windows-native keyring/ACL/hidden-task validation, target compilation, private artifact verification, hardware OTA, DHCP correction, AP retention, and post-boot visual/resource acceptance remain **PENDING**; the full-backup and independent failed-boot recovery gates remain **BLOCKED**. This record does not complete Phase 4, Phase 5 hardware acceptance, installation, or release readiness. No clock access, OTA/device operation, or commit was performed.
+
+Stage 3 verification: `npm run check` passed Markdown lint on 42 files, the language check, all 9 root tests (one Windows-only test skipped), the TypeScript build/typecheck, and all 94 agent tests. `npm run test:offline` passed all 24 scenarios, and `git diff --check` passed. PlatformIO is unavailable in this environment (`python3 -m platformio --version` reports that the module is missing); no firmware target was compiled.
 
 ## Original Analysis Verification Record
 

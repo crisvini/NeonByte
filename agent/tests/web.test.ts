@@ -3,7 +3,7 @@ import test from "node:test";
 import { validateAnimation, validateCover } from "../src/media/animation.js";
 import { MockSpotifyProvider } from "../src/spotify/mock.js";
 import { PlaybackPoller } from "../src/spotify/poller.js";
-import { startLocalWebApp } from "../src/web/server.js";
+import { startLocalWebApp, type FirmwareUpdateControl } from "../src/web/server.js";
 
 const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
 const track = (isPlaying = true, index = 0) => ({
@@ -19,7 +19,7 @@ const track = (isPlaying = true, index = 0) => ({
   },
 });
 
-async function makeApp() {
+async function makeApp(firmwareUpdate?: FirmwareUpdateControl) {
   const provider = new MockSpotifyProvider(track());
   const poller = new PlaybackPoller({ provider, pollIntervalMs: 15_000 });
   await poller.pollOnce();
@@ -29,6 +29,7 @@ async function makeApp() {
   let exchanged: { code: string; codeVerifier: string } | undefined;
   const app = await startLocalWebApp({
     poller,
+    ...(firmwareUpdate ? { firmwareUpdate } : {}),
     oauth: {
       createAuthorizationRequest: () => ({
         url: "https://accounts.spotify.com/authorize?state=mock-state",
@@ -73,6 +74,7 @@ test("serves the local panel and protects mode changes with a loopback origin ch
     assert.match(html, /240 × 240 RGB565/);
     assert.match(html, /20 frames and 30 seconds/);
     assert.match(html, /32 KiB reserve/);
+    assert.doesNotMatch(html, /device-token|Pairing token/);
 
     const rejected = await fetch(`${origin}/api/mode`, {
       method: "POST",
@@ -92,6 +94,51 @@ test("serves the local panel and protects mode changes with a loopback origin ch
   } finally {
     await app.close();
   }
+});
+
+test("dashboard OTA accepts only loopback-origin metadata actions and never receives firmware paths or bytes", async () => {
+  const candidateId = "11111111-2222-4333-8444-555555555555";
+  let prepareCalls = 0;
+  let confirmCalls = 0;
+  let state: "idle" | "ready" | "rejected" | "transferFailed" | "started" = "idle";
+  let putAttempted = false;
+  const candidate = { id: candidateId, fileName: "firmware.bin" as const, byteLength: 4096, sha256: "a".repeat(64),
+    expectedBuildId: "build-20261027-a1b2", deviceId: "esp8266-a1b2c3" };
+  const update: FirmwareUpdateControl = {
+    get view() { return { state, candidate: state === "ready" ? candidate : null, bytesSent: 0, totalBytes: 4096,
+      message: "Safe update state.", putAttempted, effectiveAddress: "http://192.168.1.20" }; },
+    async getStatus() { return this.view; },
+    async prepare() { prepareCalls++; state = "ready"; return this.view; },
+    async confirm(value) { confirmCalls++; assert.equal(value, candidateId); return this.view; },
+    async verify() { return this.view; }, async correctAddress() { return this.view; }, async runApplication() { return this.view; },
+  };
+  const { app, origin } = await makeApp(update);
+  const post = (path: string, body?: string, withOrigin = true) => fetch(`${origin}${path}`, { method: "POST",
+    headers: { ...(withOrigin ? { Origin: origin } : {}), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+    ...(body !== undefined ? { body } : {}) });
+  try {
+    assert.equal((await post("/api/ota/prepare", undefined, false)).status, 403);
+    assert.equal((await post("/api/ota/prepare", JSON.stringify({ path: "C:\\private\\firmware.bin" }))).status, 400);
+    assert.equal(prepareCalls, 0);
+    const prepared = await post("/api/ota/prepare");
+    assert.equal(prepared.status, 200);
+    const visible = await prepared.json() as Record<string, unknown>;
+    assert.equal(visible["candidate"] && typeof visible["candidate"] === "object", true);
+    assert.equal(JSON.stringify(visible).includes("token"), false);
+    assert.equal(JSON.stringify(visible).includes("C:\\private"), false);
+    assert.equal((await post("/api/ota/confirm", JSON.stringify({ candidateId: "../../firmware.bin" }))).status, 409);
+    assert.equal(confirmCalls, 0);
+    const blocked = await post("/api/mode", JSON.stringify({ mode: "spotify" }));
+    assert.equal(blocked.status, 423);
+    for (const terminalState of ["rejected", "transferFailed"] as const) {
+      state = terminalState;
+      putAttempted = true;
+      assert.equal((await post("/api/device", JSON.stringify({ address: "http://192.168.1.20", enabled: true }))).status, 423);
+      assert.equal((await post("/api/mode", JSON.stringify({ mode: "gif" }))).status, 423);
+    }
+    state = "started";
+    assert.equal((await post("/api/device", JSON.stringify({ address: "http://192.168.1.20", enabled: true }))).status, 503);
+  } finally { await app.close(); }
 });
 
 test("mock controls switch playback, pause, next track, and simulated agent failure in auto mode", async () => {

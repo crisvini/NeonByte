@@ -6,6 +6,8 @@ import type { DisplayMode } from "../web/scene.js";
 import { AnimationStorageError, DeviceClient, DeviceSynchronizer, MEDIA_STORAGE_RESERVE_BYTES } from "./client.js";
 import { DeviceScheduler, type DeviceConnectionStatus } from "./scheduler.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
+import { MaintenanceClient } from "./maintenance-client.js";
+import type { RecoveryCredential, RecoveryCredentialStore } from "./recovery-store.js";
 
 export interface DeviceConfig { address: string; token: string; enabled: boolean }
 export interface DeviceConfigStore {
@@ -48,12 +50,15 @@ export class DeviceIntegration {
   private scheduler: DeviceScheduler | null = null;
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
+  private maintenanceHeld = false;
   private desiredMode: DisplayMode | null = null;
   private animation: MediaAsset | null = null;
   private animationState: DeviceView["animation"] = { state: "none", attempts: 0 };
   private animationSent: string | null = null;
 
-  constructor(private readonly options: { store: DeviceConfigStore; poller: PlaybackPoller; intervalMs: number; fetchDevice?: typeof fetch; fetchCover?: typeof fetch }) {}
+  constructor(private readonly options: { store: DeviceConfigStore; poller: PlaybackPoller; intervalMs: number; fetchDevice?: typeof fetch;
+    fetchCover?: typeof fetch; recoveryStore?: RecoveryCredentialStore;
+    createMaintenanceClient?: (address: string, token: string) => Pick<MaintenanceClient, "info"> }) {}
 
   get status(): DeviceView {
     return { address: this.config?.address ?? "", enabled: this.config?.enabled ?? false,
@@ -88,10 +93,54 @@ export class DeviceIntegration {
       if (this.closed) return;
       const config = await this.options.store.get();
       if (!config) return;
+      let effective = config;
+      if (this.options.recoveryStore) {
+        let recovery: RecoveryCredential | null = null;
+        try { recovery = await this.options.recoveryStore.get(); } catch { /* Preserve the legacy device entry when maintenance storage is unavailable. */ }
+        if (recovery) {
+          try {
+            const maintenance = (this.options.createMaintenanceClient ?? ((address, token) => new MaintenanceClient({ baseUrl: address, token })))(
+              recovery.lastVerifiedAddress, recovery.token);
+            const info = await maintenance.info();
+            if (info.deviceId === recovery.deviceId && info.profile === recovery.profile && info.recoveryIdentityFingerprint === recovery.recoveryIdentityFingerprint) {
+              effective = { ...config, address: recovery.lastVerifiedAddress };
+            }
+          } catch { /* A stale maintenance address never replaces the legacy application address. */ }
+        }
+      }
+      this.createClient(effective);
+      this.config = effective;
+      if (effective.enabled && !this.closed && !this.maintenanceHeld) this.startScheduler(effective);
+    });
+  }
+
+  suspendAndDrain(): Promise<void> {
+    return this.serialize(async () => {
+      this.maintenanceHeld = true;
+      await this.scheduler?.suspendAndDrain();
+      this.scheduler = null;
+    });
+  }
+
+  holdForMaintenance(): void { this.maintenanceHeld = true; }
+
+  async rebindVerifiedAddress(address: string, resumeScheduler = false): Promise<void> {
+    await this.serialize(async () => {
+      if (this.closed) throw new Error("The device integration is stopping.");
+      await this.scheduler?.suspendAndDrain();
+      this.scheduler = null;
+      if (!this.config) return;
+      const config = { ...this.config, address };
       this.createClient(config);
       this.config = config;
-      if (config.enabled && !this.closed) this.startScheduler(config);
+      this.maintenanceHeld = !resumeScheduler;
+      if (resumeScheduler && config.enabled) this.startScheduler(config);
     });
+  }
+
+  resumeAfterExplicitRun(): void {
+    this.maintenanceHeld = false;
+    if (!this.closed && this.config?.enabled && !this.scheduler) this.startScheduler(this.config);
   }
 
   configure(settings: DeviceSettings): Promise<void> {
@@ -112,7 +161,7 @@ export class DeviceIntegration {
       this.config = config;
       this.animationSent = null;
       if (this.animation) this.animationState = { state: "queued", attempts: 0 };
-      if (config.enabled && !this.closed) this.startScheduler(config);
+      if (config.enabled && !this.closed && !this.maintenanceHeld) this.startScheduler(config);
     });
   }
 

@@ -1,5 +1,6 @@
 #ifdef ARDUINO_ARCH_ESP8266
 #include "neonbyte/esp8266/http_server.h"
+#include "neonbyte/maintenance_info.h"
 #include "neonbyte/wifi_configuration.h"
 #include <bearssl/bearssl_hash.h>
 #include <algorithm>
@@ -43,12 +44,16 @@ void DeviceHttpServer::headersComplete() {
     maintenanceFirmware_ = isRawMaintenanceUploadPath(headers_.path);
     firmware_ = headers_.path == "/api/v1/firmware" || maintenanceFirmware_;
     if (maintenanceFirmware_) {
+        const bool identityReady = startup_.identityValid() && !buildId_.empty() && !profile_.empty() &&
+            recoveryIdentityFingerprint_.size() == 64;
+        const bool runtimeReady = ESP.getFlashChipRealSize() == OTA_FLASH_BYTES && ESP.checkFlashConfig(false);
+        const bool otaEnabled = NEONBYTE_ENABLE_OTA != 0 && identityReady && runtimeReady;
         const auto admission = stockRestore_
             ? stockRestoreAdmission(startup_.authorized(headers_.authorization),startup_.applicationPaused(),
-                NEONBYTE_ENABLE_OTA != 0,NEONBYTE_ENABLE_STOCK_RESTORE != 0,
+                otaEnabled,NEONBYTE_ENABLE_STOCK_RESTORE != 0,
                 headers_.method,headers_.contentType,headers_.contentLength,headers_.sha256)
             : maintenanceOtaAdmission(startup_.authorized(headers_.authorization),startup_.applicationPaused(),
-                NEONBYTE_ENABLE_OTA != 0,headers_.method,headers_.contentType,headers_.contentLength,headers_.sha256);
+                otaEnabled,headers_.method,headers_.contentType,headers_.contentLength,headers_.sha256);
         switch (admission) {
             case OtaAdmissionError::none: break;
             case OtaAdmissionError::unauthorized: error(401,"unauthorized","A valid recovery bearer token is required."); return;
@@ -125,6 +130,29 @@ void DeviceHttpServer::finishBinary() {
 void DeviceHttpServer::dispatchJson() {
     bodyData()[received_] = 0;
     const HttpRequest request{headers_.method,headers_.path,headers_.authorization,headers_.contentType,{bodyData(),received_}};
+    if (maintenance_ && request.path == "/maintenance/v1/info") {
+        if (!startup_.authorized(request.authorization)) { error(401,"unauthorized","A valid recovery bearer token is required."); return; }
+        if (request.method != HttpMethod::get || !request.body.empty()) { error(400,"invalid_request","Use GET with an empty body."); return; }
+        char deviceId[32];
+        snprintf(deviceId,sizeof(deviceId),"esp8266-%06lx",static_cast<unsigned long>(ESP.getChipId()));
+        const bool identityReady = startup_.identityValid() && !buildId_.empty() && !profile_.empty() &&
+            recoveryIdentityFingerprint_.size() == 64;
+        const bool runtimeReady = ESP.getFlashChipRealSize() == OTA_FLASH_BYTES && ESP.checkFlashConfig(false);
+        const bool otaEnabled = NEONBYTE_ENABLE_OTA != 0 && identityReady && runtimeReady;
+        const auto maxFirmwareBytes = maintenanceFirmwareCapacity(otaEnabled,ESP.getFreeSketchSpace(),FIRMWARE_BYTES_LIMIT);
+        const IPAddress stationAddress = WiFi.status() == WL_CONNECTED ? WiFi.localIP() : IPAddress(0,0,0,0);
+        const IPAddress apAddress = startup_.recoveryApRunning() ? WiFi.softAPIP() : IPAddress(0,0,0,0);
+        char stationIp[16], apIp[16];
+        snprintf(stationIp,sizeof(stationIp),"%u.%u.%u.%u",stationAddress[0],stationAddress[1],stationAddress[2],stationAddress[3]);
+        snprintf(apIp,sizeof(apIp),"%u.%u.%u.%u",apAddress[0],apAddress[1],apAddress[2],apAddress[3]);
+        const MaintenanceInfo info{deviceId,bootId_,buildId_,"0.1.0-phase4",stationIp,apIp,profile_,
+            recoveryIdentityFingerprint_,maxFirmwareBytes,otaEnabled};
+        response_ = {}; response_.statusCode = 200; response_.contentType = "application/json";
+        if (!writeMaintenanceInfoJson(info,response_.body.data(),response_.body.size(),response_.bodySize)) {
+            error(500,"internal_error","Maintenance information is unavailable."); return;
+        }
+        prepareResponse(); return;
+    }
     if (maintenance_ && request.path == "/maintenance/v1/diagnostics") {
         if (!startup_.authorized(request.authorization)) { error(401,"unauthorized","A valid recovery bearer token is required."); return; }
         if (request.method != HttpMethod::get || !request.body.empty()) { error(400,"invalid_request","Use GET with an empty body."); return; }

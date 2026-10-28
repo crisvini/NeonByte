@@ -1,5 +1,11 @@
 import { acquireInstance } from "./instance.js";
 import { DeviceIntegration, SystemDeviceConfigStore } from "./device/integration.js";
+import { DeviceClient } from "./device/client.js";
+import { SystemRecoveryCredentialStore } from "./device/recovery-store.js";
+import { MaintenanceClient } from "./device/maintenance-client.js";
+import { FirmwareUpdateService, SystemFirmwareUpdateJournal } from "./device/firmware-update.js";
+import { runRecoveryEnrollment } from "./device/recovery-enrollment.js";
+import { createDeviceConfigurationPrompts, createRecoveryEnrollmentPrompts } from "./device/recovery-enrollment-cli.js";
 import { ReauthorizationRequiredError, SpotifyOAuthError } from "./spotify/errors.js";
 import { startOAuthCallbackServer } from "./spotify/oauth-callback.js";
 import { MockSpotifyProvider } from "./spotify/mock.js";
@@ -64,6 +70,40 @@ async function authorizeSpotify(): Promise<void> {
     logger.info("Spotify authorized. The refresh token was saved in the system credential manager.");
   } finally {
     await listener.close();
+  }
+}
+
+async function enrollRecovery(): Promise<void> {
+  try {
+    const result = await runRecoveryEnrollment({
+      prompts: createRecoveryEnrollmentPrompts(),
+      deviceStore: new SystemDeviceConfigStore(),
+      recoveryStore: new SystemRecoveryCredentialStore(),
+    });
+    logger.info(`Verified maintenance credentials enrolled for ${result.deviceId}.`);
+  } catch {
+    logger.error("Maintenance enrollment was not completed. Existing device and Spotify credentials remain unchanged.");
+    process.exitCode = 1;
+  }
+}
+
+async function configureDeviceCredentials(): Promise<void> {
+  try {
+    const prompts = createDeviceConfigurationPrompts();
+    const value = { address: (await prompts.address()).trim(), token: await prompts.token(), enabled: await prompts.enabled() };
+    const store = new SystemDeviceConfigStore();
+    new DeviceClient({ baseUrl: value.address, token: value.token });
+    const previous = await store.get();
+    await store.set(value);
+    const verified = await store.get();
+    if (!verified || verified.address !== value.address || verified.token !== value.token || verified.enabled !== value.enabled) {
+      if (previous) await store.set(previous);
+      throw new Error();
+    }
+    logger.info("Device configuration was verified in the system credential manager.");
+  } catch {
+    logger.error("Device configuration was not completed. Existing Spotify credentials remain unchanged.");
+    process.exitCode = 1;
   }
 }
 
@@ -152,10 +192,16 @@ async function runAgent(): Promise<void> {
   if (!Number.isFinite(agentTimeoutMs) || agentTimeoutMs < 1000) {
     throw new Error("NEONBYTE_AGENT_TIMEOUT_MS must be at least 1000.");
   }
-  const device = new DeviceIntegration({ store: new SystemDeviceConfigStore(), poller, intervalMs: 15_000 });
+  const recoveryStore = new SystemRecoveryCredentialStore();
+  const device = new DeviceIntegration({ store: new SystemDeviceConfigStore(), recoveryStore, poller, intervalMs: 15_000 });
+  const firmwareUpdate = new FirmwareUpdateService({ recoveryStore, journal: new SystemFirmwareUpdateJournal(), device,
+    createClient: (address, token) => new MaintenanceClient({ baseUrl: address, token }) });
+  try { await firmwareUpdate.restore(); }
+  catch { logger.warn("Firmware update recovery state is unavailable; dashboard updates require a protected local journal."); }
   const webApp = await startLocalWebApp({
     poller,
     device,
+    firmwareUpdate,
     oauth,
     spotifyConfigured: Boolean(oauth),
     getDemoEnabled: () => demoEnabled,
@@ -201,8 +247,18 @@ async function main(): Promise<void> {
     await authorizeSpotify();
     return;
   }
+  if (command === "enroll-recovery") {
+    const instance = await acquireInstance();
+    try { await enrollRecovery(); } finally { await instance.close(); }
+    return;
+  }
+  if (command === "configure-device") {
+    const instance = await acquireInstance();
+    try { await configureDeviceCredentials(); } finally { await instance.close(); }
+    return;
+  }
   if (command && command !== "run") {
-    throw new Error("Unknown command. Use 'auth' to authorize or 'run' to start the agent.");
+    throw new Error("Unknown command. Use 'auth', 'configure-device', 'enroll-recovery', or 'run'.");
   }
   const instance = await acquireInstance();
   try { await runAgent(); } finally { await instance.close(); }

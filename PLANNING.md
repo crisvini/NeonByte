@@ -338,7 +338,7 @@ shutdown. The broader tasks below remain open until their remaining software and
 physical acceptance criteria are verified.
 
 - [x] Integrate the scheduler, v1 client, and synchronizer into the desktop lifecycle.
-- [x] Configure the address and pairing credential in the local dashboard, with device connectivity disabled until explicitly enabled.
+- [x] Configure the address in the local dashboard, keep new pairing secrets in foreground CLI entry, and leave device connectivity disabled until explicitly enabled.
 - [x] Store device settings and credentials in the system credential manager and exclude the token from dashboard responses and logs.
 - [x] Test configuration, startup restoration, reconnect, address changes, and shutdown using the native host harness and local tests.
 - [x] Synchronize dashboard modes, decoded Spotify artwork, and validated GIFs with the native host using protocol v1.
@@ -356,6 +356,8 @@ physical acceptance criteria are verified.
 - [ ] Validate RF instability, PC suspend/resume, actual clock restart, and large GIF transfer behavior on hardware.
 
 **Acceptance:** stable automatic switching; no manual intervention after network loss/return; GIF persists; Spotify does not affect the GIF while manual mode is active; and language consistency is verified.
+
+**Independent dashboard OTA Stage 3 (2026-10-27):** the maintainer separately authorized the offline source/test/documentation work in [the LCD maintenance/Wi-Fi/dashboard OTA plan](docs/superpowers/plans/2026-10-27-lcd-maintenance-wifi-dashboard-ota.md). That implementation is recorded there and documented in [the Windows OTA procedure](docs/windows-dashboard-ota.md). This does not complete Phase 5 hardware integration or change Phase 4 installation/recovery gates. No device access or OTA was performed; private build identity, Windows-native ACL/keyring acceptance, target compilation, backup, and physical post-boot validation remain pending or blocked.
 
 ### Phase 6 — Automatic Startup, Distribution, and Quality
 

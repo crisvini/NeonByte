@@ -43,6 +43,30 @@ test("scheduler never overlaps synchronization and waits for shutdown", async ()
   assert.equal(calls, 1);
 });
 
+test("scheduler suspension drains active work and can resume only after an explicit caller action", async () => {
+  let active = 0;
+  let maximumActive = 0;
+  let release: (() => void) | undefined;
+  const scheduler = new DeviceScheduler({ intervalMs: 10, synchronize: async () => {
+    active++; maximumActive = Math.max(maximumActive, active);
+    await new Promise<void>((resolve) => { release = resolve; });
+    active--; return true;
+  } });
+  scheduler.start();
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  const suspension = scheduler.suspendAndDrain();
+  release?.();
+  await suspension;
+  assert.equal(scheduler.status, "disabled");
+  assert.equal(active, 0);
+  assert.equal(maximumActive, 1);
+  scheduler.start();
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  release?.();
+  await scheduler.suspendAndDrain();
+  assert.equal(maximumActive, 1);
+});
+
 test("scheduler reports exceptions as disconnected and retries", async () => {
   let calls = 0;
   const scheduler = new DeviceScheduler({ intervalMs: 15, synchronize: async () => {

@@ -29,13 +29,14 @@ test("dashboard mode, decoded artwork, and GIF reach the native device and retry
   const device = new DeviceIntegration({ store: new Store(), poller, intervalMs: 30,
     fetchCover: async () => new Response(png, { headers: { "Content-Type": "image/png" } }) });
   await device.start();
+  await device.configure({ address: harness.url, token: harness.token, enabled: true });
   const app = await startLocalWebApp({ poller, device, oauth: null, spotifyConfigured: false,
     getDemoEnabled: () => false, setDemoEnabled: async () => {}, onMockAction: async () => {}, port: 0 });
   t.after(async () => { await app.close(); await device.stop(); });
   const origin = `http://127.0.0.1:${app.port}`;
   const post = (path: string, body: unknown) => fetch(`${origin}${path}`, { method: "POST",
     headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  assert.equal((await post("/api/device", { address: harness.url, token: harness.token, enabled: true })).status, 204);
+  assert.equal((await post("/api/device", { address: harness.url, enabled: true })).status, 204);
   await waitFor(() => device.status.connection === "connected");
   assert.equal((await harness.state()).coverPixel, 0xf800);
   const count = harness.requests.filter((r) => r.path === "/api/v1/cover").length;

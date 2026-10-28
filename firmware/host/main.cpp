@@ -1,4 +1,5 @@
 #include "storage.h"
+#include "neonbyte/maintenance_info.h"
 #include "neonbyte/safe_startup.h"
 #include <iostream>
 #include <memory>
@@ -80,6 +81,22 @@ HttpResponse request(std::string_view header, const std::vector<std::uint8_t>& b
     const bool maintenance = headers.path.substr(0, 16) == "/maintenance/v1/";
     if (maintenance ? !startup.authorized(headers.authorization) : headers.path != "/api/v1/status" && !services.auth.isAuthorized(headers.authorization)) return error(401, "unauthorized");
     if (!maintenance && !services.protocol) return error(409, "conflict");
+    if (headers.path == "/maintenance/v1/info") {
+        if (headers.method != HttpMethod::get || !body.empty()) return error(400, "invalid_request");
+        const char fingerprintInputPrefix[] = "NeonByte recovery identity v1";
+        Digest fingerprint;
+        fingerprint.update(reinterpret_cast<const std::uint8_t*>(fingerprintInputPrefix), sizeof(fingerprintInputPrefix));
+        fingerprint.update(reinterpret_cast<const std::uint8_t*>(IDENTITY.token.data()), IDENTITY.token.size());
+        const std::uint8_t separator = 0;
+        fingerprint.update(&separator, 1);
+        fingerprint.update(reinterpret_cast<const std::uint8_t*>(IDENTITY.apPassword.data()), IDENTITY.apPassword.size());
+        char fingerprintValue[64]; fingerprint.finish(fingerprintValue);
+        const MaintenanceInfo info{"host-device-01", "host-boot-01", "host-offline-build-01", "host-offline",
+            "192.168.1.20", "192.168.4.1", "esp8266-dio40-4mb", {fingerprintValue, sizeof(fingerprintValue)}, 458752, true};
+        HttpResponse response; response.statusCode = 200; response.contentType = "application/json";
+        if (!writeMaintenanceInfoJson(info, response.body.data(), response.body.size(), response.bodySize)) return error(500, "internal_error");
+        return response;
+    }
     if (headers.path == "/api/v1/firmware" || headers.path == "/maintenance/v1/firmware") return error(409, "conflict");
     const bool cover = headers.path == "/api/v1/cover";
     if (cover || headers.path == "/api/v1/animation") {

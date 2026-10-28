@@ -89,11 +89,12 @@ test("dashboard protects configuration and never returns pairing credentials", a
   const store = new MemoryStore();
   const device = new DeviceIntegration({ store, poller: poller(), intervalMs: 10 });
   await device.start();
+  await device.configure({ address: "http://127.0.0.1:1", token: "test-secret", enabled: false });
   const app = await startLocalWebApp({ poller: poller(), oauth: null, spotifyConfigured: false,
     getDemoEnabled: () => true, setDemoEnabled: async () => {}, onMockAction: async () => {}, port: 0, device });
   const origin = `http://127.0.0.1:${app.port}`;
   try {
-    const payload = JSON.stringify({ address: "http://127.0.0.1:1", token: "test-secret", enabled: false });
+    const payload = JSON.stringify({ address: "http://127.0.0.1:1", enabled: true });
     const denied = await fetch(`${origin}/api/device`, { method: "POST", headers: { "Content-Type": "application/json" }, body: payload });
     assert.equal(denied.status, 403);
     const accepted = await fetch(`${origin}/api/device`, { method: "POST", headers: { "Content-Type": "application/json", Origin: origin }, body: payload });
@@ -101,7 +102,11 @@ test("dashboard protects configuration and never returns pairing credentials", a
     const state = await fetch(`${origin}/api/status`).then((r) => r.text());
     assert.equal(state.includes("test-secret"), false);
     assert.match(state, /127\.0\.0\.1:1/);
-    const invalid = await fetch(`${origin}/api/device`, { method: "POST", headers: { "Content-Type": "application/json", Origin: origin }, body: JSON.stringify({ address: "bad test-secret", token: "test-secret", enabled: true }) });
+    const tokenPayload = await fetch(`${origin}/api/device`, { method: "POST", headers: { "Content-Type": "application/json", Origin: origin },
+      body: JSON.stringify({ address: "http://127.0.0.1:1", token: "test-secret", enabled: true }) });
+    assert.equal(tokenPayload.status, 400);
+    assert.equal((await tokenPayload.text()).includes("test-secret"), false);
+    const invalid = await fetch(`${origin}/api/device`, { method: "POST", headers: { "Content-Type": "application/json", Origin: origin }, body: JSON.stringify({ address: "bad test-secret", enabled: true }) });
     assert.ok(invalid.status >= 400);
     assert.equal((await invalid.text()).includes("test-secret"), false);
   } finally { await app.close(); await device.stop(); }
@@ -139,4 +144,21 @@ test("shutdown during a configuration write never starts a new scheduler", async
   await configuring;
   await stopping;
   assert.equal(calls, 0);
+});
+
+test("configuration cannot restart the scheduler while the integration is held for maintenance", async () => {
+  const store = new MemoryStore();
+  let calls = 0;
+  const device = new DeviceIntegration({ store, poller: poller(), intervalMs: 10,
+    fetchDevice: async () => { calls++; return new Response("", { status: 503 }); } });
+  await device.start();
+  try {
+    await device.configure({ address: "http://192.168.1.20", token: "test-secret", enabled: true });
+    await delay(25);
+    await device.suspendAndDrain();
+    const drainedCalls = calls;
+    await device.configure({ address: "http://192.168.1.20", enabled: true });
+    await delay(25);
+    assert.equal(calls, drainedCalls);
+  } finally { await device.stop(); }
 });

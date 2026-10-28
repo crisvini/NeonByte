@@ -4,6 +4,7 @@ import { DeviceIntegration, type DeviceConfig, type DeviceConfigStore } from "..
 import { PlaybackPoller } from "../../src/spotify/poller.js";
 import { MockSpotifyProvider } from "../../src/spotify/mock.js";
 import { startLocalWebApp } from "../../src/web/server.js";
+import type { RecoveryCredential, RecoveryCredentialStore } from "../../src/device/recovery-store.js";
 import { EPOCH, startHarness } from "./harness.js";
 
 class MemoryStore implements DeviceConfigStore {
@@ -38,7 +39,9 @@ test("dashboard configuration drives the native firmware through restart, outage
   const before = first.requests.length;
   await new Promise<void>((resolve) => setTimeout(resolve, 40));
   assert.equal(first.requests.length, before);
-  assert.equal((await post({ address: first.url, token: first.token, enabled: true })).status, 204);
+  assert.equal((await post({ address: first.url, token: first.token, enabled: true })).status, 400);
+  await device.configure({ address: first.url, token: first.token, enabled: true });
+  assert.equal((await post({ address: first.url, enabled: true })).status, 204);
   await waitFor(() => device.status.connection === "connected");
   assert.equal((await first.state()).trackId, "lifecycle-track");
   first.offline = true;
@@ -46,7 +49,8 @@ test("dashboard configuration drives the native firmware through restart, outage
   first.offline = false;
   await waitFor(() => device.status.connection === "connected");
   assert.equal((await post({ address: second.url, enabled: true })).status, 400);
-  assert.equal((await post({ address: second.url, token: second.token, enabled: true })).status, 204);
+  assert.equal((await post({ address: second.url, token: second.token, enabled: true })).status, 400);
+  await device.configure({ address: second.url, token: second.token, enabled: true });
   await waitFor(() => device.status.connection === "connected");
   assert.equal((await second.state()).trackId, "lifecycle-track");
   await device.stop();
@@ -58,4 +62,38 @@ test("dashboard configuration drives the native firmware through restart, outage
   await waitFor(() => device.status.connection === "connected");
   assert.equal((await second.state()).trackId, "lifecycle-track");
   assert.ok(second.requests.length > stopped);
+});
+
+test("verified maintenance address is used only after identity recheck and the legacy record remains untouched", async () => {
+  const legacy: DeviceConfig = { address: "http://192.168.1.20", token: "legacy-pairing-token", enabled: true };
+  const store = new MemoryStore(); store.value = { ...legacy };
+  const recovery: RecoveryCredential = { version: 1, token: "a".repeat(64), deviceId: "esp8266-a1b2c3", profile: "esp8266-dio40-4mb",
+    recoveryIdentityFingerprint: "b".repeat(64), lastVerifiedAddress: "http://192.168.1.99" };
+  const recoveryStore: RecoveryCredentialStore = { get: async () => recovery, set: async () => {}, delete: async () => {} };
+  const poller = new PlaybackPoller({ provider: new MockSpotifyProvider(), pollIntervalMs: 15_000, now: () => EPOCH });
+  const fetchDevice: typeof fetch = async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+  let device = new DeviceIntegration({ store, recoveryStore, poller, intervalMs: 30,
+    fetchDevice,
+    createMaintenanceClient: () => ({ info: async () => ({ deviceId: recovery.deviceId, bootId: "boot-01", buildId: "build-01",
+      firmwareVersion: "0.1.0", stationIp: "192.168.1.99", recoveryApIp: "192.168.4.1", otaEnabled: true,
+      maxFirmwareBytes: 458752, profile: recovery.profile, recoveryIdentityFingerprint: recovery.recoveryIdentityFingerprint }) }) });
+  await device.start();
+  assert.equal(device.status.address, recovery.lastVerifiedAddress);
+  assert.deepEqual(store.value, legacy);
+  await device.suspendAndDrain();
+  await device.stop();
+
+  device = new DeviceIntegration({ store, recoveryStore, poller, intervalMs: 30,
+    fetchDevice,
+    createMaintenanceClient: () => ({ info: async () => ({ deviceId: recovery.deviceId, bootId: "boot-01", buildId: "build-01",
+      firmwareVersion: "0.1.0", stationIp: "192.168.1.99", recoveryApIp: "192.168.4.1", otaEnabled: true,
+      maxFirmwareBytes: 458752, profile: recovery.profile, recoveryIdentityFingerprint: recovery.recoveryIdentityFingerprint }) }) });
+  device.holdForMaintenance();
+  await device.start();
+  assert.equal(device.status.address, recovery.lastVerifiedAddress);
+  assert.equal(device.status.connection, "disabled");
+  assert.deepEqual(store.value, legacy);
+  device.resumeAfterExplicitRun();
+  assert.equal(device.status.connection, "connecting");
+  await device.stop();
 });
