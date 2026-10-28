@@ -30,6 +30,12 @@ deleting an open readback handle.
 
 ## Finite Upload Deadlines
 
+**2026-10-28 follow-up:** the agent now limits cover uploads to 15 seconds and
+refreshes the latest metadata/heartbeat after each settled cover attempt. Cover
+download/decoding runs independently on the computer, with one shared job across
+scheduler replacements. Animation and firmware deadlines below are unchanged;
+the server remains sequential. See [the synchronization report](daily-startup-and-sync.md).
+
 Ordinary requests and firmware updates retain a 60-second firmware deadline.
 Cover and animation uploads receive 60 seconds plus one second per started
 8,192 bytes, capped by the existing asset-size limits at 342 seconds for the

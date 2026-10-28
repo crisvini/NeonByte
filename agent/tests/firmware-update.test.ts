@@ -22,7 +22,7 @@ class MemoryJournal implements FirmwareUpdateJournal {
   async save(value: FirmwareUpdateRecord) { this.value = structuredClone(value); }
 }
 
-function fixture(options: { lostPut?: boolean; bootId?: string; buildId?: string; candidateTtlMs?: number; bootSequence?: string[];
+function fixture(options: { lostPut?: boolean; bootId?: string; buildId?: string; candidateTtlMs?: number; bootSequence?: string[]; automaticStartup?: boolean;
   offlineAfterPut?: boolean; reconnectWindowMs?: number; initiallyPaused?: boolean; recoveryApLostAfterDrain?: boolean } = {}) {
   const journal = new MemoryJournal();
   const calls: string[] = [];
@@ -65,7 +65,8 @@ function fixture(options: { lostPut?: boolean; bootId?: string; buildId?: string
   let resumed = false;
   let preflightAbortResumed = false;
   const service = new FirmwareUpdateService({
-    recoveryStore, inbox: { prepare: async () => candidate }, journal,
+    recoveryStore, inbox: { prepare: async () => options.automaticStartup ? { ...candidate,
+      manifest: { ...manifest, featureGates: { maintenanceOnBoot: false, otaEnabled: true, maintenanceAfterSoftwareRestart: true } } } : candidate }, journal,
     createClient: () => client,
     device: { suspendAndDrain: async () => { calls.push("suspend"); suspended = true;
         if (options.recoveryApLostAfterDrain) recoveryApRunning = false;
@@ -117,6 +118,53 @@ test("an already paused application can be updated without a pause or startup re
   await f.service.verify();
   assert.equal(f.service.view.state, "verified");
   assert.equal(f.resumed, false);
+});
+
+test("an automatically running post-update app is not verified and cannot release synchronization", async () => {
+  const f = fixture({ reconnectWindowMs: 5000, automaticStartup: true });
+  await f.service.prepare(); await f.service.confirm("candidate-1");
+  f.setRunning(true);
+  await f.service.verify();
+  assert.equal(f.service.view.state, "verificationFailed");
+  assert.equal(f.resumed, false);
+  assert.equal(f.calls.filter((call) => call === "put").length, 1);
+  assert.equal(f.calls.includes("run"), false);
+});
+
+test("a legacy running image can transition to an automatic-start candidate through paused verification and explicit run", async () => {
+  const f = fixture({ automaticStartup: true });
+  await f.service.prepare(); await f.service.confirm("candidate-1");
+  assert.equal(f.service.view.state, "waitingForReboot");
+  assert.equal(f.resumed, false);
+  await f.service.verify();
+  assert.equal(f.service.view.state, "verified");
+  assert.equal(f.calls.includes("run"), false);
+  await f.service.runApplication();
+  assert.equal(f.service.view.state, "started");
+  assert.equal(f.calls.filter((call) => call === "put").length, 1);
+  assert.equal(f.resumed, true);
+});
+
+test("explicit run must be observed running before recording started and resuming synchronization", async () => {
+  const f = fixture();
+  await f.service.prepare(); await f.service.confirm("candidate-1"); await f.service.verify();
+  f.client.run = async () => { f.calls.push("run"); };
+  await assert.rejects(f.service.runApplication(), /did not start/);
+  assert.equal(f.service.view.state, "verified");
+  assert.equal(f.journal.value?.state, "verified");
+  assert.equal(f.resumed, false);
+});
+
+test("a power cycle after verification requires fresh verification before accepting an automatically running app", async () => {
+  const f = fixture({ automaticStartup: true });
+  await f.service.prepare(); await f.service.confirm("candidate-1"); await f.service.verify();
+  const verifiedInfo = await f.client.info();
+  f.setInfo({ ...verifiedInfo, bootId: "power-cycled-after-verification" });
+  f.setRunning(true);
+  await assert.rejects(f.service.runApplication(), /identity changed|verify again/);
+  assert.equal(f.resumed, false);
+  assert.equal(f.calls.includes("run"), false);
+  assert.equal(f.service.view.state, "verificationFailed");
 });
 
 test("maintenance network state is rechecked after the scheduler drains and before pause or upload", async () => {
@@ -206,6 +254,13 @@ test("restart restoration invalidates a ready candidate and does not replay an a
   assert.equal(attempted.heldForMaintenance, true);
   assert.equal(attempted.calls.includes("put"), false);
   assert.equal(attempted.resumed, false);
+
+  const legacyVerified = fixture();
+  legacyVerified.journal.value = { ...readyRecord!, state: "verified", putAttempted: true };
+  await legacyVerified.service.restore();
+  assert.equal(legacyVerified.service.view.state, "outcomeUnknown");
+  assert.equal(legacyVerified.heldForMaintenance, true);
+  assert.equal(legacyVerified.calls.includes("put"), false);
 });
 
 test("restarted OTA intent verifies the new paused build without replay and waits for explicit run", async () => {

@@ -110,6 +110,9 @@ export class DeviceClient {
     await this.mutate("/api/v1/mode", "PUT", JSON.stringify({ mode }), { "Content-Type": "application/json" });
   }
   async sendPlayback(snapshot: PlaybackSnapshot): Promise<void> {
+    // Unavailability is not a confirmed pause. Do not renew stale metadata;
+    // firmware expires the last real sample independently of heartbeats.
+    if (snapshot.status === "unavailable") return;
     const payload = snapshot.nowPlaying ?? (this.lastPlayback ? {
       ...this.lastPlayback, isPlaying: false, sampledAtUnixMs: snapshot.sampledAtUnixMs,
     } : null);
@@ -122,7 +125,7 @@ export class DeviceClient {
     await this.mutate("/api/v1/cover", "PUT", asset.bytes, {
       "Content-Type": "application/octet-stream", "X-Content-SHA256": asset.sha256,
       "X-Track-Id": encodeURIComponent(trackId),
-    }, this.uploadTimeout(asset.bytes.length));
+    }, this.hasTimeoutOverride ? this.timeoutMs : 15_000);
   }
   async uploadAnimation(asset: MediaAsset): Promise<void> {
     validateAnimation(asset.bytes, asset.sha256);
@@ -137,11 +140,13 @@ export class DeviceClient {
 export class DeviceSynchronizer {
   private pending: Promise<boolean> | null = null;
   private coverKey: string | null = null;
+  private coverPreparation: { key: string; trackId: string; pending: boolean; asset: MediaAsset | null } | null = null;
 
   constructor(private readonly options: {
     client: DeviceClient;
     poller: PlaybackPoller;
     loadCover?: (url: string) => Promise<MediaAsset>;
+    onCoverPrepared?: () => void;
   }) {}
 
   // True means the requested transport operations succeeded. With no local track
@@ -154,26 +159,60 @@ export class DeviceSynchronizer {
   }
 
   private async synchronizeOnce(): Promise<boolean> {
-    const { client, poller, loadCover } = this.options;
+    const { client, poller } = this.options;
     try {
+      this.prepareCover(poller.currentSnapshot);
       await client.status();
       // Read currentSnapshot each cycle: subscribe() intentionally deduplicates progress.
-      const snapshot = poller.currentSnapshot;
-      await client.sendPlayback(snapshot);
-      await client.heartbeat();
-      const trackId = snapshot.nowPlaying?.trackId;
-      const key = trackId && snapshot.coverUrl ? JSON.stringify([trackId, snapshot.coverUrl]) : null;
-      if (key && key !== this.coverKey && loadCover && snapshot.coverUrl && trackId) {
+      await this.refreshPlayback();
+      const key = this.currentCoverKey(poller.currentSnapshot);
+      const prepared = this.coverPreparation;
+      if (key && key !== this.coverKey && prepared?.key === key && prepared.asset) {
         try {
-          const cover = await loadCover(snapshot.coverUrl);
-          await client.uploadCover(trackId, cover);
+          await client.uploadCover(prepared.trackId, prepared.asset);
           this.coverKey = key;
-        } catch { return false; }
+        } catch { this.coverKey = null; }
+        // The server is sequential: refresh only after the upload has settled.
+        // Successful metadata/heartbeat keep mode/animation work available even
+        // when artwork alone was rejected. Failed communication still falls back.
+        await this.refreshPlayback();
       }
       return true;
     } catch {
       this.coverKey = null; // A reboot or failed connection requires artwork resynchronization.
       return false;
     }
+  }
+
+  private async refreshPlayback(): Promise<void> {
+    await this.options.client.sendPlayback(this.options.poller.currentSnapshot);
+    await this.options.client.heartbeat();
+  }
+
+  private currentCoverKey(snapshot: PlaybackSnapshot): string | null {
+    return snapshot.nowPlaying && snapshot.coverUrl
+      ? JSON.stringify([snapshot.nowPlaying.trackId, snapshot.coverUrl]) : null;
+  }
+
+  private prepareCover(snapshot: PlaybackSnapshot): void {
+    const key = this.currentCoverKey(snapshot);
+    const { loadCover } = this.options;
+    // At most one download/decoder job and one retained candidate. Never issue
+    // device requests from this job, including after scheduler suspension.
+    if (this.coverPreparation?.pending) return;
+    if (!key || !loadCover || !snapshot.nowPlaying || !snapshot.coverUrl) {
+      this.coverPreparation = null;
+      return;
+    }
+    if (key === this.coverKey || (this.coverPreparation?.key === key && this.coverPreparation.asset)) return;
+    const prepared = { key, trackId: snapshot.nowPlaying.trackId, pending: true, asset: null as MediaAsset | null };
+    this.coverPreparation = prepared;
+    void Promise.resolve().then(() => loadCover(snapshot.coverUrl!)).then((asset) => {
+      if (this.currentCoverKey(this.options.poller.currentSnapshot) === key) prepared.asset = asset;
+    }, () => { /* Artwork failure must not mark working metadata/heartbeat transport offline. */ })
+      .finally(() => {
+        prepared.pending = false;
+        if (prepared.asset) this.options.onCoverPrepared?.();
+      });
   }
 }

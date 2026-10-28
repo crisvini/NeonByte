@@ -3,8 +3,31 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DeviceClient } from "../src/device/client.js";
 import { convertGifToAnimation } from "../src/media/animation.js";
+import type { PlaybackSnapshot } from "../src/spotify/types.js";
 
 const status = { protocolVersion: "v1", firmwareVersion: "host", ip: "127.0.0.1", freeStorageBytes: 4_000_000, mode: "auto", activeScene: "gif" };
+
+test("temporary Spotify failures send no false pause while confirmed idle and pause still clear playback", async () => {
+  const payloads: unknown[] = [];
+  const client = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret",
+    fetchDevice: async (input, init) => {
+      if (init?.method === "GET") return new Response(JSON.stringify(status));
+      if (String(input).endsWith("/spotify")) payloads.push(JSON.parse(String(init?.body)));
+      return new Response(null, { status: 204 });
+    } });
+  const snapshot: PlaybackSnapshot = { status: "playing", coverUrl: null, sampledAtUnixMs: 1000,
+    nowPlaying: { trackId: "first", title: "First", artist: "Artist", isPlaying: true,
+      durationMs: 180000, progressMs: 1000, sampledAtUnixMs: 1000 } };
+  await client.sendPlayback(snapshot);
+  for (const unavailableReason of ["offline", "api_error", "rate_limited", "authentication_required"] as const) {
+    await client.sendPlayback({ status: "unavailable", nowPlaying: null, coverUrl: null, sampledAtUnixMs: 2000, unavailableReason });
+  }
+  assert.equal(payloads.length, 1);
+  await client.sendPlayback({ ...snapshot, status: "paused", nowPlaying: { ...snapshot.nowPlaying!, isPlaying: false } });
+  assert.equal((payloads.at(-1) as { isPlaying: boolean }).isPlaying, false);
+  await client.sendPlayback({ status: "idle", nowPlaying: null, coverUrl: null, sampledAtUnixMs: 3000 });
+  assert.deepEqual(payloads.at(-1), { ...snapshot.nowPlaying, isPlaying: false, sampledAtUnixMs: 3000 });
+});
 
 test("device mutations stop on incompatible or malformed status before disclosing pairing credentials", async () => {
   for (const invalid of [{ ...status, protocolVersion: "v2" }, { ...status, freeStorageBytes: -1 }, { ...status, extra: true }, { ...status, mode: "unknown" },
@@ -72,7 +95,7 @@ test("device deadlines scale for validated binary uploads and respect explicit o
   await client.uploadCover("track", makeAsset(0));
   await client.uploadAnimation(makeAsset(1));
   await client.uploadAnimation(makeAsset(20));
-  assert.deepEqual(deadlines, [10_000, 10_000, 10_000, 90_000, 10_000, 90_000, 10_000, 357_000]);
+  assert.deepEqual(deadlines, [10_000, 10_000, 10_000, 15_000, 10_000, 90_000, 10_000, 357_000]);
 
   deadlines.length = 0;
   const overridden = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret", fetchDevice, timeoutMs: 1234 });

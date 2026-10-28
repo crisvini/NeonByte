@@ -2,6 +2,7 @@
 #include "neonbyte/safe_startup.h"
 #include "neonbyte/ota_staging.h"
 #include "neonbyte/recovery_ap.h"
+#include "neonbyte/startup_guard_layout.h"
 #include <string>
 #include <cstring>
 using namespace neonbyte;
@@ -61,6 +62,55 @@ void testNetworkAndHttpStartBeforeStorageAndDisplay() {
     startup.tick(10000); TEST_ASSERT_TRUE(startup.applicationRunning());
     TEST_ASSERT_TRUE(services.calls.find('F') > services.calls.find('H'));
     TEST_ASSERT_TRUE(services.calls.find('A') > services.calls.find('H'));
+    TEST_ASSERT_TRUE(startup.recoveryApRunning());
+}
+void testAutomaticPowerOnStartsOnceWithoutWifiAndSoftwareRestartRemainsInMaintenance() {
+    Services services;
+    SafeStartup startup(services,IDENTITY);
+    startup.begin(0,false,startupMaintenanceOnBoot(false,StartupResetReason::powerOn));
+    startup.tick(9999); TEST_ASSERT_FALSE(startup.applicationRunning());
+    startup.tick(10000); TEST_ASSERT_TRUE(startup.applicationRunning());
+    TEST_ASSERT_FALSE(startup.stationConnected());
+    TEST_ASSERT_EQUAL(1,services.attempts);
+    startup.tick(40000); startup.tick(70000);
+    TEST_ASSERT_EQUAL(3,services.attempts);
+    TEST_ASSERT_EQUAL(services.calls.find('A'),services.calls.rfind('A'));
+    TEST_ASSERT_TRUE(startup.recoveryApRunning());
+
+    Services rebootServices;
+    SafeStartup reboot(rebootServices,IDENTITY);
+    reboot.begin(0,false,startupMaintenanceOnBoot(false,StartupResetReason::softRestart));
+    reboot.tick(10000); reboot.tick(120000);
+    TEST_ASSERT_FALSE(reboot.applicationRunning());
+    TEST_ASSERT_TRUE(reboot.applicationPaused());
+    TEST_ASSERT_TRUE(reboot.configurationLoaded());
+    TEST_ASSERT_EQUAL(0,rebootServices.preparationMounts);
+    TEST_ASSERT_TRUE(rebootServices.attempts > 0);
+    TEST_ASSERT_EQUAL(StartupResult::unauthorized,reboot.runApplication("Bearer invalid"));
+    const std::string auth = "Bearer " + std::string(IDENTITY.token);
+    TEST_ASSERT_EQUAL(StartupResult::ok,reboot.runApplication(auth));
+    TEST_ASSERT_TRUE(reboot.applicationRunning());
+}
+void testAutomaticStartupPolicyPreservesExplicitMaintenanceAndUnexpectedResetGuards() {
+    for (auto reason : {StartupResetReason::powerOn, StartupResetReason::softRestart,
+                        StartupResetReason::externalReset, StartupResetReason::unexpected}) {
+        TEST_ASSERT_TRUE(startupMaintenanceOnBoot(true,reason));
+        if (reason != StartupResetReason::powerOn) TEST_ASSERT_TRUE(startupMaintenanceOnBoot(false,reason));
+        Services services; SafeStartup startup(services,IDENTITY);
+        startup.begin(0,true,startupMaintenanceOnBoot(false,reason));
+        startup.tick(120000);
+        TEST_ASSERT_FALSE(startup.applicationRunning());
+        TEST_ASSERT_FALSE(startup.configurationLoaded());
+        TEST_ASSERT_EQUAL(0,services.attempts);
+        TEST_ASSERT_TRUE(startup.recoveryApRunning());
+    }
+    Services services; services.appOk = false;
+    SafeStartup startup(services,IDENTITY);
+    startup.begin(0,false,startupMaintenanceOnBoot(false,StartupResetReason::powerOn));
+    startup.tick(10000); const auto calls = services.calls;
+    startup.tick(20000); startup.tick(25000);
+    TEST_ASSERT_EQUAL_STRING(calls.c_str(),services.calls.c_str());
+    TEST_ASSERT_FALSE(startup.applicationRunning());
     TEST_ASSERT_TRUE(startup.recoveryApRunning());
 }
 void testFailedRecoveryNetworkRequiresFreshWindowBeforeMaintenanceConfigurationLoad() {
@@ -413,6 +463,8 @@ void tearDown() {}
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(testNetworkAndHttpStartBeforeStorageAndDisplay);
+    RUN_TEST(testAutomaticPowerOnStartsOnceWithoutWifiAndSoftwareRestartRemainsInMaintenance);
+    RUN_TEST(testAutomaticStartupPolicyPreservesExplicitMaintenanceAndUnexpectedResetGuards);
     RUN_TEST(testFailedRecoveryNetworkRequiresFreshWindowBeforeMaintenanceConfigurationLoad);
     RUN_TEST(testHttpStartupRetriesThenUsesFreshMaintenanceWindowForConfiguration);
     RUN_TEST(testRecoveryApRejectsSdkFailuresAndMismatchedNetwork);

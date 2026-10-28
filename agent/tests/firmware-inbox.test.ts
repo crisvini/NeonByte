@@ -113,3 +113,23 @@ test("local inbox permissions are restricted and candidate preparation never wat
   assert.equal(candidate.fileName, "firmware.bin");
   assert.deepEqual((await readdir(directory)).sort(), ["firmware.bin", "manifest.json"]);
 });
+
+test("automatic-start candidates require explicit maintenance after software restart while legacy manifests remain valid", async (t) => {
+  for (const gates of [
+    { maintenanceOnBoot: true, otaEnabled: true },
+    { maintenanceOnBoot: false, otaEnabled: true, maintenanceAfterSoftwareRestart: true },
+  ]) {
+    const { directory } = await makeInbox(t, { featureGates: gates });
+    const value = await new FirmwareInbox({ directory, accessControl: { protectAndVerify: async () => {} } }).prepare(binding);
+    assert.equal(value.manifest.featureGates.maintenanceOnBoot, gates.maintenanceOnBoot);
+  }
+  for (const gates of [
+    { maintenanceOnBoot: false, otaEnabled: true },
+    { maintenanceOnBoot: false, otaEnabled: true, maintenanceAfterSoftwareRestart: false },
+    { maintenanceOnBoot: false, otaEnabled: true, maintenanceAfterSoftwareRestart: "true" },
+    { maintenanceOnBoot: false, otaEnabled: true, maintenanceAfterSoftwareRestart: true, unknown: true },
+  ]) {
+    const { directory } = await makeInbox(t, { featureGates: gates });
+    await assert.rejects(new FirmwareInbox({ directory, accessControl: { protectAndVerify: async () => {} } }).prepare(binding), /manifest|feature gates/);
+  }
+});

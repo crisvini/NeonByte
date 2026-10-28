@@ -58,7 +58,7 @@ The closed manifest format uses these exact fields:
 | `recoveryIdentityFingerprint`, `sourceRevision` | Lowercase 64-character fingerprint and 40-character Git revision |
 | `target` | Exactly `family: esp8266`, `flashMode: dio`, `flashFrequencyMHz: 40`, `flashBytes: 4194304` |
 | `linkedRegions` | Exactly `bootloaderStart: 0`, `applicationStart: 4096`, and the approved filesystem start/end and EEPROM start within the 4 MiB target |
-| `featureGates` | Both `maintenanceOnBoot` and `otaEnabled` set to `true` |
+| `featureGates` | `otaEnabled: true`; either legacy `maintenanceOnBoot: true`, or `maintenanceOnBoot: false` with the additional `maintenanceAfterSoftwareRestart: true` gate |
 | `minimumResources` | Positive integer `minimumFreeHeapBytes` and `minimumLargestBlockBytes` from the approved build validation |
 | `validation` | `combinedImage`, `modernCrc`, `runtimeBounds`, and `recoveryIdentity` all `true` in the approved build record |
 
@@ -75,6 +75,32 @@ The agent reads the fixed inbox only after **Prepare local firmware** is selecte
 5. Select **Verify device** after the reboot begins. The agent uses the last verified private address with bounded read-only attempts for up to 120 seconds. Success requires authenticated info/status/diagnostics, the same device and recovery identity, a changed boot ID, the expected build ID, the application still paused, a running recovery AP, minimum memory thresholds, and two matching observations at least two seconds apart. The two observations must report the same new boot ID.
 6. If DHCP changed the address, enter the device's private IPv4 HTTP origin in **Verified maintenance IPv4 address** and select **Verify and save device address**. The agent authenticates and checks the same device identity before persisting the maintenance-only address. After any PUT attempt, changing the address only resumes read-only reconciliation; it never re-sends the image.
 7. Only after the panel reports **verified**, select **Start application** and confirm. This sends the separate maintenance `/run` request. The dashboard scheduler resumes only after the application is confirmed running, and only if its existing `enabled` setting is true.
+
+### Transition to Automatic Power-On Startup
+
+Update the local agent before selecting an automatic-start candidate; older
+agents correctly reject its manifest. No intermediate firmware is required by
+the local protocol when the installed image already supports the authenticated
+maintenance/info/OTA routes described above. The new manifest must come from a
+trusted private build record that verifies the software-restart maintenance gate;
+adding a Boolean to an unrelated image does not establish compatibility.
+
+The prepared automatic profile retains maintenance after software restart,
+including the updater's `ESP.restart()` path. Continue the exact paused,
+authenticated, two-observation verification and explicit `/run` sequence for
+that update. The journal records the verified boot ID; a later reboot invalidates
+the right to start without fresh verification. Legacy verified journals without
+that ID require read-only verification again and never replay the upload.
+
+Subsequent clean USB power-ons may start automatically after ten seconds, without
+opening the panel. External/software resets and crash evidence remain maintenance
+paths. If power is interrupted before update verification, the app might start on
+a later clean power-on because RTC is not durable update storage. A running app
+fails the paused verification check and never approves the firmware. Leave the
+result unresolved and use a separately authorized maintenance/recovery action;
+never re-send the image or relax verification. Physical RTC/SDK reset behavior,
+resource floors, and recovery acceptance remain pending. See the
+[daily-startup report](daily-startup-and-sync.md).
 
 The panel checks `Origin` on every mutation and accepts loopback requests only. Device traffic uses the existing bearer over plaintext HTTP, so keep it on a trusted private LAN. The dashboard does not search the network, use mDNS, change the recovery AP, install a bootstrap image, or select a browser file.
 

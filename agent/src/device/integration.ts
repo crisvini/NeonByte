@@ -55,6 +55,7 @@ export class DeviceIntegration {
   private animation: MediaAsset | null = null;
   private animationState: DeviceView["animation"] = { state: "none", attempts: 0 };
   private animationSent: string | null = null;
+  private coverJob: { url: string; promise: Promise<MediaAsset> } | null = null;
 
   constructor(private readonly options: { store: DeviceConfigStore; poller: PlaybackPoller; intervalMs: number; fetchDevice?: typeof fetch;
     fetchCover?: typeof fetch; recoveryStore?: RecoveryCredentialStore;
@@ -75,10 +76,25 @@ export class DeviceIntegration {
   }
 
   private async loadCover(url: string): Promise<MediaAsset> {
+    // Scheduler replacement must not multiply downloads/decoders. Reuse the
+    // same URL, or wait for the bounded prior job before preparing another.
+    while (this.coverJob) {
+      const previous = this.coverJob;
+      if (previous.url === url) return previous.promise;
+      try { await previous.promise; } catch { /* A different cover may still succeed. */ }
+    }
+    const job = { url, promise: this.decodeCover(url) };
+    this.coverJob = job;
+    try { return await job.promise; }
+    finally { if (this.coverJob === job) this.coverJob = null; }
+  }
+
+  private async decodeCover(url: string): Promise<MediaAsset> {
     const bytes = url === "/demo-cover.svg"
       ? await readFile(new URL("../web/public/demo-cover.svg", import.meta.url))
       : (await downloadSpotifyCover(url, this.options.fetchCover ?? fetch)).bytes;
-    const decoded = await sharp(bytes, { limitInputPixels: 16_000_000 }).resize(240, 240, { fit: "cover" }).ensureAlpha().raw().toBuffer();
+    const decoded = await sharp(bytes, { limitInputPixels: 16_000_000 }).timeout({ seconds: 10 })
+      .resize(240, 240, { fit: "cover" }).ensureAlpha().raw().toBuffer();
     return createCoverAsset(decoded, 240, 240);
   }
 
@@ -185,8 +201,9 @@ export class DeviceIntegration {
 
   private startScheduler(config: DeviceConfig): void {
     const client = this.createClient(config);
-    const synchronizer = new DeviceSynchronizer({ client, poller: this.options.poller, loadCover: (url) => this.loadCover(url) });
-    this.scheduler = new DeviceScheduler({ intervalMs: this.options.intervalMs, synchronize: async () => {
+    const synchronizer = new DeviceSynchronizer({ client, poller: this.options.poller, loadCover: (url) => this.loadCover(url),
+      onCoverPrepared: () => scheduler.requestSynchronization() });
+    const scheduler = new DeviceScheduler({ intervalMs: this.options.intervalMs, synchronize: async () => {
       if (!await synchronizer.synchronize()) return false;
       try {
         const status = await client.status();
@@ -214,6 +231,7 @@ export class DeviceIntegration {
         return true;
       } catch { return false; }
     } });
-    this.scheduler.start();
+    this.scheduler = scheduler;
+    scheduler.start();
   }
 }

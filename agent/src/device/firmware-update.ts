@@ -20,6 +20,7 @@ export interface FirmwareUpdateRecord {
   previousBuildId: string;
   expectedBuildId: string;
   expectedBootId: string;
+  verifiedBootId?: string;
   sha256: string;
   byteLength: number;
   minimumFreeHeapBytes: number;
@@ -101,7 +102,8 @@ function validRecord(value: unknown): value is FirmwareUpdateRecord {
   const item = value as Record<string, unknown>;
   const keys = ["version", "state", "putAttempted", "deviceId", "profile", "recoveryIdentityFingerprint", "previousBuildId", "expectedBuildId", "expectedBootId",
     "sha256", "byteLength", "minimumFreeHeapBytes", "minimumLargestBlockBytes", "previousAddress"];
-  if (Object.keys(item).length !== keys.length || !keys.every((key) => Object.hasOwn(item, key)) || item["version"] !== 1 ||
+  const presentKeys = Object.keys(item);
+  if (!presentKeys.every((key) => keys.includes(key) || key === "verifiedBootId") || !keys.every((key) => Object.hasOwn(item, key)) || item["version"] !== 1 ||
       typeof item["state"] !== "string" || !validStates.has(item["state"] as FirmwareUpdateState) || typeof item["putAttempted"] !== "boolean" ||
       typeof item["deviceId"] !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/.test(item["deviceId"]) ||
       typeof item["profile"] !== "string" || !/^[A-Za-z0-9._:-]{1,96}$/.test(item["profile"]) ||
@@ -109,6 +111,7 @@ function validRecord(value: unknown): value is FirmwareUpdateRecord {
       typeof item["previousBuildId"] !== "string" || !/^[A-Za-z0-9._:-]{1,96}$/.test(item["previousBuildId"]) ||
       typeof item["expectedBuildId"] !== "string" || !/^[A-Za-z0-9._:-]{1,96}$/.test(item["expectedBuildId"]) ||
       typeof item["expectedBootId"] !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/.test(item["expectedBootId"]) ||
+      (Object.hasOwn(item, "verifiedBootId") && (typeof item["verifiedBootId"] !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/.test(item["verifiedBootId"]))) ||
       typeof item["sha256"] !== "string" || !/^[a-f0-9]{64}$/.test(item["sha256"]) ||
       !Number.isSafeInteger(item["byteLength"]) || Number(item["byteLength"]) < 1 || Number(item["byteLength"]) > 458_752 ||
       !Number.isSafeInteger(item["minimumFreeHeapBytes"]) || Number(item["minimumFreeHeapBytes"]) < 1 ||
@@ -210,7 +213,7 @@ export class FirmwareUpdateService {
     this.record = record;
     if (record.putAttempted && record.state !== "started") {
       this.options.device.holdForMaintenance?.();
-      if (record.state === "verified") this.state = "verified";
+      if (record.state === "verified" && record.verifiedBootId) this.state = "verified";
       else {
         this.state = "outcomeUnknown";
         this.record = { ...record, state: "outcomeUnknown" };
@@ -394,7 +397,7 @@ export class FirmwareUpdateService {
               await this.wait(Math.min(2_000, Math.max(0, deadline - this.now())));
             } else if (info.bootId === firstObservationBootId && this.now() - firstObservationAt >= 2_000 && this.now() < deadline) {
               this.state = "verified";
-              this.record = { ...record, state: "verified" };
+              this.record = { ...record, state: "verified", verifiedBootId: info.bootId };
               await this.persist();
               return this.view;
             } else if (info.bootId !== firstObservationBootId) {
@@ -493,9 +496,22 @@ export class FirmwareUpdateService {
       const credential = await this.requiredCredential();
       const client = this.options.createClient(this.record.previousAddress, credential.token);
       const info = await client.info();
-      if (!this.validPostBootIdentity(info, this.record)) throw new Error("The verified device identity changed before application startup.");
+      if (!this.validPostBootIdentity(info, this.record) || info.bootId !== this.record.verifiedBootId) {
+        this.state = "verificationFailed";
+        this.record = { ...this.record, state: this.state };
+        await this.persist();
+        throw new Error("The verified device identity changed before application startup; verify again.");
+      }
       const status = await client.status();
       if (!status.applicationRunning) await client.run();
+      if (!(await client.status()).applicationRunning) throw new Error("The application did not start; maintenance synchronization remains held.");
+      const runningInfo = await client.info();
+      if (!this.validPostBootIdentity(runningInfo, this.record) || runningInfo.bootId !== info.bootId) {
+        this.state = "verificationFailed";
+        this.record = { ...this.record, state: this.state };
+        await this.persist();
+        throw new Error("The verified device identity changed during application startup.");
+      }
       this.state = "started";
       this.record = { ...this.record, state: "started" };
       this.options.device.resumeAfterExplicitRun();

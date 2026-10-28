@@ -80,3 +80,22 @@ test("scheduler reports exceptions as disconnected and retries", async () => {
   assert.ok(calls >= 2);
   await scheduler.stop();
 });
+
+test("ready media requests an immediate sequential cycle and cannot restart a suspended scheduler", async () => {
+  let calls = 0;
+  let release!: () => void;
+  const scheduler = new DeviceScheduler({ intervalMs: 60000, synchronize: async () => {
+    calls++;
+    if (calls === 1) await new Promise<void>((resolve) => { release = resolve; });
+    return true;
+  } });
+  scheduler.start();
+  scheduler.requestSynchronization(); scheduler.requestSynchronization();
+  await delay(10); assert.equal(calls, 1);
+  release();
+  await delay(30); assert.equal(calls, 2);
+  scheduler.requestSynchronization();
+  await scheduler.suspendAndDrain();
+  scheduler.requestSynchronization();
+  await delay(20); assert.equal(calls, 2);
+});

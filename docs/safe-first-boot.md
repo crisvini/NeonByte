@@ -8,6 +8,15 @@
 
 ## Startup Audit
 
+**Daily-startup follow-up (2026-10-28):** the prepared private profile selects
+`NEONBYTE_MAINTENANCE_ON_BOOT=0`. Only a clean power-on may start the application
+automatically after the fresh ten-second AP/HTTP maintenance window and valid
+saved configuration. Software and external resets select configuration-only
+maintenance; crash/risky/uncertain reset evidence keeps the stricter AP/HTTP-only
+path. Startup initialization is attempted once, while saved Wi-Fi retries remain
+nonblocking. OTA verification still requires a paused application. See the
+[daily-startup report](daily-startup-and-sync.md) for offline evidence and limits.
+
 The previous `setup()` disabled Wi-Fi and returned before HTTP on any of these paths:
 
 | Condition | Previous consequence | Current handling |

@@ -29,7 +29,7 @@ test("dashboard mode, decoded artwork, and GIF reach the native device and retry
   const device = new DeviceIntegration({ store: new Store(), poller, intervalMs: 30,
     fetchCover: async () => new Response(png, { headers: { "Content-Type": "image/png" } }) });
   await device.start();
-  await device.configure({ address: harness.url, token: harness.token, enabled: true });
+  await device.configure({ address: harness.url, token: harness.token, enabled: false });
   const app = await startLocalWebApp({ poller, device, oauth: null, spotifyConfigured: false,
     getDemoEnabled: () => false, setDemoEnabled: async () => {}, onMockAction: async () => {}, port: 0 });
   t.after(async () => { await app.close(); await device.stop(); });
@@ -68,5 +68,36 @@ test("dashboard mode, decoded artwork, and GIF reach the native device and retry
   assert.equal(harness.requests.filter((r) => r.path === "/api/v1/animation").length, uploads);
   assert.equal((await post("/api/mode", { mode: "spotify" })).status, 204);
   await waitFor(() => harness.requests.filter((r) => r.path === "/api/v1/mode").length >= 2);
+  assert.equal((await harness.state()).coverPixel, 0xf800);
+});
+
+test("a slow cover download keeps native playback alive and schedules its ready artwork without waiting for the next interval", async (t) => {
+  const harness = await startHarness(t);
+  const png = await sharp({ create: { width: 2, height: 2, channels: 4, background: "#ff0000" } }).png().toBuffer();
+  const poller = new PlaybackPoller({ provider: new MockSpotifyProvider({ is_playing: true, progress_ms: 100,
+    item: { type: "track", id: "slow-art", name: "Slow Artwork", duration_ms: 180000,
+      artists: [{ name: "Artist" }], album: { images: [{ url: "https://i.scdn.co/test" }] } } }), pollIntervalMs: 15000, now: () => EPOCH });
+  await poller.pollOnce();
+  let release!: (response: Response) => void;
+  let downloads = 0;
+  const source = new Promise<Response>((resolve) => { release = resolve; });
+  const device = new DeviceIntegration({ store: new Store(), poller, intervalMs: 60000, fetchCover: async () => { downloads++; return source; } });
+  t.after(async () => { release(new Response(png, { headers: { "Content-Type": "image/png" } })); await device.stop(); });
+  await device.configure({ address: harness.url, token: harness.token, enabled: true });
+  await waitFor(() => device.status.connection === "connected");
+  assert.equal((await harness.state()).scene, "spotify");
+  assert.equal((await harness.state()).agentAvailable, true);
+  assert.equal(harness.requests.some(({ path }) => path === "/api/v1/cover"), false);
+  for (let cycle = 0; cycle < 3; cycle++) {
+    await device.configure({ address: harness.url, enabled: false });
+    await device.configure({ address: harness.url, enabled: true });
+    await waitFor(() => device.status.connection === "connected");
+  }
+  assert.equal(downloads, 1);
+  release(new Response(png, { headers: { "Content-Type": "image/png" } }));
+  await waitFor(() => {
+    const index = harness.requests.findIndex(({ path }) => path === "/api/v1/cover");
+    return index >= 0 && harness.requests.slice(index + 1).some(({ path }) => path === "/api/v1/heartbeat");
+  });
   assert.equal((await harness.state()).coverPixel, 0xf800);
 });

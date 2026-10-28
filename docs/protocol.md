@@ -59,7 +59,7 @@ The Spotify display shows a centered 176 × 176 cover and two bounded title/arti
 
 The agent must clamp `progressMs` to `durationMs`. The firmware advances progress locally between updates and corrects it when it receives another timestamp. Initial text limits are 256 characters for `trackId`, `title`, and `artist`; keep them aligned across schemas, agent, and firmware.
 
-There is no clear-playback operation in v1, and `trackId` must be nonempty. The offline client sends the last known track with `isPlaying: false` when playback becomes idle or unavailable. A newly started agent with no track history cannot immediately clear unknown playback already on the device; independent metadata expiry still selects GIF after the timeout even if heartbeats continue. No invented track ID or schema change is introduced by offline validation.
+There is no clear-playback operation in v1, and `trackId` must be nonempty. The agent sends the last known track with `isPlaying: false` on confirmed idle playback. Confirmed pauses carry their real track with `isPlaying: false`. Temporary Spotify unavailability sends no metadata and continues heartbeats, so the last real sample expires independently after 45 seconds; no synthetic playing timestamp extends it. A newly started agent with no track history cannot immediately clear unknown playback already on the device. Independent metadata expiry still selects GIF even if heartbeats continue. No invented track ID or schema change is introduced.
 
 ## Routes
 

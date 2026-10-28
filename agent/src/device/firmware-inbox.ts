@@ -26,7 +26,7 @@ export interface FirmwareManifest {
   sourceRevision: string;
   target: { family: "esp8266"; flashMode: "dio"; flashFrequencyMHz: 40; flashBytes: 4_194_304 };
   linkedRegions: { bootloaderStart: 0; applicationStart: 4096; filesystemStart: number; filesystemEnd: number; eepromStart: number };
-  featureGates: { maintenanceOnBoot: boolean; otaEnabled: boolean };
+  featureGates: { maintenanceOnBoot: boolean; otaEnabled: boolean; maintenanceAfterSoftwareRestart?: true };
   minimumResources: { minimumFreeHeapBytes: number; minimumLargestBlockBytes: number };
   validation: { combinedImage: true; modernCrc: true; runtimeBounds: true; recoveryIdentity: true };
 }
@@ -85,7 +85,9 @@ function validManifest(value: unknown): value is FirmwareManifest {
       !Number.isSafeInteger(regions["filesystemStart"]) || Number(regions["filesystemStart"]) <= 4096 ||
       !Number.isSafeInteger(regions["filesystemEnd"]) || Number(regions["filesystemEnd"]) <= Number(regions["filesystemStart"]) ||
       !Number.isSafeInteger(regions["eepromStart"]) || Number(regions["eepromStart"]) < Number(regions["filesystemEnd"]) || Number(regions["eepromStart"]) > 4_194_304) return false;
-  if (!gates || Object.keys(gates).length !== 2 || typeof gates["maintenanceOnBoot"] !== "boolean" || typeof gates["otaEnabled"] !== "boolean") return false;
+  if (!gates || !Object.keys(gates).every((key) => ["maintenanceOnBoot", "otaEnabled", "maintenanceAfterSoftwareRestart"].includes(key)) ||
+      typeof gates["maintenanceOnBoot"] !== "boolean" || typeof gates["otaEnabled"] !== "boolean" ||
+      (Object.hasOwn(gates, "maintenanceAfterSoftwareRestart") && gates["maintenanceAfterSoftwareRestart"] !== true)) return false;
   if (!resources || Object.keys(resources).length !== 2 || !Number.isSafeInteger(resources["minimumFreeHeapBytes"]) ||
       Number(resources["minimumFreeHeapBytes"]) <= 0 || !Number.isSafeInteger(resources["minimumLargestBlockBytes"]) ||
       Number(resources["minimumLargestBlockBytes"]) <= 0) return false;
@@ -223,7 +225,8 @@ export class FirmwareInbox {
     if (parsed.deviceId !== binding.deviceId) throw new FirmwareInboxError("The manifest device identity does not match the enrolled recovery record.");
     if (parsed.profile !== binding.profile) throw new FirmwareInboxError("The manifest firmware profile does not match the enrolled device.");
     if (parsed.recoveryIdentityFingerprint !== binding.recoveryIdentityFingerprint) throw new FirmwareInboxError("The manifest recovery identity does not match the enrolled recovery record.");
-    if (!parsed.featureGates.maintenanceOnBoot || !parsed.featureGates.otaEnabled) throw new FirmwareInboxError("The firmware manifest feature gates do not permit maintenance OTA.");
+    if ((!parsed.featureGates.maintenanceOnBoot && !parsed.featureGates.maintenanceAfterSoftwareRestart) ||
+        !parsed.featureGates.otaEnabled) throw new FirmwareInboxError("The firmware manifest feature gates do not permit maintenance OTA.");
     if (!validateImageHeader(bytes)) throw new FirmwareInboxError("The image must use the supported combined DIO 40 MHz ESP8266 format.");
 
     return { id: randomUUID(), fileName: "firmware.bin", byteLength: bytes.length, sha256: digest,

@@ -230,6 +230,28 @@ void testSpotifyLongTitleScrollsAfterPauseWithoutTouchingArtistOrCover() {
     TEST_ASSERT_EQUAL_UINT32(176, panel.rows.size());
 }
 
+void testScrollingBothFieldsDoesNotStarveLateArtworkRows() {
+    display_test::panelState = {};
+    PersistentStorage storage;
+    TestClock clock; SceneManager scenes(clock,storage);
+    auto value = track();
+    setText(value.title,std::string(80,'T')); setText(value.artist,std::string(80,'A'));
+    scenes.heartbeat(); scenes.updateNowPlaying(value);
+    DeviceDisplay display(storage); display.begin();
+    display.tick(scenes,0);
+    storage.coverBytes.assign(115200,0);
+    for (unsigned index=0; index<storage.coverBytes.size(); index+=2) storage.coverBytes[index+1] = 0xf8;
+    ++storage.assetRevision;
+    display_test::panelState.rows.clear();
+    for (unsigned row=0; row<176; ++row) display.tick(scenes,1500+row*125);
+    TEST_ASSERT_EQUAL_UINT32(176,display_test::panelState.rows.size());
+    TEST_ASSERT_TRUE(display_test::panelState.texts.size() > 100);
+    for (unsigned row=0; row<176; ++row) {
+        TEST_ASSERT_EQUAL_INT(4+row,display_test::panelState.rows[row].y);
+        TEST_ASSERT_EQUAL_HEX16(0xf800,display_test::panelState.rows[row].pixels.front());
+    }
+}
+
 void testSpotifyLongArtistScrollsIndependentlyFromStaticTitle() {
     display_test::panelState = {};
     PersistentStorage storage;
@@ -398,6 +420,7 @@ int main() {
     RUN_TEST(testSpotifyMetadataChangesInvalidateOnlyTheirOwnField);
     RUN_TEST(testSpotifyLongUnicodeMetadataUsesSingleLineWithoutPermanentTruncation);
     RUN_TEST(testSpotifyLongTitleScrollsAfterPauseWithoutTouchingArtistOrCover);
+    RUN_TEST(testScrollingBothFieldsDoesNotStarveLateArtworkRows);
     RUN_TEST(testSpotifyLongArtistScrollsIndependentlyFromStaticTitle);
     RUN_TEST(testSpotifyLongTitleScrollingRevealsTheCompleteTail);
     RUN_TEST(testSpotifyTrackChangeResetsMarqueePositionAndDelay);

@@ -21,6 +21,12 @@ struct StartupGuardRecord {
 
 enum class StartupResetReason { powerOn, softRestart, externalReset, unexpected };
 
+// Only clean USB power-on may start automatically. Other reset paths, including
+// software restart after OTA, stay paused for authenticated health verification.
+constexpr bool startupMaintenanceOnBoot(bool configuredMaintenance, StartupResetReason reason) {
+    return configuredMaintenance || reason != StartupResetReason::powerOn;
+}
+
 static_assert(STARTUP_GUARD_LAYOUT_VERSION <= 0xff);
 static_assert(sizeof(StartupGuardRecord) == STARTUP_GUARD_RECORD_BYTES);
 static_assert(STARTUP_GUARD_RTC_BYTE_OFFSET >= EBOOT_RESERVED_RTC_BYTES);

@@ -4,6 +4,10 @@ NeonByte is an open-source project planned for a JUZIPi SD PRO Wi-Fi display and
 
 ## Current Status
 
+The [daily-startup and synchronization report](docs/daily-startup-and-sync.md)
+records offline Spotify/artwork fixes and a private automatic-power-on candidate.
+Post-OTA startup remains explicitly verified and hardware acceptance is pending.
+
 **Release readiness: NOT RELEASE READY.** Part 6 concluded **NO-GO**, and Part 7 physical acceptance is blocked. A complete unit-specific backup/restore procedure and independent Wi-Fi-only failed-boot recovery have not been established. No firmware has been validated on the project clock. See the [release-readiness report](docs/release-readiness.md) and [installation decision](docs/installation-go-no-go.md).
 
 The [final OTA safety audit](docs/final-ota-safety-audit.md) records offline startup/recovery corrections, test evidence, and the remaining first-installation and return-to-stock blockers. Installation remains **NO-GO**.

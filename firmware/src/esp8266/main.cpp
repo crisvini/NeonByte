@@ -189,7 +189,7 @@ bool DeviceStartupServices::startApplication() {
 void DeviceStartupServices::stopApplication() {
     http.setProtocol(nullptr); protocol.reset(); scenes.reset();
 }
-bool previousStartupFailure() {
+StartupResetReason startupResetReason() {
     const auto* reset = ESP.getResetInfoPtr();
     auto reason = StartupResetReason::unexpected;
     if (reset) {
@@ -197,6 +197,9 @@ bool previousStartupFailure() {
         else if (reset->reason == REASON_SOFT_RESTART) reason = StartupResetReason::softRestart;
         else if (reset->reason == REASON_EXT_SYS_RST) reason = StartupResetReason::externalReset;
     }
+    return reason;
+}
+bool previousStartupFailure(StartupResetReason reason) {
     return startupResetRequiresMaintenance(reason,
         [](std::uint32_t wordOffset, StartupGuardRecord& guard) {
             return ESP.rtcUserMemoryRead(wordOffset,reinterpret_cast<std::uint32_t*>(&guard),sizeof(guard));
@@ -209,7 +212,9 @@ void setup() {
     WiFi.persistent(false); WiFi.mode(WIFI_OFF);
     initializeBuildIdentity();
     http.setBuildIdentity(bootId.data(),privateBuildId(),privateProfile(),recoveryFingerprint.data());
-    startup.begin(deviceClock.monotonicMillis(),previousStartupFailure(),NEONBYTE_MAINTENANCE_ON_BOOT == 1);
+    const auto resetReason = startupResetReason();
+    startup.begin(deviceClock.monotonicMillis(),previousStartupFailure(resetReason),
+        startupMaintenanceOnBoot(NEONBYTE_MAINTENANCE_ON_BOOT == 1,resetReason));
 }
 void loop() {
     using namespace neonbyte;
