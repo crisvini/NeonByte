@@ -16,7 +16,10 @@ constexpr unsigned SPOTIFY_TITLE_Y = 190;
 constexpr unsigned SPOTIFY_ARTIST_Y = 211;
 constexpr unsigned SPOTIFY_TEXT_LINE_HEIGHT = 20;
 constexpr unsigned SPOTIFY_TEXT_MAX_CELLS = SPOTIFY_TEXT_VIEWPORT_WIDTH / (6 * SPOTIFY_TEXT_SIZE);
-using SpotifyText = BoundedText<SPOTIFY_TEXT_MAX_CELLS>;
+struct SpotifyText {
+    BoundedText<SPOTIFY_TEXT_MAX_CELLS> text{};
+    bool truncated = false;
+};
 
 class BoundedDisplayPanel final : public Adafruit_ST7789 {
 public:

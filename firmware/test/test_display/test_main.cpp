@@ -191,22 +191,33 @@ void testSpotifyFixedTextTruncatesAtViewportAndDoesNotRedraw() {
     DeviceDisplay display(storage); display.begin();
     for (unsigned row = 0; row < 176; ++row) display.tick(scenes, row);
     auto& panel = display_test::panelState;
-    TEST_ASSERT_EQUAL_UINT32(2, panel.texts.size());
+    TEST_ASSERT_EQUAL_UINT32(3, panel.texts.size());
     TEST_ASSERT_EQUAL_STRING(std::string(18, 'T').c_str(), panel.texts[0].text.c_str());
-    TEST_ASSERT_EQUAL_STRING("Artist ?? AAAAA...", panel.texts[1].text.c_str());
+    TEST_ASSERT_EQUAL_STRING("Artist ?? AAAAAAA", panel.texts[1].text.c_str());
+    TEST_ASSERT_EQUAL_STRING("...", panel.texts[2].text.c_str());
     TEST_ASSERT_EQUAL_INT(8, panel.texts[0].x); TEST_ASSERT_EQUAL_INT(190, panel.texts[0].y);
     TEST_ASSERT_EQUAL_INT(8, panel.texts[1].x); TEST_ASSERT_EQUAL_INT(211, panel.texts[1].y);
     TEST_ASSERT_EQUAL_UINT8(2, panel.texts[0].size); TEST_ASSERT_EQUAL_UINT8(2, panel.texts[1].size);
+    TEST_ASSERT_EQUAL_UINT8(1, panel.texts[2].size);
+    TEST_ASSERT_EQUAL_INT(212, panel.texts[2].x); TEST_ASSERT_EQUAL_INT(218, panel.texts[2].y);
+    TEST_ASSERT_TRUE(panel.texts[2].x + 18 <= 232);
     const auto rectangles = panel.rectangles.size();
     for (unsigned now = 1000; now < 30000; now += 125) display.tick(scenes, now);
-    TEST_ASSERT_EQUAL_UINT32(2, panel.texts.size());
+    TEST_ASSERT_EQUAL_UINT32(3, panel.texts.size());
     TEST_ASSERT_EQUAL_UINT32(rectangles, panel.rectangles.size());
     setText(value.title, std::string(19, 'T')); scenes.updateNowPlaying(value); display.tick(scenes, 30000);
-    TEST_ASSERT_EQUAL_STRING("TTTTTTTTTTTTTTT...", panel.texts.back().text.c_str());
+    TEST_ASSERT_EQUAL_STRING(std::string(17, 'T').c_str(), panel.texts[3].text.c_str());
+    TEST_ASSERT_EQUAL_STRING("...", panel.texts[4].text.c_str());
+    TEST_ASSERT_EQUAL_INT(212, panel.texts[4].x); TEST_ASSERT_EQUAL_INT(197, panel.texts[4].y);
+    TEST_ASSERT_EQUAL_UINT8(1, panel.texts[4].size);
     const auto count = panel.texts.size();
     setText(value.title, std::string(19, 'T') + " changed tail");
     scenes.updateNowPlaying(value); display.tick(scenes, 30125);
     TEST_ASSERT_EQUAL_UINT32(count, panel.texts.size());
+    setText(value.title, std::string(17, 'T')); scenes.updateNowPlaying(value); display.tick(scenes, 30250);
+    TEST_ASSERT_EQUAL_UINT32(count + 1, panel.texts.size());
+    TEST_ASSERT_EQUAL_STRING(std::string(17, 'T').c_str(), panel.texts.back().text.c_str());
+    TEST_ASSERT_EQUAL_INT(190, panel.rectangles.back().y);
 }
 
 void testLongMetadataAndRapidTrackChangesKeepArtworkBound() {

@@ -5,15 +5,16 @@
 namespace neonbyte {
 namespace {
 void metadataText(std::string_view text, SpotifyText& result) {
-    result.length = 0;
-    bool truncated = false;
+    result.text.length = 0;
+    result.truncated = false;
     for (unsigned char character : text) {
         if ((character & 0xc0) == 0x80) continue;
-        if (result.length == result.bytes.size()) { truncated = true; break; }
-        result.bytes[result.length++] = character >= 32 && character < 127 ? character : '?';
-    }
-    if (truncated) {
-        for (unsigned index = 0; index < 3; ++index) result.bytes[result.length - 3 + index] = '.';
+        if (result.text.length == result.text.bytes.size()) {
+            result.truncated = true;
+            result.text.length = (SPOTIFY_TEXT_VIEWPORT_WIDTH - 18) / (6 * SPOTIFY_TEXT_SIZE);
+            break;
+        }
+        result.text.bytes[result.text.length++] = character >= 32 && character < 127 ? character : '?';
     }
 }
 } // namespace
@@ -64,7 +65,10 @@ void DeviceDisplay::showSpotifyWaiting() {
 }
 void DeviceDisplay::drawSpotifyText(const SpotifyText& text, int y, std::uint16_t color, bool clear) {
     if (clear) panel_.fillRect(0,y,240,SPOTIFY_TEXT_LINE_HEIGHT,ST77XX_BLACK);
-    textLine(text.view(),SPOTIFY_TEXT_X,y,text.length,color,SPOTIFY_TEXT_SIZE);
+    textLine(text.text.view(),SPOTIFY_TEXT_X,y,text.text.length,color,SPOTIFY_TEXT_SIZE);
+    if (text.truncated) {
+        textLine("...",SPOTIFY_TEXT_X + text.text.length * 6 * SPOTIFY_TEXT_SIZE,y + 7,3,color,1);
+    }
 }
 void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t) {
     if (!initialized_) return;
@@ -80,11 +84,11 @@ void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t) {
     SpotifyText title, artist;
     metadataText(track.title.view(),title);
     metadataText(track.artist.view(),artist);
-    if (entering || title.view() != titleText_.view()) {
+    if (entering || (title.text.view() != titleText_.text.view() || title.truncated != titleText_.truncated)) {
         titleText_ = title;
         drawSpotifyText(titleText_,SPOTIFY_TITLE_Y,ST77XX_WHITE,!entering);
     }
-    if (entering || artist.view() != artistText_.view()) {
+    if (entering || (artist.text.view() != artistText_.text.view() || artist.truncated != artistText_.truncated)) {
         artistText_ = artist;
         drawSpotifyText(artistText_,SPOTIFY_ARTIST_Y,0x9cf3,!entering);
     }

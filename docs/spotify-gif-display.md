@@ -12,7 +12,8 @@ still needs visual confirmation.
 
 The firmware now keeps title and artist fixed at x=8, y=190 and y=211,
 using the existing 2x font and colors. Each 224-pixel field fits 18 font
-cells; longer text displays the first 15 cells followed by `...`. Unsupported
+cells; longer text displays the first 17 cells followed by smaller, baseline-aligned
+`...` glyphs. Unsupported
 Unicode code points still occupy one replacement cell. Only the visible text is
 cached and redrawn when it changes or the scene is entered. The full metadata
 and track ID remain in the scene state, and cover reads still require the full
