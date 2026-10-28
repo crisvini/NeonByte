@@ -7,6 +7,39 @@ from pathlib import Path
 from probe_compatibility import extractFunction
 
 
+def extractLegacyStockFunction(source, signature):
+    """Keep the stock-route probe independent of the separate animation protocol."""
+    function = extractFunction(source, signature)
+
+    def removeBetween(startMarker, endMarker):
+        nonlocal function
+        if function.count(startMarker) != 1 or function.count(endMarker) != 1:
+            raise ValueError(f"Could not isolate stock HTTP path in {signature}")
+        start = function.index(startMarker)
+        end = function.index(endMarker, start)
+        function = function[:start] + function[end:]
+
+    if signature == "void DeviceHttpServer::headersComplete()":
+        function = function.replace(
+            '    animationV2Route_ = headers_.path.size() >= 8 && headers_.path.substr(0,8) == "/api/v2/";\n',
+            "",
+        )
+        removeBetween("    if (animationV2Route_) {", "    if (!headers_.query.empty())")
+        function = function.replace(
+            '        if (!firmware_ && animationUpload_.blocksOtherUploads()) { error(409,"conflict","An animation upload session owns media storage."); return; }\n',
+            "",
+        )
+    elif signature == "void DeviceHttpServer::bodyComplete()":
+        removeBetween("    if (animationV2Route_ &&", "    if (!binary_) { dispatchJson(); return; }")
+    elif signature == "void DeviceHttpServer::finishBinary()":
+        removeBetween("    if (legacyAnimationPromotionPending_) {", "    const auto result = hashJob_->step(")
+        removeBetween(
+            '    if (!maintenanceFirmware_ && headers_.path == "/api/v1/animation") {',
+            "    if (firmware_) {",
+        )
+    return function
+
+
 def main():
     repository = Path(__file__).resolve().parents[2]
     adapter = (repository / "firmware/src/esp8266/http_server.cpp").read_text()
@@ -111,7 +144,7 @@ public:
         std::memcpy(headerBytes_.data(),value.data(),value.size()); headerSize_ = value.size(); headersComplete();
     }
 };
-''' + "\n".join(extractFunction(adapter, signature) for signature in (
+''' + "\n".join(extractLegacyStockFunction(adapter, signature) for signature in (
         "void DeviceHttpServer::headersComplete()", "void DeviceHttpServer::bodyComplete()", "void DeviceHttpServer::finishBinary()")) + r'''
 std::string request(std::string path="/maintenance/v1/stock-firmware",std::string auth="Bearer recovery-test",
     std::string hash=std::string(STOCK_V106_SHA256),unsigned length=488304,std::string extra="") {

@@ -59,19 +59,42 @@ struct Diagnostics {
     uint32_t uploadsStarted=0, uploadsAborted=0, uploadsCompleted=0, uploadFailures=0, uploadBytes=0, maxLoopGapMs=0;
 };
 struct Restart { unsigned calls=0; void restart() { ++calls; } } ESP;
+enum class AnimationV2Request { none, chunk };
+enum class AnimationUploadState { Idle, Ready };
+enum class AnimationUploadError { PromotionFailed };
+struct StorageState {
+    uint32_t animationRevision=0;
+    bool animationPromotionFailed() const { return false; }
+    void discardAnimationCandidate() {}
+};
+struct AnimationUploadStateStub {
+    bool expire(uint64_t) { return false; }
+    bool hasPendingChunk() const { return false; }
+    AnimationUploadState state() const { return AnimationUploadState::Idle; }
+    uint32_t installedGeneration() const { return 0; }
+    void fail(AnimationUploadError,uint64_t) {}
+    void markInstalled(uint64_t) {}
+};
 bool maintenanceOtaBodyHasNoExtraBytes(uint32_t received,uint32_t expected,size_t extra) { return received==expected && !extra; }
 class DeviceHttpServer {
 public:
+    StorageState storage_; AnimationUploadStateStub animationUpload_;
     Sink assetSink_, otaSink_; neonbyte::Transfer transfer_{assetSink_}, maintenanceOta_{otaSink_};
     neonbyte::Transfer* activeTransfer_=&transfer_; neonbyte::Transfer* activeRawOta_=&maintenanceOta_;
     std::unique_ptr<HashJob> hashJob_; std::unique_ptr<Source> fileHashSource_; Source* hashSource_=nullptr;
+    std::unique_ptr<uint8_t[]> animationChunkBody_;
     std::unique_ptr<char[]> body_; Client client_; Server server_; neonbyte::HttpHeaders headers_; neonbyte::HttpResponse response_; Diagnostics diagnostics_;
     std::array<char,4096> headerBytes_{}; std::array<char,192> responseHeaders_{}; std::array<uint8_t,512> chunk_{};
     size_t headerSize_=0,received_=0,sent_=0,responseHeaderSize_=0;
     uint64_t started_=0,lastActivity_=0,restartAt_=0,lastTick_=0,requestDeadlineMs_=60000;
     bool rebootPending_=false,finalizing_=false,readingBody_=false,sending_=false,binary_=false,firmware_=false,maintenanceFirmware_=false,stockRestore_=false,maintenance_=false,clientActive_=false,uploadActive_=false,lastTickValid_=false;
+    bool legacyAnimationPromotionPending_=false,animationChunkWriting_=false,animationChunkDetached_=false;
+    bool animationV2Route_=false,animationValidationHashDone_=false,animationValidationOpened_=false;
+    AnimationV2Request animationV2Request_=AnimationV2Request::none;
     char* bodyData() { return body_.get(); }
     void error(unsigned,const char*,const char*);
+    void advanceAnimationValidation(uint64_t) {}
+    void finishAnimationChunkRequest(uint64_t) {}
     void prepareResponse() { sending_=true; sent_=0; body_.reset(); }
     void finishBinary() { assert(false); }
     void headersComplete() {
