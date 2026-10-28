@@ -2,6 +2,7 @@
 #ifdef ARDUINO_ARCH_ESP8266
 #include "neonbyte/animation_reader.h"
 #include "neonbyte/firmware_image.h"
+#include "neonbyte/storage_mount.h"
 #include "neonbyte/transfer.h"
 #include <LittleFS.h>
 namespace neonbyte {
@@ -24,6 +25,7 @@ private:
 };
 class PersistentStorage final : public Storage, public TransferSink {
 public:
+    bool mountForConfiguration();
     bool beginStorage();
     bool loadConfiguration();
     bool saveConfiguration(const DeviceConfiguration& value);
@@ -45,6 +47,7 @@ public:
     std::uint32_t assetRevision = 0;
     bool ready = false;
 private:
+    StorageMountState mountState_{};
     const char* stagedPath() const;
     const char* installedPath() const;
     AssetKind kind_ = AssetKind::animation;

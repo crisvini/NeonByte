@@ -62,6 +62,7 @@ OtaAdmissionError maintenanceOtaAdmission(bool authorized, bool applicationPause
 enum class OtaTransactionState { idle, receiving, verifying, activated, failedInactive };
 enum class MaintenanceImageKind { modern, stockV106 };
 bool maintenanceOtaRestartAllowed(OtaTransactionState state);
+bool maintenanceOtaBlocksBackgroundWork(OtaTransactionState state);
 
 class OtaCandidateVerifier {
 public:

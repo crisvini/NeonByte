@@ -62,6 +62,10 @@ OtaAdmissionError maintenanceOtaAdmission(bool authorized, bool applicationPause
 bool maintenanceOtaRestartAllowed(OtaTransactionState state) {
     return state == OtaTransactionState::activated;
 }
+bool maintenanceOtaBlocksBackgroundWork(OtaTransactionState state) {
+    return state == OtaTransactionState::receiving || state == OtaTransactionState::verifying ||
+        state == OtaTransactionState::activated;
+}
 
 bool MaintenanceOtaTransaction::setExpectedHash(std::string_view hash) {
     if ((state_ != OtaTransactionState::idle && state_ != OtaTransactionState::failedInactive) || !isSha256(hash)) return false;

@@ -22,15 +22,34 @@ bool decode(std::string_view input, char* destination, std::size_t capacity) {
     }
     destination[count] = 0; return true;
 }
+std::size_t boundedLength(const char* value, std::size_t capacity) {
+    std::size_t length = 0;
+    while (length < capacity && value[length]) ++length;
+    return length;
+}
+bool printable(std::string_view value) {
+    for (unsigned char byte : value) if (byte < 32 || byte == 127) return false;
+    return true;
+}
+}
+bool isValidWifiConfiguration(const WifiCredentials& credentials) {
+    const auto ssidLength = boundedLength(credentials.ssid,sizeof(credentials.ssid));
+    const auto passwordLength = boundedLength(credentials.password,sizeof(credentials.password));
+    if (!ssidLength || ssidLength == sizeof(credentials.ssid) || passwordLength == sizeof(credentials.password)) return false;
+    if (!printable({credentials.ssid,ssidLength}) || !printable({credentials.password,passwordLength})) return false;
+    if (!passwordLength) return true;
+    if (passwordLength < 8 || passwordLength > 64) return false;
+    if (passwordLength == 64) {
+        for (char value : std::string_view(credentials.password,passwordLength)) if (hex(value) < 0) return false;
+    }
+    return true;
 }
 bool parseWifiConfiguration(std::string_view form, WifiCredentials& credentials) {
     const auto separator = form.find('&');
     if (form.substr(0,5) != "ssid=" || separator == form.npos || separator < 5 || form.substr(separator+1,9) != "password=" || form.find('&',separator+1) != form.npos) return false;
     WifiCredentials candidate;
     if (!decode(form.substr(5,separator-5),candidate.ssid,sizeof(candidate.ssid)) || !candidate.ssid[0] || !decode(form.substr(separator+10),candidate.password,sizeof(candidate.password))) return false;
-    const auto length = strlen(candidate.password);
-    if (length && length < 8) return false;
-    if (length == 64) for (char c : std::string_view(candidate.password,length)) if (hex(c) < 0) return false;
+    if (!isValidWifiConfiguration(candidate)) return false;
     credentials = candidate; return true;
 }
 void StationAssociation::beginAttempt(const WifiCredentials& credentials) {

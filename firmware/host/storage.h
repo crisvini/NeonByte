@@ -36,6 +36,7 @@ private:
 class DiskStorage final : public Storage, public TransferSink {
 public:
     explicit DiskStorage(fs::path directory);
+    bool mountForConfiguration();
     bool mount();
     bool loadMode(DisplayMode& mode) const override;
     bool saveMode(DisplayMode mode) override;

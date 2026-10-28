@@ -20,20 +20,40 @@ void SafeStartup::begin(std::uint64_t now, bool previousFailure, bool maintenanc
     httpRunning_ = services_.startHttp();
     retryApAt_ = retryHttpAt_ = now+5000; initializeAt_ = now+10000;
     automaticStart_ = !previousFailure && !maintenanceOnBoot;
+    configurationLoadPending_ = !previousFailure && maintenanceOnBoot;
 }
 bool SafeStartup::authorized(std::string_view authorization) const {
     return identityValid_ && recoveryAuth_.isAuthorized(authorization);
 }
+bool SafeStartup::initializeConfigurationOnly() {
+    if (configurationLoadAttempted_) return storageAvailable_;
+    configurationLoadAttempted_ = true;
+    // A reset while mounting/loading must bypass both on the next boot.
+    if (!services_.setStartupGuard(true)) return false;
+    storageAvailable_ = services_.mountConfigurationStorage();
+    if (storageAvailable_) {
+        WifiCredentials saved{};
+        configurationLoaded_ = services_.loadWifi(saved) && isValidWifiConfiguration(saved);
+        if (configurationLoaded_ && !pendingWifi_ && !volatileWifi_) activeWifi_ = saved;
+    }
+    if (!services_.setStartupGuard(false)) {
+        storageAvailable_ = false; configurationLoaded_ = false; activeWifi_ = {};
+        return false;
+    }
+    return storageAvailable_;
+}
 bool SafeStartup::initializeStorage() {
-    if (storageAttempted_) return storageAvailable_;
-    storageAttempted_ = true;
+    if (storagePrepared_ && storageAvailable_) return true;
     // A reset while mounting/loading must bypass both on the next boot.
     if (!services_.setStartupGuard(true)) return false;
     storageAvailable_ = services_.mountStorage();
     if (storageAvailable_) {
-        WifiCredentials saved;
-        configurationLoaded_ = services_.loadWifi(saved);
-        if (configurationLoaded_ && !pendingWifi_ && !volatileWifi_) activeWifi_ = saved;
+        storagePrepared_ = true;
+        if (!configurationLoaded_) {
+            WifiCredentials saved{};
+            configurationLoaded_ = services_.loadWifi(saved) && isValidWifiConfiguration(saved);
+            if (configurationLoaded_ && !pendingWifi_ && !volatileWifi_) activeWifi_ = saved;
+        }
     }
     if (!services_.setStartupGuard(false)) { storageAvailable_ = false; return false; }
     return storageAvailable_;
@@ -49,7 +69,7 @@ bool SafeStartup::initializeApplication() {
 }
 void SafeStartup::connect(std::uint64_t now) {
     const auto& target = pendingWifi_ ? candidateWifi_ : activeWifi_;
-    if (target.ssid[0]) services_.connectStation(target);
+    if (isValidWifiConfiguration(target)) services_.connectStation(target);
     retryStationAt_ = now+30000;
 }
 bool SafeStartup::stationConnected() const {
@@ -65,18 +85,25 @@ void SafeStartup::tick(std::uint64_t now) {
         httpRunning_ = services_.startHttp(); retryHttpAt_ = now+5000;
         if (httpRunning_) initializeAt_ = now+10000;
     }
-    if (automaticStart_ && apRunning_ && httpRunning_ && now >= initializeAt_) {
+    if (automaticStart_ && apRunning_ && httpRunning_ && now >= initializeAt_
+        && services_.backgroundStartupWorkAllowed()) {
         automaticStart_ = false;
         if (initializeStorage() && configurationLoaded_) initializeApplication();
+    } else if (configurationLoadPending_ && apRunning_ && httpRunning_ && now >= initializeAt_
+        && services_.backgroundStartupWorkAllowed()) {
+        configurationLoadPending_ = false;
+        if (initializeConfigurationOnly() && configurationLoaded_ && !pendingWifi_ && !volatileWifi_) connect(now);
     }
+    if (!services_.backgroundStartupWorkAllowed()) return;
     const auto& target = pendingWifi_ ? candidateWifi_ : activeWifi_;
-    if (target.ssid[0] && !stationConnected() && now >= retryStationAt_) connect(now);
+    if (isValidWifiConfiguration(target) && !stationConnected() && now >= retryStationAt_) connect(now);
 }
 StartupResult SafeStartup::stageWifi(std::string_view auth, std::string_view form, bool temporary, std::uint64_t now) {
     if (!authorized(auth)) return StartupResult::unauthorized;
     WifiCredentials candidate;
     if (!parseWifiConfiguration(form,candidate)) return StartupResult::invalid;
     candidateWifi_ = candidate; pendingWifi_ = true; candidateTemporary_ = temporary;
+    configurationLoadPending_ = false; configurationLoadAttempted_ = true;
     // Never initialize display/storage automatically during provisioning.
     automaticStart_ = false;
     connect(now); return StartupResult::ok;
@@ -99,8 +126,7 @@ StartupResult SafeStartup::pauseApplication(std::string_view auth) {
 }
 StartupResult SafeStartup::prepareStorage(std::string_view auth) {
     if (!authorized(auth)) return StartupResult::unauthorized;
-    automaticStart_ = false;
-    if (!storageAvailable_) storageAttempted_ = false;
+    automaticStart_ = false; configurationLoadPending_ = false; configurationLoadAttempted_ = true;
     return initializeStorage() ? StartupResult::ok : StartupResult::storageUnavailable;
 }
 StartupResult SafeStartup::runApplication(std::string_view auth) {
@@ -112,7 +138,8 @@ StartupResult SafeStartup::runApplication(std::string_view auth) {
 }
 void SafeStartup::usePersistedWifi(const WifiCredentials& credentials, std::uint64_t now) {
     activeWifi_ = credentials; candidateWifi_ = {}; pendingWifi_ = volatileWifi_ = false;
-    configurationLoaded_ = true; connect(now);
+    configurationLoaded_ = true; storageAvailable_ = storagePrepared_ = true;
+    configurationLoadPending_ = false; configurationLoadAttempted_ = true; connect(now);
 }
 void handleMaintenance(const HttpRequest& request, SafeStartup& startup, std::uint64_t now, HttpResponse& response) {
     response = {}; response.contentType = "application/json";

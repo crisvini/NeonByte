@@ -69,6 +69,11 @@ private:
 };
 }
 DiskStorage::DiskStorage(fs::path path) : directory(std::move(path)) {}
+bool DiskStorage::mountForConfiguration() {
+    if (!fs::exists(directory) || !fs::is_directory(directory)) return false;
+    mounted = true;
+    return true;
+}
 bool DiskStorage::mount() {
     fs::create_directories(directory);
     for (const auto& entry : fs::directory_iterator(directory))

@@ -31,6 +31,11 @@ public:
           stockRestoreOta_(maintenanceBackend_,digest_,MaintenanceImageKind::stockV106), stockRestoreTransfer_(stockRestoreOta_) {}
     void setProtocol(ProtocolHandler* protocol) { protocol_ = protocol; }
     bool begin() { server_.begin(); return server_.status() != 0; }
+    bool backgroundStartupWorkAllowed() const {
+        return !rebootPending_ && !(firmware_ && uploadActive_) &&
+            !maintenanceOtaBlocksBackgroundWork(maintenanceOta_.state()) &&
+            !maintenanceOtaBlocksBackgroundWork(stockRestoreOta_.state());
+    }
     void tick(std::uint64_t now);
 
 private:

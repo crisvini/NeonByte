@@ -36,17 +36,20 @@ void testRecoveryApRejectsSdkFailuresAndMismatchedNetwork() {
 class Services final : public StartupServices {
 public:
     std::string calls;
-    bool httpOk = true, apOk = true, mountOk = true, loadOk = true, saveOk = true, appOk = true, guardOk = true, clearGuardOk = true, connected = false;
+    bool httpOk = true, apOk = true, mountOk = true, loadOk = true, saveOk = true, appOk = true, guardOk = true, clearGuardOk = true, connected = false, backgroundAllowed = true;
     unsigned attempts = 0, saves = 0;
+    unsigned configurationMounts = 0, preparationMounts = 0;
     WifiCredentials stored{}, target{};
     Services() { strcpy(stored.ssid,"Previous"); strcpy(stored.password,"previous-password"); }
     bool startRecoveryAp(RecoveryIdentity) override { calls += 'N'; return apOk; }
     bool startHttp() override { calls += 'H'; return httpOk; }
-    bool mountStorage() override { calls += 'F'; return mountOk; }
+    bool mountConfigurationStorage() override { ++configurationMounts; calls += 'Q'; return mountOk; }
+    bool mountStorage() override { ++preparationMounts; calls += 'F'; return mountOk; }
     bool loadWifi(WifiCredentials& out) override { calls += 'C'; out = stored; return loadOk; }
     bool saveWifi(const WifiCredentials& value) override { ++saves; if (!saveOk) return false; stored = value; return true; }
     void connectStation(const WifiCredentials& value) override { ++attempts; target = value; connected = false; calls += 'W'; }
     bool stationConnected(const WifiCredentials& value) const override { return connected && std::string(value.ssid) == target.ssid; }
+    bool backgroundStartupWorkAllowed() const override { return backgroundAllowed; }
     bool setStartupGuard(bool risky) override { calls += risky ? 'G' : 'g'; return guardOk && (risky || clearGuardOk); }
     bool startApplication() override { calls += 'A'; return appOk; }
     void stopApplication() override { calls += 'S'; }
@@ -60,29 +63,33 @@ void testNetworkAndHttpStartBeforeStorageAndDisplay() {
     TEST_ASSERT_TRUE(services.calls.find('A') > services.calls.find('H'));
     TEST_ASSERT_TRUE(startup.recoveryApRunning());
 }
-void testFailedRecoveryNetworkPreventsAutomaticRiskyStartup() {
+void testFailedRecoveryNetworkRequiresFreshWindowBeforeMaintenanceConfigurationLoad() {
     for (unsigned fault=0;fault<2;++fault) {
         Services services;
         services.apOk = fault != 0; services.httpOk = fault != 1;
         SafeStartup startup(services,IDENTITY);
-        startup.begin(0,false);
+        startup.begin(0,false,true);
         startup.tick(4999);
         TEST_ASSERT_EQUAL_STRING("NH",services.calls.c_str());
         startup.tick(5000); startup.tick(10000); startup.tick(60000);
         TEST_ASSERT_FALSE(startup.applicationRunning());
         TEST_ASSERT_EQUAL(std::string::npos,services.calls.find('F'));
         TEST_ASSERT_EQUAL(std::string::npos,services.calls.find('G'));
+        TEST_ASSERT_FALSE(startup.configurationLoaded());
         // Successful recovery must provide a fresh maintenance window.
         services.apOk = services.httpOk = true;
         startup.tick(65000);
         TEST_ASSERT_FALSE(startup.applicationRunning());
         startup.tick(74999);
         TEST_ASSERT_FALSE(startup.applicationRunning());
+        TEST_ASSERT_FALSE(startup.configurationLoaded());
         startup.tick(75000);
-        TEST_ASSERT_TRUE(startup.applicationRunning());
+        TEST_ASSERT_TRUE(startup.configurationLoaded());
+        TEST_ASSERT_FALSE(startup.applicationRunning());
+        TEST_ASSERT_EQUAL(0,services.preparationMounts);
     }
 }
-void testHttpStartupRetriesOnlyUntilListenerSucceeds() {
+void testHttpStartupRetriesThenUsesFreshMaintenanceWindowForConfiguration() {
     Services services; services.httpOk = false;
     SafeStartup startup(services,IDENTITY);
     startup.begin(0,false,true);
@@ -92,23 +99,100 @@ void testHttpStartupRetriesOnlyUntilListenerSucceeds() {
     TEST_ASSERT_EQUAL_STRING("NHH",services.calls.c_str());
     startup.tick(9999);
     TEST_ASSERT_EQUAL_STRING("NHH",services.calls.c_str());
-    services.httpOk = true; startup.tick(10000); startup.tick(60000);
-    TEST_ASSERT_EQUAL_STRING("NHHH",services.calls.c_str());
+    services.httpOk = true; startup.tick(10000);
+    TEST_ASSERT_FALSE(startup.configurationLoaded());
+    startup.tick(19999);
+    TEST_ASSERT_FALSE(startup.configurationLoaded());
+    startup.tick(20000);
+    TEST_ASSERT_TRUE(startup.configurationLoaded());
     TEST_ASSERT_FALSE(startup.applicationRunning());
+    TEST_ASSERT_EQUAL(1,services.configurationMounts);
+    TEST_ASSERT_EQUAL(0,services.preparationMounts);
+    TEST_ASSERT_EQUAL(1,services.attempts);
 }
-void testExplicitMaintenanceBootDoesNotMountUntilAuthorizedAndDefaultStillStarts() {
+void testMaintenanceBootLoadsConfigurationOnlyAndExplicitRunPreparesStorage() {
     Services services;
     SafeStartup startup(services,IDENTITY);
     startup.begin(0,false,true);
     startup.tick(60000);
-    TEST_ASSERT_EQUAL_STRING("NH",services.calls.c_str());
+    TEST_ASSERT_TRUE(startup.configurationLoaded());
+    TEST_ASSERT_EQUAL(1,services.configurationMounts);
+    TEST_ASSERT_EQUAL(0,services.preparationMounts);
+    TEST_ASSERT_EQUAL(1,services.attempts);
     TEST_ASSERT_FALSE(startup.applicationRunning());
     TEST_ASSERT_TRUE(startup.applicationPaused());
     TEST_ASSERT_EQUAL(StartupResult::unauthorized,startup.runApplication("Bearer invalid"));
-    TEST_ASSERT_EQUAL_STRING("NH",services.calls.c_str());
+    TEST_ASSERT_EQUAL(0,services.preparationMounts);
     const std::string authorization = "Bearer " + std::string(IDENTITY.token);
     TEST_ASSERT_EQUAL(StartupResult::ok,startup.runApplication(authorization));
     TEST_ASSERT_TRUE(startup.applicationRunning());
+    TEST_ASSERT_EQUAL(1,services.preparationMounts);
+}
+void testCleanMaintenanceBootLoadsSavedWifiWithoutStartingApplication() {
+    Services services;
+    SafeStartup startup(services,IDENTITY);
+    startup.begin(0,false,true);
+    startup.tick(9999);
+    TEST_ASSERT_EQUAL_STRING("NH",services.calls.c_str());
+    startup.tick(10000);
+    TEST_ASSERT_TRUE(startup.configurationLoaded());
+    TEST_ASSERT_FALSE(startup.applicationRunning());
+    TEST_ASSERT_EQUAL(1,services.attempts);
+    TEST_ASSERT_EQUAL_STRING("Previous",services.target.ssid);
+    startup.tick(120000);
+    TEST_ASSERT_FALSE(startup.applicationRunning());
+    TEST_ASSERT_TRUE(startup.recoveryApRunning());
+}
+void testCrashEvidencePreventsMaintenanceBootConfigurationLoad() {
+    Services services;
+    SafeStartup startup(services,IDENTITY);
+    startup.begin(0,true,true);
+    startup.tick(120000);
+    TEST_ASSERT_FALSE(startup.configurationLoaded());
+    TEST_ASSERT_FALSE(startup.applicationRunning());
+    TEST_ASSERT_EQUAL(0,services.attempts);
+    TEST_ASSERT_EQUAL(std::string::npos,services.calls.find('F'));
+    TEST_ASSERT_EQUAL(std::string::npos,services.calls.find('G'));
+}
+void testInvalidStoredWifiDoesNotAttemptStationAssociation() {
+    Services services;
+    strcpy(services.stored.password,"short");
+    SafeStartup startup(services,IDENTITY);
+    startup.begin(0,false);
+    startup.tick(10000);
+    startup.tick(40000);
+    TEST_ASSERT_FALSE(startup.configurationLoaded());
+    TEST_ASSERT_EQUAL(0,services.attempts);
+}
+void testMaintenanceConfigurationFaultsAreSingleAttemptAndFailClosed() {
+    for (unsigned fault=0;fault<3;++fault) {
+        Services services;
+        services.mountOk = fault != 0;
+        services.loadOk = fault != 1;
+        services.clearGuardOk = fault != 2;
+        SafeStartup startup(services,IDENTITY);
+        startup.begin(0,false,true);
+        startup.tick(10000);
+        startup.tick(70000);
+        TEST_ASSERT_FALSE(startup.applicationRunning());
+        TEST_ASSERT_EQUAL(0,services.attempts);
+        TEST_ASSERT_EQUAL(1,services.configurationMounts);
+        TEST_ASSERT_EQUAL(std::string::npos,services.calls.find('F'));
+        if (fault == 0) TEST_ASSERT_FALSE(startup.storageAvailable());
+        if (fault == 1 || fault == 2) TEST_ASSERT_FALSE(startup.configurationLoaded());
+    }
+}
+void testStagedWifiCancelsPendingMaintenanceConfigurationLoad() {
+    Services services;
+    SafeStartup startup(services,IDENTITY);
+    const std::string authorization = "Bearer " + std::string(IDENTITY.token);
+    startup.begin(0,false,true);
+    TEST_ASSERT_EQUAL(StartupResult::ok,startup.stageWifi(authorization,"ssid=Temporary&password=temp-password",true,9999));
+    startup.tick(10000);
+    TEST_ASSERT_EQUAL(0,services.configurationMounts);
+    TEST_ASSERT_EQUAL(1,services.attempts);
+    TEST_ASSERT_EQUAL_STRING("Temporary",services.target.ssid);
+    TEST_ASSERT_FALSE(startup.applicationRunning());
 }
 void testMaintenanceBootProvisioningAndColdRestartRemainExplicit() {
     Services services;
@@ -117,7 +201,9 @@ void testMaintenanceBootProvisioningAndColdRestartRemainExplicit() {
     const std::string authorization = "Bearer " + std::string(IDENTITY.token);
     startup.begin(0,false,true);
     startup.tick(60000);
-    TEST_ASSERT_EQUAL_STRING("NH",services.calls.c_str());
+    TEST_ASSERT_FALSE(startup.configurationLoaded());
+    TEST_ASSERT_EQUAL(1,services.configurationMounts);
+    TEST_ASSERT_EQUAL(0,services.preparationMounts);
     TEST_ASSERT_EQUAL(StartupResult::ok,startup.stageWifi(authorization,"ssid=Network&password=examplepass",false,60000));
     services.connected = true;
     TEST_ASSERT_EQUAL(StartupResult::ok,startup.confirmWifi(authorization));
@@ -129,7 +215,9 @@ void testMaintenanceBootProvisioningAndColdRestartRemainExplicit() {
     SafeStartup selected(rebooted,IDENTITY);
     selected.begin(0,false,true);
     selected.tick(120000);
-    TEST_ASSERT_EQUAL_STRING("NH",rebooted.calls.c_str());
+    TEST_ASSERT_TRUE(selected.configurationLoaded());
+    TEST_ASSERT_EQUAL(1,rebooted.configurationMounts);
+    TEST_ASSERT_EQUAL(1,rebooted.attempts);
     Services existing;
     SafeStartup normal(existing,IDENTITY);
     normal.begin(0,false);
@@ -325,10 +413,15 @@ void tearDown() {}
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(testNetworkAndHttpStartBeforeStorageAndDisplay);
-    RUN_TEST(testFailedRecoveryNetworkPreventsAutomaticRiskyStartup);
-    RUN_TEST(testHttpStartupRetriesOnlyUntilListenerSucceeds);
+    RUN_TEST(testFailedRecoveryNetworkRequiresFreshWindowBeforeMaintenanceConfigurationLoad);
+    RUN_TEST(testHttpStartupRetriesThenUsesFreshMaintenanceWindowForConfiguration);
     RUN_TEST(testRecoveryApRejectsSdkFailuresAndMismatchedNetwork);
-    RUN_TEST(testExplicitMaintenanceBootDoesNotMountUntilAuthorizedAndDefaultStillStarts);
+    RUN_TEST(testMaintenanceBootLoadsConfigurationOnlyAndExplicitRunPreparesStorage);
+    RUN_TEST(testCleanMaintenanceBootLoadsSavedWifiWithoutStartingApplication);
+    RUN_TEST(testCrashEvidencePreventsMaintenanceBootConfigurationLoad);
+    RUN_TEST(testInvalidStoredWifiDoesNotAttemptStationAssociation);
+    RUN_TEST(testMaintenanceConfigurationFaultsAreSingleAttemptAndFailClosed);
+    RUN_TEST(testStagedWifiCancelsPendingMaintenanceConfigurationLoad);
     RUN_TEST(testMaintenanceBootProvisioningAndColdRestartRemainExplicit);
     RUN_TEST(testMaintenanceOtaAdmissionRejectsPendingAutomaticStartup);
     RUN_TEST(testMissingOrMalformedIdentityNeverStartsNetwork);

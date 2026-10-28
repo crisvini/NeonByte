@@ -2,6 +2,7 @@
 #include "neonbyte/esp8266/display.h"
 #include "neonbyte/esp8266/http_server.h"
 #include "neonbyte/recovery_ap.h"
+#include "neonbyte/startup_guard_layout.h"
 #include <sys/time.h>
 #include <new>
 #ifndef NEONBYTE_MAINTENANCE_ON_BOOT
@@ -37,8 +38,7 @@ RecoveryIdentity privateRecoveryIdentity() {
     return {};
 #endif
 }
-constexpr std::uint32_t GUARD_MAGIC = 0x4e425347;
-struct StartupGuard { std::uint32_t magic, risky, inverse; };
+static_assert(sizeof(StartupGuardRecord) == STARTUP_GUARD_RECORD_BYTES);
 DeviceClock deviceClock;
 PersistentStorage storage;
 DeviceDisplay display(storage);
@@ -73,12 +73,13 @@ public:
         return startCheckedRecoveryAp(backend);
     }
     bool startHttp() override;
+    bool mountConfigurationStorage() override { return storage.mountForConfiguration(); }
     bool mountStorage() override { return storage.beginStorage(); }
     bool loadWifi(WifiCredentials& out) override {
         if (!storage.loadConfiguration()) return false;
         memcpy(out.ssid,storage.configuration.ssid,sizeof(out.ssid));
         memcpy(out.password,storage.configuration.password,sizeof(out.password));
-        return out.ssid[0];
+        return isValidWifiConfiguration(out);
     }
     bool saveWifi(const WifiCredentials& value) override {
         DeviceConfiguration candidate = storage.configuration;
@@ -113,11 +114,12 @@ public:
     bool stationConnected(const WifiCredentials& value) const override {
         return association_.confirmed(value,WiFi.status() == WL_CONNECTED);
     }
+    bool backgroundStartupWorkAllowed() const override;
     bool setStartupGuard(bool risky) override {
-        StartupGuard guard{GUARD_MAGIC,risky ? 1U : 0U,risky ? ~1U : ~0U};
-        if (!ESP.rtcUserMemoryWrite(0,reinterpret_cast<std::uint32_t*>(&guard),sizeof(guard))) return false;
-        StartupGuard actual{};
-        return ESP.rtcUserMemoryRead(0,reinterpret_cast<std::uint32_t*>(&actual),sizeof(actual))
+        StartupGuardRecord guard{STARTUP_GUARD_MAGIC,risky ? 1U : 0U,risky ? ~1U : ~0U};
+        if (!ESP.rtcUserMemoryWrite(STARTUP_GUARD_RTC_WORD_OFFSET,reinterpret_cast<std::uint32_t*>(&guard),sizeof(guard))) return false;
+        StartupGuardRecord actual{};
+        return ESP.rtcUserMemoryRead(STARTUP_GUARD_RTC_WORD_OFFSET,reinterpret_cast<std::uint32_t*>(&actual),sizeof(actual))
             && memcmp(&guard,&actual,sizeof(guard)) == 0;
     }
     bool startApplication() override;
@@ -131,6 +133,7 @@ SafeStartup startup(startupServices,privateRecoveryIdentity());
 // No application allocation or filesystem is needed to accept maintenance HTTP.
 DeviceHttpServer http(storage,startup,pairingAuthenticator);
 bool DeviceStartupServices::startHttp() { return http.begin(); }
+bool DeviceStartupServices::backgroundStartupWorkAllowed() const { return http.backgroundStartupWorkAllowed(); }
 bool DeviceStartupServices::startApplication() {
     scenes.reset(new (std::nothrow) SceneManager(deviceClock,storage));
     if (!scenes) return false;
@@ -147,15 +150,17 @@ void DeviceStartupServices::stopApplication() {
 }
 bool previousStartupFailure() {
     const auto* reset = ESP.getResetInfoPtr();
-    if (!reset || (reset->reason != REASON_DEFAULT_RST && reset->reason != REASON_SOFT_RESTART
-        && reset->reason != REASON_EXT_SYS_RST)) return true;
-    StartupGuard guard{};
-    if (!ESP.rtcUserMemoryRead(0,reinterpret_cast<std::uint32_t*>(&guard),sizeof(guard))) return true;
-    if (guard.magic != GUARD_MAGIC || guard.inverse != ~guard.risky || guard.risky > 1) {
-        // RTC contents are unspecified on power-on; initialize only on a clean boot.
-        return reset->reason != REASON_DEFAULT_RST || !startupServices.setStartupGuard(false);
+    auto reason = StartupResetReason::unexpected;
+    if (reset) {
+        if (reset->reason == REASON_DEFAULT_RST) reason = StartupResetReason::powerOn;
+        else if (reset->reason == REASON_SOFT_RESTART) reason = StartupResetReason::softRestart;
+        else if (reset->reason == REASON_EXT_SYS_RST) reason = StartupResetReason::externalReset;
     }
-    return guard.risky != 0;
+    return startupResetRequiresMaintenance(reason,
+        [](std::uint32_t wordOffset, StartupGuardRecord& guard) {
+            return ESP.rtcUserMemoryRead(wordOffset,reinterpret_cast<std::uint32_t*>(&guard),sizeof(guard));
+        },
+        [] { return startupServices.setStartupGuard(false); });
 }
 }
 void setup() {

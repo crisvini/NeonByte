@@ -91,3 +91,56 @@ test("crash-start maintenance leaves staged disk files untouched until explicit 
   assert.equal((await harness.maintenance("storage")).status, 204);
   assert.ok(!(await readdir(harness.directory)).includes("animation.part"));
 });
+
+test("clean maintenance boot loads saved Wi-Fi without preparing storage or starting the application", async (t) => {
+  const harness = await startHarness(t, { bootstrap: false });
+  await harness.maintenance("wifi", "ssid=OfflineLab&password=test-password");
+  await harness.associate("OfflineLab");
+  assert.equal((await harness.maintenance("wifi/confirm")).status, 204);
+  await writeFile(join(harness.directory, "animation.part"), "incomplete test candidate");
+
+  await harness.restart(false, false, "maintenance");
+  assert.equal((await harness.state()).calls, "NH");
+  await harness.advance(9_999);
+  assert.equal((await harness.state()).calls, "NH");
+  await harness.advance(1);
+
+  const state = await harness.state();
+  assert.ok(state.calls.includes("Q"));
+  assert.ok(state.calls.includes("C"));
+  assert.ok(state.calls.includes("W"));
+  assert.ok(!state.calls.includes("F"));
+  assert.ok(!state.calls.includes("A"));
+  assert.equal(state.stationTargetSsid, "OfflineLab");
+  assert.equal(state.applicationRunning, false);
+  assert.ok((await readdir(harness.directory)).includes("animation.part"));
+
+  assert.equal((await harness.maintenance("storage")).status, 204);
+  assert.ok((await harness.state()).calls.includes("F"));
+  assert.ok(!(await readdir(harness.directory)).includes("animation.part"));
+  assert.equal((await harness.state()).applicationRunning, false);
+});
+
+test("clean maintenance boot defers saved Wi-Fi loading while an OTA blocks background work", async (t) => {
+  const harness = await startHarness(t, { bootstrap: false });
+  await harness.maintenance("wifi", "ssid=OfflineLab&password=test-password");
+  await harness.associate("OfflineLab");
+  assert.equal((await harness.maintenance("wifi/confirm")).status, 204);
+
+  await harness.restart(false, false, "maintenance");
+  await harness.fault("otaBusy", true);
+  await harness.advance(10_000);
+  let state = await harness.state();
+  assert.equal(state.calls, "NH");
+  assert.equal(state.attempts, 0);
+  assert.equal(state.applicationRunning, false);
+
+  await harness.fault("otaBusy", false);
+  await harness.advance(1);
+  state = await harness.state();
+  assert.ok(state.calls.includes("Q"));
+  assert.ok(state.calls.includes("W"));
+  assert.ok(!state.calls.includes("F"));
+  assert.ok(!state.calls.includes("A"));
+  assert.equal(state.stationTargetSsid, "OfflineLab");
+});

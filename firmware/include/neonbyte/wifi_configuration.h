@@ -2,6 +2,7 @@
 #include <string_view>
 namespace neonbyte {
 struct WifiCredentials { char ssid[33]{}; char password[65]{}; };
+bool isValidWifiConfiguration(const WifiCredentials& credentials);
 // Exactly ssid then password, URL-encoded; output changes only on success.
 bool parseWifiConfiguration(std::string_view form, WifiCredentials& credentials);
 // Fresh event evidence for the current credential attempt, never configured SSID alone.

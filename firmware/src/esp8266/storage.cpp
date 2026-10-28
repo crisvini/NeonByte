@@ -33,6 +33,19 @@ private:
     const char* temporary_;
     const char* installed_;
 };
+class LittleFsMountBackend {
+public:
+    void disableAutoFormat() {
+        LittleFSConfig config; config.setAutoFormat(false); LittleFS.setConfig(config);
+    }
+    bool mount() { return LittleFS.begin(); }
+    bool ensureNamespace() { return LittleFS.exists("/neonbyte") || LittleFS.mkdir("/neonbyte"); }
+    void cleanupTemporaryFiles() {
+        LittleFS.remove("/neonbyte/animation.part");
+        LittleFS.remove("/neonbyte/cover.part");
+        LittleFS.remove("/neonbyte/firmware.part");
+    }
+};
 bool atomicWrite(const char* temporary, const char* installed, const void* data, std::size_t length) {
     LittleFsReplacement backend(temporary,installed);
     return replaceAtomicFile(backend,static_cast<const std::uint8_t*>(data),length);
@@ -53,19 +66,17 @@ bool FileSource::readAt(std::uint32_t offset, std::uint8_t* out, std::size_t len
     yield();
     return file_ && offset <= file_.size() && length <= file_.size()-offset && file_.seek(offset,SeekSet) && file_.read(out,length) == static_cast<int>(length);
 }
+bool PersistentStorage::mountForConfiguration() {
+    LittleFsMountBackend backend;
+    return mountFilesystemForConfiguration(mountState_,backend);
+}
 bool PersistentStorage::beginStorage() {
-    LittleFSConfig config; config.setAutoFormat(false); LittleFS.setConfig(config);
-    ready = LittleFS.begin();
-    if (!ready) return false;
-    // This is not a stock filesystem migration. Never format or remove stock paths.
-    if (!LittleFS.exists("/neonbyte") && !LittleFS.mkdir("/neonbyte")) { ready = false; return false; }
-    LittleFS.remove("/neonbyte/animation.part");
-    LittleFS.remove("/neonbyte/cover.part");
-    LittleFS.remove("/neonbyte/firmware.part");
-    return true;
+    LittleFsMountBackend backend;
+    ready = prepareFilesystem(mountState_,backend);
+    return ready;
 }
 bool PersistentStorage::loadConfiguration() {
-    if (!ready) return false;
+    if (!mountState_.mounted) return false;
     File file = LittleFS.open("/neonbyte/config.bin","r");
     if (!file) return false; // First-boot identity is independent of LittleFS.
     DeviceConfiguration candidate{}; std::uint8_t stored[32], actual[32];

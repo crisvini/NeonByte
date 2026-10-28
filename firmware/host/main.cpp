@@ -23,9 +23,9 @@ public:
     Services(DiskStorage& storage, HostClock& clock) : disk(storage), clock_(clock) {}
     DiskStorage& disk;
     HostClock& clock_;
-    bool mountOk = true, configOk = true, appOk = true, apOk = true, guardOk = true, live = false;
+    bool mountOk = true, configOk = true, appOk = true, apOk = true, guardOk = true, live = false, backgroundAllowed = true;
     std::string calls;
-    unsigned attempts = 0;
+    unsigned attempts = 0, configurationMounts = 0, preparationMounts = 0;
     WifiCredentials target{};
     StationAssociation association;
     std::unique_ptr<SceneManager> scenes;
@@ -33,7 +33,8 @@ public:
     BearerTokenAuthenticator auth{IDENTITY.token};
     bool startRecoveryAp(RecoveryIdentity) override { calls += 'N'; return apOk; }
     bool startHttp() override { calls += 'H'; return true; }
-    bool mountStorage() override { calls += 'F'; return mountOk && disk.mount(); }
+    bool mountConfigurationStorage() override { ++configurationMounts; calls += 'Q'; return mountOk && disk.mountForConfiguration(); }
+    bool mountStorage() override { ++preparationMounts; calls += 'F'; return mountOk && disk.mount(); }
     bool loadWifi(WifiCredentials& value) override {
         calls += 'C'; FileSource source(disk.directory / "wifi.bin");
         return configOk && disk.mounted && disk.readOk && source.size() == sizeof(value) && source.readAt(0, reinterpret_cast<std::uint8_t*>(&value), sizeof(value));
@@ -43,6 +44,7 @@ public:
         calls += 'W'; ++attempts; target = value; live = false; association.beginAttempt(value); association.allowAttempt(true);
     }
     bool stationConnected(const WifiCredentials& value) const override { return association.confirmed(value, live); }
+    bool backgroundStartupWorkAllowed() const override { return backgroundAllowed; }
     bool setStartupGuard(bool risky) override { calls += risky ? 'G' : 'g'; return guardOk; }
     bool startApplication() override {
         calls += 'A'; if (!appOk) return false;
@@ -123,7 +125,8 @@ void state(Services& services, SafeStartup& startup) {
         << "\",\"trackIdHex\":\"" << hex(track ? track->trackId.view() : "") << "\",\"coverTrackIdHex\":\"" << hex(services.disk.coverTrackId())
         << "\",\"coverPixel\":" << (track && !scene.waiting && scene.activeScene == ActiveScene::spotify ? services.disk.coverPixel(track->trackId.view()) : -1)
         << ",\"animationFrames\":" << metadata.frameCount << ",\"animationSha\":\"" << services.disk.hash("animation.nbif")
-        << "\",\"savedSsidHex\":\"" << hex(saved.ssid) << "\",\"calls\":\"" << services.calls << "\",\"attempts\":" << services.attempts
+        << "\",\"savedSsidHex\":\"" << hex(saved.ssid) << "\",\"stationTargetHex\":\"" << hex(services.target.ssid)
+        << "\",\"calls\":\"" << services.calls << "\",\"attempts\":" << services.attempts
         << ",\"applicationRunning\":" << startup.applicationRunning() << "}" << std::endl;
 }
 void frame(DiskStorage& disk, unsigned index) {
@@ -140,11 +143,14 @@ void frame(DiskStorage& disk, unsigned index) {
 }
 }
 int main(int argc, char** argv) {
-    if (argc != 2) return 2;
+    if (argc < 2 || argc > 3) return 2;
     std::cout << std::boolalpha;
     try {
         DiskStorage disk(argv[1]); HostClock clock; Services services(disk, clock);
-        SafeStartup startup(services, IDENTITY); startup.begin(0, true);
+        const std::string_view startupMode = argc == 3 ? argv[2] : "crash";
+        if (startupMode != "crash" && startupMode != "normal" && startupMode != "maintenance") return 2;
+        SafeStartup startup(services, IDENTITY);
+        startup.begin(0,startupMode == "crash",startupMode == "maintenance");
         std::string line;
         while (std::getline(std::cin, line)) {
             std::istringstream command(line); std::string verb, key, value; command >> verb;
@@ -173,6 +179,7 @@ int main(int argc, char** argv) {
                     else if (key == "read") disk.readOk = enabled;
                     else if (key == "capacity") disk.capacity = std::stoull(value);
                     else if (key == "disconnect") { services.live = false; services.association.onDisconnected(); }
+                    else if (key == "otaBusy") services.backgroundAllowed = !enabled;
                 }
                 std::cout << "{}" << std::endl;
             }

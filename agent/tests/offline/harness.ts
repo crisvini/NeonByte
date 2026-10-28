@@ -14,9 +14,10 @@ const TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 export interface Observation {
   scene: "spotify" | "gif"; waiting: boolean; agentAvailable: boolean; progressMs: number;
   title: string; artist: string; trackId: string; coverTrackId: string; coverPixel: number;
-  animationFrames: number; animationSha: string; savedSsid: string; calls: string;
+  animationFrames: number; animationSha: string; savedSsid: string; stationTargetSsid: string; calls: string;
   attempts: number; applicationRunning: boolean;
 }
+type StartupMode = "crash" | "normal" | "maintenance";
 interface NativeResponse { status: number; bodyHex: string }
 interface Frame { ok: boolean; bytes: number; delayMs: number; sha256: string }
 
@@ -26,8 +27,8 @@ class NativeProcess {
   private receiver: { resolve(value: unknown): void; reject(error: Error): void } | null = null;
   private failure: Error | null = null;
 
-  constructor(directory: string) {
-    this.child = spawn(fileURLToPath(new URL("../../../build/neonbyte-host", import.meta.url)), [directory], { stdio: "pipe" });
+  constructor(directory: string, startupMode: StartupMode) {
+    this.child = spawn(fileURLToPath(new URL("../../../build/neonbyte-host", import.meta.url)), [directory,startupMode], { stdio: "pipe" });
     createInterface({ input: this.child.stdout }).on("line", (line) => {
       try { this.receiver?.resolve(JSON.parse(line)); }
       catch { this.receiver?.reject(new Error("Invalid native harness response.")); }
@@ -80,7 +81,7 @@ export class Harness {
   private server: Server | null = null;
   private unixMs = EPOCH;
 
-  constructor(readonly directory: string) { this.native = new NativeProcess(directory); }
+  constructor(readonly directory: string, private startupMode: StartupMode) { this.native = new NativeProcess(directory,startupMode); }
   async start(): Promise<void> {
     this.server = createServer((request, response) => {
       void (async () => {
@@ -113,9 +114,13 @@ export class Harness {
   }
   async state(): Promise<Observation> {
     const value = await this.native.send<Record<string, unknown>>("STATE\n");
-    for (const field of ["title", "artist", "trackId", "coverTrackId", "savedSsid"]) {
-      value[field] = Buffer.from(String(value[`${field}Hex`]), "hex").toString("utf8");
-      delete value[`${field}Hex`];
+    const textFields: Record<string, string> = {
+      title: "titleHex", artist: "artistHex", trackId: "trackIdHex", coverTrackId: "coverTrackIdHex",
+      savedSsid: "savedSsidHex", stationTargetSsid: "stationTargetHex"
+    };
+    for (const [field, encodedField] of Object.entries(textFields)) {
+      value[field] = Buffer.from(String(value[encodedField]), "hex").toString("utf8");
+      delete value[encodedField];
     }
     return value as unknown as Observation;
   }
@@ -137,9 +142,10 @@ export class Harness {
     assert.equal((await this.maintenance("wifi/confirm")).status, 204);
     assert.equal((await this.maintenance("run")).status, 204);
   }
-  async restart(run = true, crash = false): Promise<void> {
+  async restart(run = true, crash = false, startupMode?: StartupMode): Promise<void> {
     if (crash) await this.native.crash(); else await this.native.close();
-    this.native = new NativeProcess(this.directory);
+    if (startupMode) this.startupMode = startupMode;
+    this.native = new NativeProcess(this.directory,this.startupMode);
     await this.native.send(`UNIX ${this.unixMs}\n`);
     if (run) assert.equal((await this.maintenance("run")).status, 204);
   }
@@ -152,9 +158,9 @@ export class Harness {
   }
 }
 
-export async function startHarness(t: TestContext, options: { bootstrap?: boolean } = {}): Promise<Harness> {
+export async function startHarness(t: TestContext, options: { bootstrap?: boolean; startupMode?: StartupMode } = {}): Promise<Harness> {
   const directory = await mkdtemp(join(tmpdir(), "neonbyte-offline-"));
-  const harness = new Harness(directory);
+  const harness = new Harness(directory,options.startupMode ?? "crash");
   t.after(async () => { try { await harness.close(); } finally { await rm(directory, { recursive: true, force: true }); } });
   await harness.start();
   if (options.bootstrap !== false) await harness.bootstrap();

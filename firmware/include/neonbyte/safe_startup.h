@@ -10,11 +10,13 @@ public:
     virtual ~StartupServices() = default;
     virtual bool startRecoveryAp(RecoveryIdentity identity) = 0;
     virtual bool startHttp() = 0;
+    virtual bool mountConfigurationStorage() = 0;
     virtual bool mountStorage() = 0;
     virtual bool loadWifi(WifiCredentials& credentials) = 0;
     virtual bool saveWifi(const WifiCredentials& credentials) = 0;
     virtual void connectStation(const WifiCredentials& credentials) = 0;
     virtual bool stationConnected(const WifiCredentials& credentials) const = 0;
+    virtual bool backgroundStartupWorkAllowed() const = 0;
     virtual bool setStartupGuard(bool risky) = 0;
     virtual bool startApplication() = 0;
     virtual void stopApplication() = 0;
@@ -42,6 +44,7 @@ public:
     // Existing authenticated v1 configuration route retains its persistence semantics.
     void usePersistedWifi(const WifiCredentials& credentials, std::uint64_t now);
 private:
+    bool initializeConfigurationOnly();
     bool initializeStorage();
     bool initializeApplication();
     void connect(std::uint64_t now);
@@ -51,8 +54,9 @@ private:
     WifiCredentials activeWifi_{}, candidateWifi_{};
     std::uint64_t initializeAt_ = 0, retryApAt_ = 0, retryHttpAt_ = 0, retryStationAt_ = 0;
     bool identityValid_ = false, apRunning_ = false, httpRunning_ = false, automaticStart_ = false;
-    bool storageAttempted_ = false, storageAvailable_ = false, configurationLoaded_ = false;
+    bool storagePrepared_ = false, storageAvailable_ = false, configurationLoaded_ = false;
     bool applicationRunning_ = false, pendingWifi_ = false, candidateTemporary_ = false, volatileWifi_ = false;
+    bool configurationLoadPending_ = false, configurationLoadAttempted_ = false;
 };
 // Returns an extension response; firmware uploads remain in the target adapter.
 void handleMaintenance(const HttpRequest& request, SafeStartup& startup, std::uint64_t now, HttpResponse& response);

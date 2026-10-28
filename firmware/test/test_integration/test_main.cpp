@@ -6,6 +6,7 @@
 #include "neonbyte/http_headers.h"
 #include "neonbyte/firmware_image.h"
 #include "neonbyte/ota_staging.h"
+#include "neonbyte/startup_guard_layout.h"
 #include "neonbyte/safe_startup.h"
 #include "neonbyte/stock_restore.h"
 #include <algorithm>
@@ -170,14 +171,35 @@ private:
     std::size_t offset_ = 0;
     bool matches_ = true;
 };
-using FakeRtcMemory = std::array<std::uint8_t,128>;
+using FakeRtcMemory = std::array<std::uint8_t,RTC_USER_MEMORY_CAPACITY_BYTES>;
+struct PinnedEbootCommand {
+    std::uint32_t magic;
+    std::uint32_t action;
+    std::uint32_t arguments[29];
+    std::uint32_t crc32;
+};
+static_assert(sizeof(PinnedEbootCommand) == EBOOT_RESERVED_RTC_BYTES);
+constexpr std::uint32_t EBOOT_MAGIC = 0xeb001000;
+std::uint32_t ebootCrc32(const PinnedEbootCommand& command) {
+    std::uint32_t crc = 0xffffffff;
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(&command);
+    for (std::size_t index=0; index<offsetof(PinnedEbootCommand,crc32); ++index) {
+        const auto value = bytes[index];
+        for (std::uint32_t bit=0x80; bit; bit >>= 1) {
+            const bool update = (crc & 0x80000000U) != 0;
+            const bool input = (value & bit) != 0;
+            crc <<= 1;
+            if (update != input) crc ^= 0x04c11db7U;
+        }
+    }
+    return crc;
+}
 class FakeOtaBackend : public OtaFlashBackend {
 public:
     static constexpr std::uint32_t CONFIGURATION_SENTINEL_OFFSET = 0x100100;
     static constexpr std::uint32_t EEPROM_SENTINEL_OFFSET = 0x3fb000;
     static constexpr std::uint32_t RF_SENTINEL_OFFSET = OTA_FLASH_BYTES-2*OTA_SECTOR_BYTES;
     static constexpr std::uint32_t FLASH_TAIL_SENTINEL_OFFSET = OTA_FLASH_BYTES-1;
-    static constexpr std::uint8_t EBOOT_COMMAND_MARKER[4] = {'E','B','O','T'};
     OtaGeometry flashGeometry{true,4*1024*1024,0x40000,0xc0000,0x100000,0x3fa000,0x3fb000,2};
     OtaStageBounds bounds{};
     std::vector<std::uint8_t> flash;
@@ -252,7 +274,9 @@ public:
         active = false; remaining_ = 0;
     }
     bool ebootCommandPresent() const {
-        return std::equal(std::begin(EBOOT_COMMAND_MARKER),std::end(EBOOT_COMMAND_MARKER),rtcMemory->begin());
+        std::uint32_t magic = 0;
+        std::memcpy(&magic,rtcMemory->data(),sizeof(magic));
+        return magic == EBOOT_MAGIC;
     }
     bool rtcMemoryUnchanged() const { return *rtcMemory == initialRtcMemory; }
     bool reservedFlashUnchanged() const {
@@ -261,9 +285,18 @@ public:
             flash[FLASH_TAIL_SENTINEL_OFFSET] == 0x55;
     }
     void writeEbootCommand() {
-        rtcMemory->fill(0xc3);
-        std::copy(std::begin(EBOOT_COMMAND_MARKER),std::end(EBOOT_COMMAND_MARKER),rtcMemory->begin());
+        std::fill(rtcMemory->begin(),rtcMemory->begin()+EBOOT_RESERVED_RTC_BYTES,0xc3);
+        PinnedEbootCommand command{};
+        command.magic = EBOOT_MAGIC;
+        command.action = 1;
+        command.crc32 = ebootCrc32(command);
+        std::memcpy(rtcMemory->data(),&command,sizeof(command));
         ++bootCopyCommands;
+    }
+    void clearEbootCommand() {
+        const std::uint32_t cleared = 0;
+        std::memcpy(rtcMemory->data(),&cleared,sizeof(cleared));
+        std::memcpy(rtcMemory->data()+offsetof(PinnedEbootCommand,crc32),&cleared,sizeof(cleared));
     }
 private:
     std::size_t remaining_ = 0;
@@ -283,9 +316,12 @@ public:
 class FakeStartupServices final : public StartupServices {
 public:
     explicit FakeStartupServices(FakeRtcMemory& rtc) : rtc_(rtc) {}
-    std::uint32_t guardWrites = 0, storageMounts = 0, applicationStarts = 0, applicationStops = 0;
+    std::uint32_t guardWrites = 0, storageMounts = 0, configurationMounts = 0, applicationStarts = 0, applicationStops = 0;
+    const MaintenanceOtaTransaction* otaTransaction = nullptr;
+    bool rebootPending = false;
     bool startRecoveryAp(RecoveryIdentity) override { return true; }
     bool startHttp() override { return true; }
+    bool mountConfigurationStorage() override { ++configurationMounts; return true; }
     bool mountStorage() override { ++storageMounts; return true; }
     bool loadWifi(WifiCredentials& credentials) override {
         strcpy(credentials.ssid,"Test network"); strcpy(credentials.password,"test-password"); return true;
@@ -293,15 +329,23 @@ public:
     bool saveWifi(const WifiCredentials&) override { return true; }
     void connectStation(const WifiCredentials&) override {}
     bool stationConnected(const WifiCredentials&) const override { return false; }
+    bool backgroundStartupWorkAllowed() const override {
+        return !rebootPending && (!otaTransaction || !maintenanceOtaBlocksBackgroundWork(otaTransaction->state()));
+    }
     bool setStartupGuard(bool risky) override {
-        const std::uint32_t guard[3] = {0x4e425347,risky ? 1U : 0U,risky ? ~1U : ~0U};
-        std::memcpy(rtc_.data(),guard,sizeof(guard)); ++guardWrites; return true;
+        const std::uint32_t guard[3] = {STARTUP_GUARD_MAGIC,risky ? 1U : 0U,risky ? ~1U : ~0U};
+        std::memcpy(rtc_.data()+STARTUP_GUARD_RTC_BYTE_OFFSET,guard,sizeof(guard)); ++guardWrites; return true;
     }
     bool startApplication() override { ++applicationStarts; return true; }
     void stopApplication() override { ++applicationStops; }
 private:
     FakeRtcMemory& rtc_;
 };
+bool startupGuardIsClear(const FakeRtcMemory& rtc) {
+    std::uint32_t guard[3]{};
+    std::memcpy(guard,rtc.data()+STARTUP_GUARD_RTC_BYTE_OFFSET,sizeof(guard));
+    return guard[0] == STARTUP_GUARD_MAGIC && guard[1] == 0 && guard[2] == ~0U;
+}
 void assertNoOtaFailureMutation(const FakeOtaBackend& backend, const MaintenanceOtaTransaction& transaction) {
     TEST_ASSERT_EQUAL_UINT32(0,backend.bootCopyCommands);
     TEST_ASSERT_FALSE(maintenanceOtaRestartAllowed(transaction.state()));
@@ -422,6 +466,7 @@ void testStockRestoreVerifiesReadbackAndPreservesReservedRegionsAndRtc() {
     FakeOtaBackend backend(rtc); FixtureDigest digest(image,STOCK_V106_SHA256);
     MaintenanceOtaTransaction transaction(backend,digest,MaintenanceImageKind::stockV106);
     TEST_ASSERT_TRUE(streamMaintenanceImage(transaction,digest,image,STOCK_V106_SHA256,512,"/maintenance/v1/stock-firmware"));
+    services.otaTransaction = &transaction; services.rebootPending = true;
     TEST_ASSERT_EQUAL_UINT32(1,backend.bootCopyCommands);
     TEST_ASSERT_TRUE(backend.verifiedBeforeBootCopy); TEST_ASSERT_TRUE(backend.reservedFlashUnchanged());
     TEST_ASSERT_EQUAL_UINT32(0x88000,backend.bounds.start); TEST_ASSERT_EQUAL_UINT32(0x78000,backend.bounds.roundedLength);
@@ -488,37 +533,113 @@ void testSharedRawBackendCanChangePoliciesAfterAbortedUpload() {
         TEST_ASSERT_EQUAL_UINT32(1,backend.bootCopyCommands); TEST_ASSERT_TRUE(backend.reservedFlashUnchanged());
     }
 }
+void testStartupResetClassificationUsesVersionedGuardAndFailClosedRtcReads() {
+    FakeRtcMemory rtc{}; rtc.fill(0xa5);
+    bool readOk = true, initializeOk = true;
+    std::uint32_t lastReadWordOffset = 0, reads = 0, cleanInitializations = 0;
+    auto readRecord = [&](std::uint32_t wordOffset, StartupGuardRecord& record) {
+        ++reads; lastReadWordOffset = wordOffset;
+        if (!readOk || wordOffset > rtc.size()/sizeof(std::uint32_t) ||
+            sizeof(record) > rtc.size()-wordOffset*sizeof(std::uint32_t)) return false;
+        std::memcpy(&record,rtc.data()+wordOffset*sizeof(std::uint32_t),sizeof(record)); return true;
+    };
+    auto initializeCleanGuard = [&]() {
+        ++cleanInitializations;
+        if (!initializeOk) return false;
+        const StartupGuardRecord clean{STARTUP_GUARD_MAGIC,0,~0U};
+        std::memcpy(rtc.data()+STARTUP_GUARD_RTC_BYTE_OFFSET,&clean,sizeof(clean)); return true;
+    };
+    auto classify = [&](StartupResetReason reason) {
+        return startupResetRequiresMaintenance(reason,readRecord,initializeCleanGuard);
+    };
+
+    TEST_ASSERT_FALSE(classify(StartupResetReason::powerOn));
+    TEST_ASSERT_EQUAL_UINT32(STARTUP_GUARD_RTC_WORD_OFFSET,lastReadWordOffset);
+    TEST_ASSERT_EQUAL_UINT32(1,cleanInitializations);
+    std::uint32_t actualMagic = 0;
+    std::memcpy(&actualMagic,rtc.data()+STARTUP_GUARD_RTC_BYTE_OFFSET,sizeof(actualMagic));
+    TEST_ASSERT_EQUAL_UINT32(STARTUP_GUARD_MAGIC,actualMagic);
+
+    StartupGuardRecord record{STARTUP_GUARD_MAGIC,1,~1U};
+    std::memcpy(rtc.data()+STARTUP_GUARD_RTC_BYTE_OFFSET,&record,sizeof(record));
+    TEST_ASSERT_TRUE(classify(StartupResetReason::softRestart));
+    record = {STARTUP_GUARD_MAGIC,0,~0U};
+    std::memcpy(rtc.data()+STARTUP_GUARD_RTC_BYTE_OFFSET,&record,sizeof(record));
+    TEST_ASSERT_FALSE(classify(StartupResetReason::externalReset));
+
+    record.magic = 0x4e425347; // The prior layout is unknown at the new offset.
+    std::memcpy(rtc.data()+STARTUP_GUARD_RTC_BYTE_OFFSET,&record,sizeof(record));
+    TEST_ASSERT_TRUE(classify(StartupResetReason::softRestart));
+    TEST_ASSERT_EQUAL_UINT32(1,cleanInitializations);
+
+    readOk = false;
+    TEST_ASSERT_TRUE(classify(StartupResetReason::powerOn));
+    readOk = true;
+    TEST_ASSERT_TRUE(classify(StartupResetReason::unexpected));
+    initializeOk = false;
+    TEST_ASSERT_TRUE(classify(StartupResetReason::powerOn));
+    TEST_ASSERT_EQUAL_UINT32(2,cleanInitializations);
+    for (std::size_t offset=EBOOT_RESERVED_RTC_BYTES+STARTUP_GUARD_RECORD_BYTES;offset<rtc.size();++offset)
+        TEST_ASSERT_EQUAL_UINT8(0xa5,rtc[offset]);
+}
+void testStartupGuardSurvivesPinnedEbootCommandWriteAndClear() {
+    FakeRtcMemory rtc{}; rtc.fill(0xa5);
+    FakeStartupServices services(rtc);
+    TEST_ASSERT_EQUAL_UINT32(32,STARTUP_GUARD_RTC_WORD_OFFSET);
+    TEST_ASSERT_EQUAL_UINT32(EBOOT_RESERVED_RTC_BYTES,STARTUP_GUARD_RTC_BYTE_OFFSET);
+    TEST_ASSERT_EQUAL_UINT32(1,STARTUP_GUARD_LAYOUT_VERSION);
+    TEST_ASSERT_EQUAL_UINT32(0x4e425301,STARTUP_GUARD_MAGIC);
+    TEST_ASSERT_TRUE(services.setStartupGuard(false));
+    TEST_ASSERT_TRUE(startupGuardIsClear(rtc));
+
+    FakeOtaBackend backend(rtc);
+    backend.writeEbootCommand();
+    TEST_ASSERT_TRUE(backend.ebootCommandPresent());
+    TEST_ASSERT_TRUE(startupGuardIsClear(rtc));
+    backend.clearEbootCommand();
+    TEST_ASSERT_FALSE(backend.ebootCommandPresent());
+    TEST_ASSERT_TRUE(startupGuardIsClear(rtc));
+}
 void testMaintenanceUploadAndDelayedStartupCannotOverwriteEbootCommand() {
     const auto image = validMaintenanceImage();
     FakeRtcMemory rtc{}; rtc.fill(0xa5);
     FakeStartupServices services(rtc);
-    TEST_ASSERT_TRUE(services.setStartupGuard(false));
     SafeStartup startup(services,{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                                   "fedcba9876543210fedcba9876543210"});
     const std::string authorization = "Bearer 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    startup.begin(0,false);
+    startup.begin(0,false,true);
     TEST_ASSERT_FALSE(startup.applicationRunning());
-    TEST_ASSERT_FALSE(startup.applicationPaused());
-    TEST_ASSERT_EQUAL(OtaAdmissionError::applicationRunning,
-        maintenanceOtaAdmission(startup.authorized(authorization),startup.applicationPaused(),true,
-            HttpMethod::put,"application/octet-stream",image.size(),HASH));
-
-    TEST_ASSERT_EQUAL(StartupResult::ok,startup.pauseApplication(authorization));
     TEST_ASSERT_TRUE(startup.applicationPaused());
     TEST_ASSERT_EQUAL(OtaAdmissionError::none,
         maintenanceOtaAdmission(startup.authorized(authorization),startup.applicationPaused(),true,
             HttpMethod::put,"application/octet-stream",image.size(),HASH));
 
     FakeOtaBackend backend(rtc); FixtureDigest digest(image); MaintenanceOtaTransaction transaction(backend,digest);
-    TEST_ASSERT_TRUE(streamMaintenanceImage(transaction,digest,image));
-    TEST_ASSERT_TRUE(backend.ebootCommandPresent());
-    const auto guardWritesAtActivation = services.guardWrites;
+    services.otaTransaction = &transaction;
+    TEST_ASSERT_TRUE(transaction.setExpectedHash(HASH));
+    TEST_ASSERT_TRUE(transaction.begin(image.size()));
+    TEST_ASSERT_TRUE(transaction.write(image.data(),128));
     startup.tick(10000);
-    TEST_ASSERT_EQUAL_UINT32(guardWritesAtActivation,services.guardWrites);
+    TEST_ASSERT_EQUAL_UINT32(0,services.guardWrites);
+    TEST_ASSERT_EQUAL_UINT32(0,services.configurationMounts);
+    TEST_ASSERT_EQUAL_UINT32(0,services.storageMounts);
+    TEST_ASSERT_EQUAL_UINT32(0,services.applicationStarts);
+    TEST_ASSERT_EQUAL_UINT32(0,services.guardWrites);
+
+    TEST_ASSERT_TRUE(transaction.write(image.data()+128,image.size()-128));
+    TEST_ASSERT_TRUE(transaction.commit());
+    services.rebootPending = true;
+    TEST_ASSERT_TRUE(backend.ebootCommandPresent());
+    startup.tick(12000);
+    TEST_ASSERT_EQUAL_UINT32(0,services.guardWrites);
+    TEST_ASSERT_EQUAL_UINT32(0,services.configurationMounts);
     TEST_ASSERT_EQUAL_UINT32(0,services.storageMounts);
     TEST_ASSERT_EQUAL_UINT32(0,services.applicationStarts);
     TEST_ASSERT_TRUE(backend.ebootCommandPresent());
     TEST_ASSERT_TRUE(backend.reservedFlashUnchanged());
+    backend.clearEbootCommand();
+    TEST_ASSERT_FALSE(backend.ebootCommandPresent());
+    for (std::size_t index=EBOOT_RESERVED_RTC_BYTES;index<rtc.size();++index) TEST_ASSERT_EQUAL_UINT8(0xa5,rtc[index]);
 
     auto invalidImage = image;
     invalidImage[0x1014] ^= 1;
@@ -822,6 +943,8 @@ int main(int, char**) {
     RUN_TEST(testCoverTrackHeaderPreservesUtf8AndLiteralPlus);
     RUN_TEST(testImageRejectsWrongHeadersBoundsAndChecksums);
     RUN_TEST(testMaintenanceOtaGeometryAndRequestGatesFailClosed);
+    RUN_TEST(testStartupResetClassificationUsesVersionedGuardAndFailClosedRtcReads);
+    RUN_TEST(testStartupGuardSurvivesPinnedEbootCommandWriteAndClear);
     RUN_TEST(testMaintenanceUploadAndDelayedStartupCannotOverwriteEbootCommand);
     RUN_TEST(testMaintenanceOtaStagesOnlyAfterHeaderAndActivatesAfterCheckedReadback);
     RUN_TEST(testMaintenanceOtaDoesNotDependOnLittleFsAndPreservesOtherRegions);
