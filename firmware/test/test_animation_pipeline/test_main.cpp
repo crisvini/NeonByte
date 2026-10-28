@@ -186,7 +186,8 @@ void verifyStagedAnimation(AnimationUploadSession& session, PersistentStorage& s
     TEST_ASSERT_EQUAL_STRING_LEN(session.sha256().data(), actualHash, 64);
 
     std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> rowBuffer{};
-    AnimationDecoder decoder(candidate, rowBuffer.data(), rowBuffer.size());
+    std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> encodedBuffer{};
+    AnimationDecoder decoder(candidate, rowBuffer.data(), rowBuffer.size(), encodedBuffer.data(), encodedBuffer.size());
     AnimationV2Metadata metadata{};
     TEST_ASSERT_TRUE(decoder.open(metadata));
     TEST_ASSERT_EQUAL_UINT16(240, metadata.width);
@@ -293,8 +294,9 @@ void testInvalidV2CandidateIsDiscardedAndLeavesInstalledV1Untouched() {
     TEST_ASSERT_EQUAL_INT(AnimationChunkResult::Accepted, session.step(0, scratch.data(), scratch.size()));
     TEST_ASSERT_EQUAL_INT(AnimationChunkResult::Accepted, session.complete(UPLOAD_ID, 0));
     std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> rowBuffer{};
+    std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> encodedBuffer{};
     CandidateSource candidate(storage);
-    AnimationDecoder decoder(candidate, rowBuffer.data(), rowBuffer.size());
+    AnimationDecoder decoder(candidate, rowBuffer.data(), rowBuffer.size(), encodedBuffer.data(), encodedBuffer.size());
     AnimationV2Metadata metadata{};
     TEST_ASSERT_FALSE(decoder.open(metadata));
     session.fail(AnimationUploadError::InvalidAnimation, 1);

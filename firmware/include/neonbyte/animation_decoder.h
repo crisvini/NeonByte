@@ -13,8 +13,10 @@ constexpr std::uint32_t NBIF_V2_DIRECTORY_ENTRY_BYTES = 20;
 constexpr std::uint32_t NBIF_V2_ROW_HEADER_BYTES = 6;
 constexpr std::uint32_t NBIF_V2_MAX_FILE_BYTES = 2'359'296;
 constexpr std::uint32_t NBIF_V2_MAX_DURATION_MS = 30'000;
-constexpr std::size_t NBIF_V2_MAX_DIRECTORY_BYTES = 20 * NBIF_V2_DIRECTORY_ENTRY_BYTES;
 constexpr std::size_t NBIF_V2_ROW_BUFFER_BYTES = 480;
+constexpr std::size_t NBIF_V2_COMPACT_DIRECTORY_ENTRY_BYTES = 10;
+constexpr std::size_t NBIF_V2_MAX_DIRECTORY_BYTES = 20 * NBIF_V2_COMPACT_DIRECTORY_ENTRY_BYTES;
+static_assert(20 * NBIF_V2_DIRECTORY_ENTRY_BYTES <= NBIF_V2_ROW_BUFFER_BYTES);
 
 enum class AnimationDecodeStatus : std::uint8_t {
     Progress,
@@ -54,7 +56,9 @@ struct AnimationV2Metadata {
 
 class AnimationDecoder {
 public:
-    AnimationDecoder(const AnimationSource& source, std::uint8_t* outputRow, std::size_t outputCapacity);
+    // A null output row selects validation-only mode; encodedRow remains caller-owned.
+    AnimationDecoder(const AnimationSource& source, std::uint8_t* outputRow, std::size_t outputCapacity,
+                     std::uint8_t* encodedRow, std::size_t encodedCapacity);
 
     bool open(AnimationV2Metadata& metadata);
     AnimationDecodeStatus step();
@@ -81,12 +85,15 @@ private:
     AnimationDecodeStatus finishFrame();
     bool decodeRow(std::uint8_t codec, const std::uint8_t* input, std::size_t inputLength,
                    std::uint16_t width);
+    bool validateRow(std::uint8_t codec, const std::uint8_t* input, std::size_t inputLength,
+                     std::uint16_t width);
 
     const AnimationSource& source_;
     std::uint8_t* outputRow_;
     std::size_t outputCapacity_;
+    std::uint8_t* encodedRow_;
+    std::size_t encodedCapacity_;
     std::array<std::uint8_t, NBIF_V2_MAX_DIRECTORY_BYTES> directory_{};
-    std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> encodedRow_{};
     std::array<std::uint16_t, 256> palette_{};
     AnimationV2Metadata metadata_{};
     AnimationFrameInfo frameInfo_{};

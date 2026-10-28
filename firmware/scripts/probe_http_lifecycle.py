@@ -26,6 +26,14 @@ def main():
 #include <string>
 #include <string_view>
 using std::size_t;
+unsigned flashMessageReads = 0;
+unsigned char readFlashMessageByte(const void* address) {
+    ++flashMessageReads;
+    return *static_cast<const unsigned char*>(address);
+}
+#define pgm_read_byte(address) readFlashMessageByte(address)
+#define PSTR(value) (value)
+#define snprintf_P std::snprintf
 struct SocketState { bool connected = true; std::string input, output; size_t offset = 0; };
 struct Client {
     std::shared_ptr<SocketState> state;
@@ -164,6 +172,8 @@ void uploadErrorClosesReadbackBeforeDeletingCandidate() {
     server.error(500,"internal_error","Read failure.");
     assert(server.assetSink_.aborts==1 && !server.assetSink_.temporaryRetained && !server.finalizing_);
     assert(server.response_.statusCode==500 && server.sending_);
+    assert(server.response_.bodyView()=="{\"code\":\"internal_error\",\"message\":\"Read failure.\"}");
+    assert(flashMessageReads > 0);
 }
 void idleAndTotalDeadlineAreFinite() {
     DeviceHttpServer idle; auto socket=std::make_shared<SocketState>();

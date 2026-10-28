@@ -36,8 +36,10 @@ std::uint8_t expectedIndexBits(std::uint16_t count) {
 } // namespace
 
 AnimationDecoder::AnimationDecoder(const AnimationSource& source, std::uint8_t* outputRow,
-                                   std::size_t outputCapacity)
-    : source_(source), outputRow_(outputRow), outputCapacity_(outputCapacity) {}
+                                   std::size_t outputCapacity, std::uint8_t* encodedRow,
+                                   std::size_t encodedCapacity)
+    : source_(source), outputRow_(outputRow), outputCapacity_(outputCapacity),
+      encodedRow_(encodedRow), encodedCapacity_(encodedCapacity) {}
 
 bool AnimationDecoder::fail(const char* error) {
     error_ = error;
@@ -47,15 +49,18 @@ bool AnimationDecoder::fail(const char* error) {
 }
 
 AnimationDecoder::DirectoryEntry AnimationDecoder::directoryEntry(std::uint16_t index) const {
-    const auto* bytes = directory_.data() + static_cast<std::size_t>(index) * NBIF_V2_DIRECTORY_ENTRY_BYTES;
+    const auto* bytes = directory_.data() + static_cast<std::size_t>(index) * NBIF_V2_COMPACT_DIRECTORY_ENTRY_BYTES;
     DirectoryEntry entry{};
     entry.recordOffset = read32(bytes);
-    entry.recordBytes = read32(bytes + 4);
-    entry.delayMs = read16(bytes + 8);
-    entry.kind = static_cast<AnimationFrameKind>(bytes[10]);
-    entry.indexBits = bytes[11];
-    entry.paletteCount = read16(bytes + 12);
-    entry.rowCount = read16(bytes + 14);
+    // open() has already checked that records are contiguous, including holds.
+    const auto nextOffset = index + 1 < metadata_.frameCount
+        ? read32(bytes + NBIF_V2_COMPACT_DIRECTORY_ENTRY_BYTES) : metadata_.fileBytes;
+    entry.recordBytes = nextOffset - entry.recordOffset;
+    entry.delayMs = read16(bytes + 4);
+    entry.paletteCount = read16(bytes + 6);
+    entry.rowCount = bytes[8];
+    entry.kind = static_cast<AnimationFrameKind>(bytes[9]);
+    entry.indexBits = entry.paletteCount ? expectedIndexBits(entry.paletteCount) : 0;
     return entry;
 }
 
@@ -70,7 +75,9 @@ bool AnimationDecoder::open(AnimationV2Metadata& metadata) {
     frameCompletionPending_ = false;
     rowReady_ = false;
     error_ = "invalid NBIF v2 header";
-    if (outputRow_ == nullptr || outputCapacity_ < NBIF_V2_ROW_BUFFER_BYTES ||
+    if (encodedRow_ == nullptr || encodedCapacity_ < NBIF_V2_ROW_BUFFER_BYTES ||
+        (outputRow_ == nullptr ? outputCapacity_ != 0 :
+            outputCapacity_ < NBIF_V2_ROW_BUFFER_BYTES || outputRow_ == encodedRow_) ||
         source_.size() < NBIF_V2_HEADER_BYTES) return false;
 
     std::array<std::uint8_t, NBIF_V2_HEADER_BYTES> header{};
@@ -87,12 +94,15 @@ bool AnimationDecoder::open(AnimationV2Metadata& metadata) {
         fileBytes < NBIF_V2_HEADER_BYTES + frameCount * NBIF_V2_DIRECTORY_ENTRY_BYTES) return false;
 
     const auto directoryBytes = static_cast<std::size_t>(frameCount) * NBIF_V2_DIRECTORY_ENTRY_BYTES;
-    if (!source_.readAt(NBIF_V2_HEADER_BYTES, directory_.data(), directoryBytes)) return false;
+    // The row is not visible until decoding starts, so it can hold the wire directory here.
+    auto* directoryScratch = outputRow_ ? outputRow_ : encodedRow_;
+    if (!source_.readAt(NBIF_V2_HEADER_BYTES, directoryScratch, directoryBytes)) return false;
     std::uint32_t expectedOffset = NBIF_V2_HEADER_BYTES + static_cast<std::uint32_t>(directoryBytes);
     std::uint32_t summedDuration = 0;
     for (std::uint16_t index = 0; index < frameCount; ++index) {
-        const auto* raw = directory_.data() + static_cast<std::size_t>(index) * NBIF_V2_DIRECTORY_ENTRY_BYTES;
-        const auto entry = directoryEntry(index);
+        const auto* raw = directoryScratch + static_cast<std::size_t>(index) * NBIF_V2_DIRECTORY_ENTRY_BYTES;
+        const DirectoryEntry entry{read32(raw), read32(raw + 4), read16(raw + 8),
+            static_cast<AnimationFrameKind>(raw[10]), raw[11], read16(raw + 12), read16(raw + 14)};
         if (read32(raw + 16) != 0 || entry.recordOffset != expectedOffset ||
             entry.recordOffset > fileBytes || entry.recordBytes > fileBytes - entry.recordOffset ||
             entry.delayMs < 20 || static_cast<std::uint8_t>(entry.kind) > 2 ||
@@ -109,6 +119,12 @@ bool AnimationDecoder::open(AnimationV2Metadata& metadata) {
         }
         expectedOffset += entry.recordBytes;
         summedDuration += entry.delayMs;
+        auto* compact = directory_.data() + static_cast<std::size_t>(index) * NBIF_V2_COMPACT_DIRECTORY_ENTRY_BYTES;
+        std::memcpy(compact, raw, 4);
+        std::memcpy(compact + 4, raw + 8, 2);
+        std::memcpy(compact + 6, raw + 12, 2);
+        compact[8] = static_cast<std::uint8_t>(entry.rowCount);
+        compact[9] = raw[10];
     }
     if (expectedOffset != fileBytes || summedDuration != durationMs || durationMs > NBIF_V2_MAX_DURATION_MS) return false;
 
@@ -191,6 +207,56 @@ bool AnimationDecoder::decodeRow(std::uint8_t codec, const std::uint8_t* input,
     return true;
 }
 
+bool AnimationDecoder::validateRow(std::uint8_t codec, const std::uint8_t* input,
+                                   std::size_t inputLength, std::uint16_t width) {
+    if (width == 0 || width > WIDTH) return false;
+    if (codec == CODEC_RGB565_RAW) {
+        if (inputLength != static_cast<std::size_t>(width) * 2) return false;
+    } else if (codec == CODEC_PACKED_INDEX) {
+        if (paletteCount_ == 0) return false;
+        const auto bits = directoryEntry(frameIndex_).indexBits;
+        const auto expectedBytes = (static_cast<std::size_t>(width) * bits + 7) / 8;
+        if (inputLength != expectedBytes) return false;
+        std::size_t bitOffset = 0;
+        for (std::uint16_t pixel = 0; pixel < width; ++pixel) {
+            std::uint16_t index = 0;
+            for (std::uint8_t bit = 0; bit < bits; ++bit) {
+                index = static_cast<std::uint16_t>((index << 1) |
+                    ((input[bitOffset >> 3] >> (7 - (bitOffset & 7))) & 1));
+                ++bitOffset;
+            }
+            if (index >= paletteCount_) return false;
+        }
+        const auto paddingBits = expectedBytes * 8 - static_cast<std::size_t>(width) * bits;
+        if (paddingBits != 0 && (input[inputLength - 1] & ((1u << paddingBits) - 1u)) != 0) return false;
+    } else {
+        if (codec != CODEC_RGB565_RLE && codec != CODEC_INDEXED_RLE) return false;
+        const bool indexed = codec == CODEC_INDEXED_RLE;
+        if (indexed && paletteCount_ == 0) return false;
+        std::size_t inputOffset = 0;
+        std::uint16_t pixelCount = 0;
+        while (inputOffset < inputLength) {
+            const auto control = input[inputOffset++];
+            const auto count = static_cast<std::uint16_t>((control & 0x7f) + 1);
+            if (static_cast<std::uint32_t>(pixelCount) + count > width) return false;
+            const auto valueBytes = indexed ? 1u : 2u;
+            const auto values = (control & 0x80) != 0 ? 1u : static_cast<unsigned>(count);
+            const auto bytes = static_cast<std::size_t>(values) * valueBytes;
+            if (inputOffset + bytes > inputLength) return false;
+            if (indexed) {
+                for (unsigned item = 0; item < values; ++item) {
+                    if (input[inputOffset + item] >= paletteCount_) return false;
+                }
+            }
+            inputOffset += bytes;
+            pixelCount = static_cast<std::uint16_t>(pixelCount + count);
+        }
+        if (pixelCount != width) return false;
+    }
+    rowBytes_ = static_cast<std::uint16_t>(width * 2);
+    return true;
+}
+
 AnimationDecodeStatus AnimationDecoder::finishFrame() {
     frameInfo_ = {frameIndex_, directoryEntry(frameIndex_).delayMs, directoryEntry(frameIndex_).kind};
     frameCompletionPending_ = true;
@@ -264,18 +330,19 @@ AnimationDecodeStatus AnimationDecoder::step() {
     const auto encodedBytes = read16(rowHeader.data() + 4);
     rowCursor_ += NBIF_V2_ROW_HEADER_BYTES;
     if (y >= HEIGHT || width == 0 || width > WIDTH || static_cast<std::uint16_t>(x) + width > WIDTH ||
-        (rowCountRead_ != 0 && y <= previousY_) || encodedBytes > encodedRow_.size() ||
+        (rowCountRead_ != 0 && y <= previousY_) || encodedBytes > NBIF_V2_ROW_BUFFER_BYTES ||
         rowCursor_ > entry.recordOffset + entry.recordBytes ||
         encodedBytes > entry.recordOffset + entry.recordBytes - rowCursor_ ||
         (entry.kind == AnimationFrameKind::Keyframe && (x != 0 || width != WIDTH || y != rowCountRead_))) {
         fail("row bounds or order are invalid");
         return AnimationDecodeStatus::Error;
     }
-    if (encodedBytes != 0 && !source_.readAt(rowCursor_, encodedRow_.data(), encodedBytes)) {
+    if (encodedBytes != 0 && !source_.readAt(rowCursor_, encodedRow_, encodedBytes)) {
         fail("row payload read failed");
         return AnimationDecodeStatus::Error;
     }
-    if (!decodeRow(codec, encodedRow_.data(), encodedBytes, width)) {
+    if (!(outputRow_ ? decodeRow(codec, encodedRow_, encodedBytes, width)
+                     : validateRow(codec, encodedRow_, encodedBytes, width))) {
         fail("row payload is malformed");
         return AnimationDecodeStatus::Error;
     }

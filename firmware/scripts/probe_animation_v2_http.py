@@ -102,6 +102,8 @@ def main():
 #include <string>
 #include <string_view>
 #include <vector>
+#define PSTR(value) (value)
+#define snprintf_P std::snprintf
 using namespace neonbyte;
 namespace neonbyte {
 struct Runtime { std::uint32_t getChipId() const { return 0x123abc; } } ESP;
@@ -194,9 +196,8 @@ public:
     AnimationUploadSession animationUpload_{storage_};
     Digest digest_;
     std::unique_ptr<HashJob> hashJob_;
-    std::array<std::uint8_t, 480> validationRow_{};
-    AnimationDecoder validationDecoder_{candidateSource_, validationRow_.data(), validationRow_.size()};
     std::array<std::uint8_t, 512> chunk_{};
+    AnimationDecoder validationDecoder_{candidateSource_, nullptr, 0, chunk_.data(), chunk_.size()};
     std::array<char, 4096> headerBytes_{};
     std::array<char, 513> controlBody_{};
     std::unique_ptr<std::uint8_t[]> animationChunkBody_;
@@ -314,11 +315,19 @@ void validRouteUploadValidatesAndPromotesOnlyAtBoundary() {
     auto capabilities=server.response_.bodyView();assert(capabilities.find("nbif-v1")!=capabilities.npos&&capabilities.find("nbif-v2")!=capabilities.npos);
     const auto expected=makeV2();unsigned cooperativeTicks=0;uploadBytes(server,expected,clock,scenes,cooperativeTicks);
     assert(server.animationUpload_.state()==AnimationUploadState::Verifying&&server.storage_.installed==std::vector<std::uint8_t>({'N','B','I','F',1}));
-    while(server.animationUpload_.state()==AnimationUploadState::Verifying){server.advanceAnimationValidation(++server.lastActivity_);assertBackgroundServices(clock,scenes,cooperativeTicks);}
+    const auto uploadId=server.animationUpload_.uploadId();char path[64];std::snprintf(path,sizeof(path),"/api/v2/animation/uploads/%08x",uploadId);
+    while(server.animationUpload_.state()==AnimationUploadState::Verifying){
+        server.advanceAnimationValidation(++server.lastActivity_);
+        std::fill(server.chunk_.begin(),server.chunk_.end(),0xa5);
+        assertBackgroundServices(clock,scenes,cooperativeTicks);
+        if (cooperativeTicks % 32 == 0 && server.animationUpload_.state()==AnimationUploadState::Verifying) {
+            server.request("GET",path);
+            assert(server.status==200 && server.response_.bodyView().find("\"state\":\"verifying\"")!=std::string_view::npos);
+        }
+    }
     assert(server.animationUpload_.state()==AnimationUploadState::Ready);
     assert(server.storage_.installed==std::vector<std::uint8_t>({'N','B','I','F',1}));
     assert(server.storage_.candidateReady&&server.storage_.maxWrite<=512&&cooperativeTicks>240);
-    const auto uploadId=server.animationUpload_.uploadId();char path[64];std::snprintf(path,sizeof(path),"/api/v2/animation/uploads/%08x",uploadId);
     server.request("GET",path);assert(server.status==200&&server.response_.bodyView().find("\"state\":\"ready\"")!=server.response_.bodyView().npos);
     assert(server.storage_.promoteAnimationCandidateAtBoundary());
     server.request("GET",path);assert(server.status==200&&server.response_.bodyView().find("\"state\":\"installed\"")!=server.response_.bodyView().npos);

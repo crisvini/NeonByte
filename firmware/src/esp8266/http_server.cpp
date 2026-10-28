@@ -3,6 +3,7 @@
 #include "neonbyte/maintenance_info.h"
 #include "neonbyte/wifi_configuration.h"
 #include <bearssl/bearssl_hash.h>
+#include <pgmspace.h>
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -154,18 +155,32 @@ void DeviceHttpServer::error(unsigned status, const char* code, const char* mess
     }
     finalizing_ = false; response_ = {}; response_.statusCode = status;
     response_.contentType = "application/json";
-    response_.bodySize = snprintf(response_.body.data(),response_.body.size(),"{\"code\":\"%s\",\"message\":\"%s\"}",code,message);
+    const int prefix = snprintf_P(response_.body.data(),response_.body.size(),PSTR("{\"code\":\"%s\",\"message\":\""),code);
+    if (prefix < 0 || static_cast<std::size_t>(prefix) >= response_.body.size() - 3) {
+        response_.bodySize = 0;
+        prepareResponse();
+        return;
+    }
+    std::size_t position = static_cast<std::size_t>(prefix);
+    while (position + 3 < response_.body.size()) {
+        const auto character = static_cast<char>(pgm_read_byte(message++));
+        if (character == '\0') break;
+        response_.body[position++] = character;
+    }
+    response_.body[position++] = '"';
+    response_.body[position++] = '}';
+    response_.body[position] = '\0';
+    response_.bodySize = position;
     prepareResponse();
 }
 void DeviceHttpServer::prepareResponse() {
     const auto type = response_.contentType.empty() ? std::string_view("application/json") : response_.contentType;
-    responseHeaderSize_ = snprintf(responseHeaders_.data(),responseHeaders_.size(),
-        "HTTP/1.1 %u %s\r\nContent-Length: %u\r\nContent-Type: %.*s\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n",
+    responseHeaderSize_ = snprintf_P(responseHeaders_.data(),responseHeaders_.size(),PSTR("HTTP/1.1 %u %s\r\nContent-Length: %u\r\nContent-Type: %.*s\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n"),
         response_.statusCode,response_.statusCode < 300 ? "OK" : "Error",unsigned(response_.bodySize),int(type.size()),type.data());
     sending_ = true; sent_ = 0; body_.reset();
 }
 void DeviceHttpServer::headersComplete() {
-    if (!headers_.parse({headerBytes_.data(),headerSize_})) { error(400,"invalid_request","Use unambiguous HTTP/1.1 framing and Content-Length."); return; }
+    if (!headers_.parse({headerBytes_.data(),headerSize_})) { error(400,"invalid_request",PSTR("Use unambiguous HTTP/1.1 framing and Content-Length.")); return; }
     animationV2Route_ = headers_.path.size() >= 8 && headers_.path.substr(0,8) == "/api/v2/";
     maintenance_ = headers_.path.substr(0,16) == "/maintenance/v1/";
     stockRestore_ = isStockRestorePath(headers_.path);
@@ -184,19 +199,19 @@ void DeviceHttpServer::headersComplete() {
                 otaEnabled,headers_.method,headers_.contentType,headers_.contentLength,headers_.sha256);
         switch (admission) {
             case OtaAdmissionError::none: break;
-            case OtaAdmissionError::unauthorized: error(401,"unauthorized","A valid recovery bearer token is required."); return;
-            case OtaAdmissionError::applicationRunning: error(409,"conflict","Pause the application before a maintenance firmware upload."); return;
-            case OtaAdmissionError::disabled: error(409,"conflict","The requested update operation is disabled pending installation and recovery validation."); return;
-            case OtaAdmissionError::method: error(400,"invalid_request","The upload route requires PUT."); return;
-            case OtaAdmissionError::mediaType: error(415,"unsupported_media_type","Upload application/octet-stream."); return;
-            case OtaAdmissionError::tooLarge: error(413,"payload_too_large","The asset exceeds this build's upload limit."); return;
-            case OtaAdmissionError::invalidBody: error(400,"invalid_request","Provide the supported image length and lowercase SHA-256."); return;
+            case OtaAdmissionError::unauthorized: error(401,"unauthorized",PSTR("A valid recovery bearer token is required.")); return;
+            case OtaAdmissionError::applicationRunning: error(409,"conflict",PSTR("Pause the application before a maintenance firmware upload.")); return;
+            case OtaAdmissionError::disabled: error(409,"conflict",PSTR("The requested update operation is disabled pending installation and recovery validation.")); return;
+            case OtaAdmissionError::method: error(400,"invalid_request",PSTR("The upload route requires PUT.")); return;
+            case OtaAdmissionError::mediaType: error(415,"unsupported_media_type",PSTR("Upload application/octet-stream.")); return;
+            case OtaAdmissionError::tooLarge: error(413,"payload_too_large",PSTR("The asset exceeds this build's upload limit.")); return;
+            case OtaAdmissionError::invalidBody: error(400,"invalid_request",PSTR("Provide the supported image length and lowercase SHA-256.")); return;
         }
     } else if (maintenance_ ? !startup_.authorized(headers_.authorization)
         : headers_.path != "/api/v1/status" && !authenticator_.isAuthorized(headers_.authorization)) {
-        error(401,"unauthorized","A valid bearer token is required."); return;
+        error(401,"unauthorized",PSTR("A valid bearer token is required.")); return;
     }
-    if (!maintenance_ && !protocol_) { error(409,"conflict","The application is paused; use authenticated maintenance."); return; }
+    if (!maintenance_ && !protocol_) { error(409,"conflict",PSTR("The application is paused; use authenticated maintenance.")); return; }
     if (animationV2Route_) {
         if (headers_.path == "/api/v2/media-capabilities" && headers_.method == HttpMethod::get &&
             headers_.contentLength == 0 && headers_.query.empty()) {
@@ -212,7 +227,7 @@ void DeviceHttpServer::headersComplete() {
                 parseOffset(headers_.query,animationChunkOffset_)) {
                 animationV2Request_ = AnimationV2Request::chunk;
                 animationChunkBody_.reset(new (std::nothrow) std::uint8_t[headers_.contentLength]);
-                if (!animationChunkBody_) { error(500,"internal_error","Insufficient memory for this upload chunk."); return; }
+                if (!animationChunkBody_) { error(500,"internal_error",PSTR("Insufficient memory for this upload chunk.")); return; }
             }
         } else if (headers_.contentLength == 0 && headers_.query.empty()) {
             std::string_view tail;
@@ -224,7 +239,7 @@ void DeviceHttpServer::headersComplete() {
         }
         if (animationV2Request_ == AnimationV2Request::none) {
             animationV2Request_ = AnimationV2Request::invalid;
-            error(400,"invalid_request","The animation upload request does not match the supported route."); return;
+            error(400,"invalid_request",PSTR("The animation upload request does not match the supported route.")); return;
         }
         if (animationV2Request_ == AnimationV2Request::chunk) {
             readingBody_ = true;
@@ -234,46 +249,46 @@ void DeviceHttpServer::headersComplete() {
         if (headers_.contentLength == 0) bodyComplete();
         return;
     }
-    if (!headers_.query.empty()) { error(400,"invalid_request","Query parameters are supported only on animation chunk uploads."); return; }
+    if (!headers_.query.empty()) { error(400,"invalid_request",PSTR("Query parameters are supported only on animation chunk uploads.")); return; }
     binary_ = firmware_ || headers_.path == "/api/v1/cover" || headers_.path == "/api/v1/animation";
     if (binary_) {
-        if (headers_.method != HttpMethod::put) { error(400,"invalid_request","The upload route requires PUT."); return; }
-        if (firmware_ && !maintenanceFirmware_ && !NEONBYTE_ENABLE_OTA) { error(409,"conflict","OTA is disabled pending installation and recovery validation."); return; }
-        if (headers_.contentType != "application/octet-stream") { error(415,"unsupported_media_type","Upload application/octet-stream."); return; }
+        if (headers_.method != HttpMethod::put) { error(400,"invalid_request",PSTR("The upload route requires PUT.")); return; }
+        if (firmware_ && !maintenanceFirmware_ && !NEONBYTE_ENABLE_OTA) { error(409,"conflict",PSTR("OTA is disabled pending installation and recovery validation.")); return; }
+        if (headers_.contentType != "application/octet-stream") { error(415,"unsupported_media_type",PSTR("Upload application/octet-stream.")); return; }
         const auto kind = firmware_ ? AssetKind::firmware : headers_.path == "/api/v1/cover" ? AssetKind::cover : AssetKind::animation;
         const auto limit = firmware_ ? FIRMWARE_BYTES_LIMIT : kind == AssetKind::cover ? COVER_BYTES : ANIMATION_BYTES_LIMIT;
-        if (headers_.contentLength > limit) { error(413,"payload_too_large","The asset exceeds this build's upload limit."); return; }
-        if (!headers_.contentLength || !isSha256(headers_.sha256)) { error(400,"invalid_request","Provide a nonzero length and lowercase SHA-256."); return; }
-        if (!firmware_ && animationUpload_.blocksOtherUploads()) { error(409,"conflict","An animation upload session owns media storage."); return; }
+        if (headers_.contentLength > limit) { error(413,"payload_too_large",PSTR("The asset exceeds this build's upload limit.")); return; }
+        if (!headers_.contentLength || !isSha256(headers_.sha256)) { error(400,"invalid_request",PSTR("Provide a nonzero length and lowercase SHA-256.")); return; }
+        if (!firmware_ && animationUpload_.blocksOtherUploads()) { error(409,"conflict",PSTR("An animation upload session owns media storage.")); return; }
         if (!firmware_) requestDeadlineMs_ = 60000 + ((std::uint64_t(headers_.contentLength)+8191)/8192)*1000;
-        if (kind == AssetKind::cover && headers_.contentLength != COVER_BYTES) { error(422,"invalid_content","The cover must be NBIC v1 at 240 by 240."); return; }
-        if (!prepareUploadStorage(headers_.path,[&] { return storage_.selectAsset(kind,headers_.trackId); })) { error(400,"invalid_request","Provide a percent-encoded UTF-8 X-Track-Id of 1 to 256 code points."); return; }
+        if (kind == AssetKind::cover && headers_.contentLength != COVER_BYTES) { error(422,"invalid_content",PSTR("The cover must be NBIC v1 at 240 by 240.")); return; }
+        if (!prepareUploadStorage(headers_.path,[&] { return storage_.selectAsset(kind,headers_.trackId); })) { error(400,"invalid_request",PSTR("Provide a percent-encoded UTF-8 X-Track-Id of 1 to 256 code points.")); return; }
         activeRawOta_ = stockRestore_ ? &stockRestoreOta_ : &maintenanceOta_;
         activeTransfer_ = &selectUploadTransfer(headers_.path,transfer_,stockRestore_ ? stockRestoreTransfer_ : maintenanceTransfer_);
-        if (maintenanceFirmware_ && !activeRawOta_->setExpectedHash(headers_.sha256)) { error(400,"invalid_request","Provide a supported lowercase SHA-256 digest."); return; }
+        if (maintenanceFirmware_ && !activeRawOta_->setExpectedHash(headers_.sha256)) { error(400,"invalid_request",PSTR("Provide a supported lowercase SHA-256 digest.")); return; }
         if (!activeTransfer_->begin(headers_.contentLength,limit,headers_.sha256)) {
-            error(409,"conflict",maintenanceFirmware_ ? "Raw flash staging is unavailable for this runtime layout." : "Storage is unavailable or insufficient for atomic replacement."); return;
+            error(409,"conflict",maintenanceFirmware_ ? PSTR("Raw flash staging is unavailable for this runtime layout.") : PSTR("Storage is unavailable or insufficient for atomic replacement.")); return;
         }
         uploadActive_ = true; ++diagnostics_.uploadsStarted;
     } else {
         const auto limit = maintenance_ || headers_.path == "/api/v1/config" ? 512U : JSON_BODY_LIMIT;
-        if (headers_.contentLength > limit) { error(413,"payload_too_large","The request body exceeds the route limit."); return; }
+        if (headers_.contentLength > limit) { error(413,"payload_too_large",PSTR("The request body exceeds the route limit.")); return; }
         if (limit == JSON_BODY_LIMIT) {
             body_.reset(new (std::nothrow) char[headers_.contentLength+1]);
-            if (!body_) { error(500,"internal_error","Insufficient memory for this request."); return; }
+            if (!body_) { error(500,"internal_error",PSTR("Insufficient memory for this request.")); return; }
         }
     }
     readingBody_ = true;
     if (!headers_.contentLength) bodyComplete();
 }
 void DeviceHttpServer::configureWifi() {
-    if (headers_.method != HttpMethod::put || headers_.contentType != "application/x-www-form-urlencoded") { error(400,"invalid_request","Use PUT with an ssid and password form."); return; }
+    if (headers_.method != HttpMethod::put || headers_.contentType != "application/x-www-form-urlencoded") { error(400,"invalid_request",PSTR("Use PUT with an ssid and password form.")); return; }
     WifiCredentials credentials;
-    if (!parseWifiConfiguration({bodyData(),received_},credentials)) { error(400,"invalid_request","Provide a valid ssid and password form."); return; }
+    if (!parseWifiConfiguration({bodyData(),received_},credentials)) { error(400,"invalid_request",PSTR("Provide a valid ssid and password form.")); return; }
     DeviceConfiguration candidate = storage_.configuration;
     memcpy(candidate.ssid,credentials.ssid,sizeof(candidate.ssid));
     memcpy(candidate.password,credentials.password,sizeof(candidate.password));
-    if (!storage_.saveConfiguration(candidate)) { error(500,"internal_error","The Wi-Fi configuration could not be saved."); return; }
+    if (!storage_.saveConfiguration(candidate)) { error(500,"internal_error",PSTR("The Wi-Fi configuration could not be saved.")); return; }
     startup_.usePersistedWifi(credentials,lastActivity_); response_ = {}; response_.statusCode = 204; prepareResponse();
 }
 void DeviceHttpServer::finishBinary() {
@@ -281,7 +296,7 @@ void DeviceHttpServer::finishBinary() {
         if (storage_.animationPromotionFailed()) {
             storage_.discardAnimationCandidate();
             legacyAnimationPromotionPending_ = false;
-            error(500,"internal_error","The validated animation could not be installed safely."); return;
+            error(500,"internal_error",PSTR("The validated animation could not be installed safely.")); return;
         }
         if (storage_.animationRevision == legacyAnimationGeneration_) return;
         legacyAnimationPromotionPending_ = false;
@@ -292,13 +307,13 @@ void DeviceHttpServer::finishBinary() {
     }
     const auto result = hashJob_->step(chunk_.data(),chunk_.size());
     if (result == HashStep::pending) return;
-    if (result == HashStep::failed) { error(500,"internal_error","The staged asset could not be read."); return; }
+    if (result == HashStep::failed) { error(500,"internal_error",PSTR("The staged asset could not be read.")); return; }
     if (maintenanceFirmware_ && !maintenanceOtaBodyHasNoExtraBytes(received_,headers_.contentLength,static_cast<std::size_t>(std::max(0,client_.available())))) {
-        error(400,"invalid_request","The firmware body must match Content-Length exactly."); return;
+        error(400,"invalid_request",PSTR("The firmware body must match Content-Length exactly.")); return;
     }
     char actualHash[64]; digest_.finish(actualHash);
     hashJob_.reset(); fileHashSource_.reset(); hashSource_ = nullptr; finalizing_ = false;
-    if (!activeTransfer_->finish({actualHash,sizeof(actualHash)},true)) { error(422,"invalid_content","Checksum validation or atomic installation failed."); return; }
+    if (!activeTransfer_->finish({actualHash,sizeof(actualHash)},true)) { error(422,"invalid_content",PSTR("Checksum validation or atomic installation failed.")); return; }
     if (!maintenanceFirmware_ && headers_.path == "/api/v1/animation") {
         legacyAnimationPromotionPending_ = true;
         legacyAnimationGeneration_ = storage_.animationRevision;
@@ -306,9 +321,9 @@ void DeviceHttpServer::finishBinary() {
         return;
     }
     if (firmware_) {
-        if (!maintenanceFirmware_ && !storage_.applyFirmware()) { error(500,"internal_error","Firmware staging was rejected; no restart was requested."); return; }
+        if (!maintenanceFirmware_ && !storage_.applyFirmware()) { error(500,"internal_error",PSTR("Firmware staging was rejected; no restart was requested.")); return; }
         rebootPending_ = !maintenanceFirmware_ || maintenanceOtaRestartAllowed(activeRawOta_->state());
-        if (!rebootPending_) { error(500,"internal_error","Firmware staging was rejected; no restart was requested."); return; }
+        if (!rebootPending_) { error(500,"internal_error",PSTR("Firmware staging was rejected; no restart was requested.")); return; }
     }
     if (uploadActive_) { ++diagnostics_.uploadsCompleted; uploadActive_ = false; }
     response_ = {}; response_.statusCode = 204; prepareResponse();
@@ -317,10 +332,10 @@ void DeviceHttpServer::dispatchJson() {
     bodyData()[received_] = 0;
     const HttpRequest request{headers_.method,headers_.path,headers_.authorization,headers_.contentType,{bodyData(),received_}};
     if (maintenance_ && request.path == "/maintenance/v1/info") {
-        if (!startup_.authorized(request.authorization)) { error(401,"unauthorized","A valid recovery bearer token is required."); return; }
-        if (request.method != HttpMethod::get || !request.body.empty()) { error(400,"invalid_request","Use GET with an empty body."); return; }
+        if (!startup_.authorized(request.authorization)) { error(401,"unauthorized",PSTR("A valid recovery bearer token is required.")); return; }
+        if (request.method != HttpMethod::get || !request.body.empty()) { error(400,"invalid_request",PSTR("Use GET with an empty body.")); return; }
         char deviceId[32];
-        snprintf(deviceId,sizeof(deviceId),"esp8266-%06lx",static_cast<unsigned long>(ESP.getChipId()));
+        snprintf_P(deviceId,sizeof(deviceId),PSTR("esp8266-%06lx"),static_cast<unsigned long>(ESP.getChipId()));
         const bool identityReady = startup_.identityValid() && !buildId_.empty() && !profile_.empty() &&
             recoveryIdentityFingerprint_.size() == 64;
         const bool runtimeReady = ESP.getFlashChipRealSize() == OTA_FLASH_BYTES && ESP.checkFlashConfig(false);
@@ -329,26 +344,25 @@ void DeviceHttpServer::dispatchJson() {
         const IPAddress stationAddress = WiFi.status() == WL_CONNECTED ? WiFi.localIP() : IPAddress(0,0,0,0);
         const IPAddress apAddress = startup_.recoveryApRunning() ? WiFi.softAPIP() : IPAddress(0,0,0,0);
         char stationIp[16], apIp[16];
-        snprintf(stationIp,sizeof(stationIp),"%u.%u.%u.%u",stationAddress[0],stationAddress[1],stationAddress[2],stationAddress[3]);
-        snprintf(apIp,sizeof(apIp),"%u.%u.%u.%u",apAddress[0],apAddress[1],apAddress[2],apAddress[3]);
+        snprintf_P(stationIp,sizeof(stationIp),PSTR("%u.%u.%u.%u"),stationAddress[0],stationAddress[1],stationAddress[2],stationAddress[3]);
+        snprintf_P(apIp,sizeof(apIp),PSTR("%u.%u.%u.%u"),apAddress[0],apAddress[1],apAddress[2],apAddress[3]);
         const MaintenanceInfo info{deviceId,bootId_,buildId_,"0.1.0-phase4",stationIp,apIp,profile_,
             recoveryIdentityFingerprint_,maxFirmwareBytes,otaEnabled};
         response_ = {}; response_.statusCode = 200; response_.contentType = "application/json";
         if (!writeMaintenanceInfoJson(info,response_.body.data(),response_.body.size(),response_.bodySize)) {
-            error(500,"internal_error","Maintenance information is unavailable."); return;
+            error(500,"internal_error",PSTR("Maintenance information is unavailable.")); return;
         }
         prepareResponse(); return;
     }
     if (maintenance_ && request.path == "/maintenance/v1/diagnostics") {
-        if (!startup_.authorized(request.authorization)) { error(401,"unauthorized","A valid recovery bearer token is required."); return; }
-        if (request.method != HttpMethod::get || !request.body.empty()) { error(400,"invalid_request","Use GET with an empty body."); return; }
+        if (!startup_.authorized(request.authorization)) { error(401,"unauthorized",PSTR("A valid recovery bearer token is required.")); return; }
+        if (request.method != HttpMethod::get || !request.body.empty()) { error(400,"invalid_request",PSTR("Use GET with an empty body.")); return; }
         const auto* reset = ESP.getResetInfoPtr();
         response_ = {}; response_.statusCode = 200; response_.contentType = "application/json";
-        const int written = snprintf(response_.body.data(),response_.body.size(),
-            "{\"freeHeapBytes\":%lu,\"maxFreeBlockBytes\":%lu,\"resetReason\":%lu,"
+        const int written = snprintf_P(response_.body.data(),response_.body.size(),PSTR("{\"freeHeapBytes\":%lu,\"maxFreeBlockBytes\":%lu,\"resetReason\":%lu,"
             "\"connectionsAccepted\":%lu,\"connectionsDisconnected\":%lu,\"idleTimeouts\":%lu,\"totalTimeouts\":%lu,"
             "\"uploadsStarted\":%lu,\"uploadsAborted\":%lu,\"uploadsCompleted\":%lu,\"uploadFailures\":%lu,"
-            "\"uploadBytes\":%lu,\"maxLoopGapMs\":%lu}",
+            "\"uploadBytes\":%lu,\"maxLoopGapMs\":%lu}"),
             static_cast<unsigned long>(ESP.getFreeHeap()),static_cast<unsigned long>(ESP.getMaxFreeBlockSize()),
             static_cast<unsigned long>(reset ? reset->reason : 0xffffffffUL),
             static_cast<unsigned long>(diagnostics_.connectionsAccepted),static_cast<unsigned long>(diagnostics_.connectionsDisconnected),
@@ -356,7 +370,7 @@ void DeviceHttpServer::dispatchJson() {
             static_cast<unsigned long>(diagnostics_.uploadsStarted),static_cast<unsigned long>(diagnostics_.uploadsAborted),
             static_cast<unsigned long>(diagnostics_.uploadsCompleted),static_cast<unsigned long>(diagnostics_.uploadFailures),
             static_cast<unsigned long>(diagnostics_.uploadBytes),static_cast<unsigned long>(diagnostics_.maxLoopGapMs));
-        if (written < 0 || static_cast<std::size_t>(written) >= response_.body.size()) { error(500,"internal_error","Diagnostics are unavailable."); return; }
+        if (written < 0 || static_cast<std::size_t>(written) >= response_.body.size()) { error(500,"internal_error",PSTR("Diagnostics are unavailable.")); return; }
         response_.bodySize = static_cast<std::size_t>(written); prepareResponse(); return;
     }
     if (maintenance_) { handleMaintenance(request,startup_,lastActivity_,response_); prepareResponse(); return; }
@@ -369,9 +383,9 @@ void DeviceHttpServer::bodyComplete() {
         const auto queued = animationUpload_.queueChunk(animationUploadId_,animationChunkOffset_,
             animationChunkBody_.get(),received_,lastActivity_);
         if (queued != AnimationChunkResult::Pending) {
-            if (queued == AnimationChunkResult::NotFound) error(404,"not_found","The animation upload session was not found.");
-            else if (queued == AnimationChunkResult::Conflict) error(409,"conflict","The chunk offset or replay does not match the active upload.");
-            else error(400,"invalid_request","The animation upload chunk is invalid.");
+            if (queued == AnimationChunkResult::NotFound) error(404,"not_found",PSTR("The animation upload session was not found."));
+            else if (queued == AnimationChunkResult::Conflict) error(409,"conflict",PSTR("The chunk offset or replay does not match the active upload."));
+            else error(400,"invalid_request",PSTR("The animation upload chunk is invalid."));
             return;
         }
         animationChunkWriting_ = true;
@@ -385,14 +399,14 @@ void DeviceHttpServer::bodyComplete() {
         hashSource_ = activeRawOta_;
     } else {
         storage_.sealStaged();
-        if (!storage_.validateStaged()) { error(422,"invalid_content","The uploaded asset format is invalid."); return; }
+        if (!storage_.validateStaged()) { error(422,"invalid_content",PSTR("The uploaded asset format is invalid.")); return; }
         const char* path = firmware_ ? "/neonbyte/firmware.part" : headers_.path == "/api/v1/cover" ? "/neonbyte/cover.part" : "/neonbyte/animation.part";
         prefix = headers_.path == "/api/v1/cover" ? COVER_TRACK_BYTES : 0U;
         fileHashSource_.reset(new (std::nothrow) FileSource(path));
         hashSource_ = fileHashSource_.get();
     }
     if (hashSource_) hashJob_.reset(new (std::nothrow) HashJob(*hashSource_,digest_,prefix,received_));
-    if (!hashJob_) { error(500,"internal_error","Insufficient memory to validate the upload."); return; }
+    if (!hashJob_) { error(500,"internal_error",PSTR("Insufficient memory to validate the upload.")); return; }
     finalizing_ = true;
 }
 void DeviceHttpServer::finishAnimationChunkRequest(std::uint64_t now) {
@@ -412,8 +426,8 @@ void DeviceHttpServer::finishAnimationChunkRequest(std::uint64_t now) {
         return;
     }
     if (result != AnimationChunkResult::Accepted && result != AnimationChunkResult::IdenticalReplay) {
-        if (result == AnimationChunkResult::Failed) error(500,"internal_error","The animation chunk could not be read or written.");
-        else error(409,"conflict","The animation chunk conflicts with the upload session.");
+        if (result == AnimationChunkResult::Failed) error(500,"internal_error",PSTR("The animation chunk could not be read or written."));
+        else error(409,"conflict",PSTR("The animation chunk conflicts with the upload session."));
         return;
     }
     finalizing_ = false;
@@ -424,16 +438,15 @@ void DeviceHttpServer::dispatchAnimationV2() {
     const auto now = lastActivity_;
     if (animationV2Request_ == AnimationV2Request::capabilities) {
         response_ = {}; response_.statusCode = 200; response_.contentType = "application/json";
-        const int written = snprintf(response_.body.data(),response_.body.size(),
-            "{\"formats\":[\"nbif-v1\",\"nbif-v2\"],\"width\":240,\"height\":240,"
+        const int written = snprintf_P(response_.body.data(),response_.body.size(),PSTR("{\"formats\":[\"nbif-v1\",\"nbif-v2\"],\"width\":240,\"height\":240,"
             "\"maxFrames\":20,\"maxDurationMs\":30000,\"maxEncodedBytes\":%lu,"
-            "\"maxChunkBytes\":%lu,\"reserveBytes\":%lu,\"freeStorageBytes\":%llu}",
+            "\"maxChunkBytes\":%lu,\"reserveBytes\":%lu,\"freeStorageBytes\":%llu}"),
             static_cast<unsigned long>(ANIMATION_UPLOAD_MAX_BYTES),
             static_cast<unsigned long>(ANIMATION_UPLOAD_MAX_CHUNK_BYTES),
             static_cast<unsigned long>(ANIMATION_UPLOAD_RESERVE_BYTES),
             static_cast<unsigned long long>(storage_.freeBytes()));
         if (written < 0 || static_cast<std::size_t>(written) >= response_.body.size()) {
-            error(500,"internal_error","Media capabilities are unavailable."); return;
+            error(500,"internal_error",PSTR("Media capabilities are unavailable.")); return;
         }
         response_.bodySize = static_cast<std::size_t>(written); prepareResponse(); return;
     }
@@ -441,54 +454,52 @@ void DeviceHttpServer::dispatchAnimationV2() {
         std::uint32_t sizeBytes = 0;
         std::string_view hash;
         if (!parseAnimationBegin({bodyData(),received_},sizeBytes,hash) || sizeBytes == 0) {
-            error(400,"invalid_request","Provide sizeBytes and a lowercase SHA-256 digest."); return;
+            error(400,"invalid_request",PSTR("Provide sizeBytes and a lowercase SHA-256 digest.")); return;
         }
-        if (sizeBytes > ANIMATION_UPLOAD_MAX_BYTES) { error(413,"payload_too_large","The animation exceeds the NBIF v2 limit."); return; }
+        if (sizeBytes > ANIMATION_UPLOAD_MAX_BYTES) { error(413,"payload_too_large",PSTR("The animation exceeds the NBIF v2 limit.")); return; }
         ++animationUploadIdCounter_;
         std::uint32_t uploadId = static_cast<std::uint32_t>(now) ^ ESP.getChipId() ^ animationUploadIdCounter_;
         if (uploadId == 0) uploadId = animationUploadIdCounter_ ? animationUploadIdCounter_ : 1;
         const auto result = animationUpload_.begin(uploadId,sizeBytes,hash,now,storage_.animationRevision);
         if (result == AnimationChunkResult::InsufficientStorage) {
-            error(507,"insufficient_storage","The animation and safe replacement reserve do not fit in LittleFS."); return;
+            error(507,"insufficient_storage",PSTR("The animation and safe replacement reserve do not fit in LittleFS.")); return;
         }
         if (result != AnimationChunkResult::Accepted) {
-            error(409,"conflict","An animation session is active or storage cannot reserve the replacement."); return;
+            error(409,"conflict",PSTR("An animation session is active or storage cannot reserve the replacement.")); return;
         }
-        char id[9]; snprintf(id,sizeof(id),"%08lx",static_cast<unsigned long>(uploadId));
+        char id[9]; snprintf_P(id,sizeof(id),PSTR("%08lx"),static_cast<unsigned long>(uploadId));
         response_ = {}; response_.statusCode = 201; response_.contentType = "application/json";
-        response_.bodySize = snprintf(response_.body.data(),response_.body.size(),
-            "{\"uploadId\":\"%s\",\"nextOffset\":0,\"state\":\"receiving\"}",id);
+        response_.bodySize = snprintf_P(response_.body.data(),response_.body.size(),PSTR("{\"uploadId\":\"%s\",\"nextOffset\":0,\"state\":\"receiving\"}"),id);
         prepareResponse(); return;
     }
     if (animationV2Request_ == AnimationV2Request::chunk) {
-        error(500,"internal_error","The animation chunk was not dispatched correctly."); return;
+        error(500,"internal_error",PSTR("The animation chunk was not dispatched correctly.")); return;
     }
     if (animationV2Request_ == AnimationV2Request::complete) {
-        if (!animationUpload_.owns(animationUploadId_)) { error(404,"not_found","The animation upload session was not found."); return; }
+        if (!animationUpload_.owns(animationUploadId_)) { error(404,"not_found",PSTR("The animation upload session was not found.")); return; }
         if (animationUpload_.state() == AnimationUploadState::Receiving) {
             const auto result = animationUpload_.complete(animationUploadId_,now);
-            if (result != AnimationChunkResult::Accepted) { error(409,"conflict","The animation upload is incomplete or has a pending chunk."); return; }
+            if (result != AnimationChunkResult::Accepted) { error(409,"conflict",PSTR("The animation upload is incomplete or has a pending chunk.")); return; }
             hashJob_.reset(new (std::nothrow) HashJob(candidateSource_,digest_,0,animationUpload_.expectedBytes()));
             if (!hashJob_) {
                 animationUpload_.fail(AnimationUploadError::ReadFailed,now);
-                error(500,"internal_error","The animation could not be scheduled for verification."); return;
+                error(500,"internal_error",PSTR("The animation could not be scheduled for verification.")); return;
             }
             animationValidationHashDone_ = false;
             animationValidationOpened_ = false;
         } else if (animationUpload_.state() != AnimationUploadState::Verifying &&
                    animationUpload_.state() != AnimationUploadState::Ready &&
                    animationUpload_.state() != AnimationUploadState::Installed) {
-            error(409,"conflict","The animation upload cannot be completed in its current state."); return;
+            error(409,"conflict",PSTR("The animation upload cannot be completed in its current state.")); return;
         }
         response_ = {}; response_.statusCode = 202; response_.contentType = "application/json";
-        response_.bodySize = snprintf(response_.body.data(),response_.body.size(),
-            "{\"uploadId\":\"%08lx\",\"nextOffset\":%lu,\"state\":\"%s\"}",
+        response_.bodySize = snprintf_P(response_.body.data(),response_.body.size(),PSTR("{\"uploadId\":\"%08lx\",\"nextOffset\":%lu,\"state\":\"%s\"}"),
             static_cast<unsigned long>(animationUploadId_),static_cast<unsigned long>(animationUpload_.receivedBytes()),
             animationUploadStateName(animationUpload_.state()));
         prepareResponse(); return;
     }
     if (animationV2Request_ == AnimationV2Request::status) {
-        if (!animationUpload_.owns(animationUploadId_)) { error(404,"not_found","The animation upload session was not found."); return; }
+        if (!animationUpload_.owns(animationUploadId_)) { error(404,"not_found",PSTR("The animation upload session was not found.")); return; }
         if (animationUpload_.state() == AnimationUploadState::Ready && storage_.animationPromotionFailed()) {
             animationUpload_.fail(AnimationUploadError::PromotionFailed,now);
         } else if (animationUpload_.state() == AnimationUploadState::Ready &&
@@ -497,9 +508,8 @@ void DeviceHttpServer::dispatchAnimationV2() {
         }
         response_ = {}; response_.statusCode = 200; response_.contentType = "application/json";
         const auto errorName = animationUploadErrorName(animationUpload_.error());
-        response_.bodySize = snprintf(response_.body.data(),response_.body.size(),
-            "{\"uploadId\":\"%08lx\",\"state\":\"%s\",\"nextOffset\":%lu,"
-            "\"expectedBytes\":%lu,\"receivedBytes\":%lu,\"error\":\"%s\"}",
+        response_.bodySize = snprintf_P(response_.body.data(),response_.body.size(),PSTR("{\"uploadId\":\"%08lx\",\"state\":\"%s\",\"nextOffset\":%lu,"
+            "\"expectedBytes\":%lu,\"receivedBytes\":%lu,\"error\":\"%s\"}"),
             static_cast<unsigned long>(animationUploadId_),animationUploadStateName(animationUpload_.state()),
             static_cast<unsigned long>(animationUpload_.receivedBytes()),
             static_cast<unsigned long>(animationUpload_.expectedBytes()),
@@ -508,11 +518,11 @@ void DeviceHttpServer::dispatchAnimationV2() {
     }
     if (animationV2Request_ == AnimationV2Request::cancel) {
         const auto result = animationUpload_.cancel(animationUploadId_,now);
-        if (result == AnimationChunkResult::NotFound) { error(404,"not_found","The animation upload session was not found."); return; }
-        if (result != AnimationChunkResult::Accepted) { error(409,"conflict","The installed animation cannot be cancelled."); return; }
+        if (result == AnimationChunkResult::NotFound) { error(404,"not_found",PSTR("The animation upload session was not found.")); return; }
+        if (result != AnimationChunkResult::Accepted) { error(409,"conflict",PSTR("The installed animation cannot be cancelled.")); return; }
         response_ = {}; response_.statusCode = 204; prepareResponse(); return;
     }
-    error(400,"invalid_request","The animation upload request is invalid.");
+    error(400,"invalid_request",PSTR("The animation upload request is invalid."));
 }
 
 void DeviceHttpServer::advanceAnimationValidation(std::uint64_t now) {
@@ -604,7 +614,7 @@ void DeviceHttpServer::tick(std::uint64_t now) {
     if (finalizing_) {
         if (animationChunkWriting_) { finishAnimationChunkRequest(now); return; }
         if (maintenanceFirmware_ && !maintenanceOtaBodyHasNoExtraBytes(received_,headers_.contentLength,static_cast<std::size_t>(std::max(0,client_.available())))) {
-            error(400,"invalid_request","The firmware body must match Content-Length exactly."); return;
+            error(400,"invalid_request",PSTR("The firmware body must match Content-Length exactly.")); return;
         }
         lastActivity_ = now; finishBinary(); return;
     }
@@ -622,7 +632,7 @@ void DeviceHttpServer::tick(std::uint64_t now) {
     std::size_t budget = 512;
     while (budget && client_.available() && !readingBody_ && !sending_) {
         const char c = client_.read(); --budget; lastActivity_ = now;
-        if (headerSize_ == headerBytes_.size()) { error(413,"payload_too_large","Request headers exceed 4096 bytes."); return; }
+        if (headerSize_ == headerBytes_.size()) { error(413,"payload_too_large",PSTR("Request headers exceed 4096 bytes.")); return; }
         headerBytes_[headerSize_++] = c;
         if (headerSize_ >= 4 && std::string_view(headerBytes_.data()+headerSize_-4,4) == "\r\n\r\n") headersComplete();
     }
@@ -633,10 +643,10 @@ void DeviceHttpServer::tick(std::uint64_t now) {
     if (bytes <= 0) return;
     lastActivity_ = now;
     if (binary_) {
-        if (!activeTransfer_->append(chunk_.data(),bytes)) { error(500,"internal_error","The staged upload could not be written."); return; }
+        if (!activeTransfer_->append(chunk_.data(),bytes)) { error(500,"internal_error",PSTR("The staged upload could not be written.")); return; }
         diagnostics_.uploadBytes += static_cast<std::uint32_t>(bytes);
     } else if (animationV2Route_ && animationV2Request_ == AnimationV2Request::chunk) {
-        if (!animationChunkBody_) { error(500,"internal_error","The upload chunk buffer is unavailable."); return; }
+        if (!animationChunkBody_) { error(500,"internal_error",PSTR("The upload chunk buffer is unavailable.")); return; }
         memcpy(animationChunkBody_.get()+received_,chunk_.data(),bytes);
     } else memcpy(bodyData()+received_,chunk_.data(),bytes);
     received_ += bytes;

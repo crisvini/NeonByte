@@ -26,7 +26,7 @@ def extractLegacyStockFunction(source, signature):
         )
         removeBetween("    if (animationV2Route_) {", "    if (!headers_.query.empty())")
         function = function.replace(
-            '        if (!firmware_ && animationUpload_.blocksOtherUploads()) { error(409,"conflict","An animation upload session owns media storage."); return; }\n',
+            '        if (!firmware_ && animationUpload_.blocksOtherUploads()) { error(409,"conflict",PSTR("An animation upload session owns media storage.")); return; }\n',
             "",
         )
     elif signature == "void DeviceHttpServer::bodyComplete()":
@@ -52,6 +52,8 @@ def main():
 #include <memory>
 #include <new>
 #include <string>
+#define PSTR(value) (value)
+#define snprintf_P std::snprintf
 using namespace neonbyte;
 enum class AssetKind { cover, animation, firmware };
 struct Sink : TransferSink, ImageSource {

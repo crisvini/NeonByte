@@ -22,6 +22,14 @@ def main():
 #include <cstring>
 #include <string>
 #include <string_view>
+#define PSTR(value) (value)
+unsigned flashFormatCalls = 0;
+template <typename... Args>
+int flashSnprintf(char* output, std::size_t capacity, const char* format, Args... args) {
+    ++flashFormatCalls;
+    return std::snprintf(output, capacity, format, args...);
+}
+#define snprintf_P flashSnprintf
 using namespace neonbyte;
 struct Diagnostics {
     uint32_t connectionsAccepted=3, connectionsDisconnected=2, idleTimeouts=4, totalTimeouts=5;
@@ -88,6 +96,7 @@ int main() {
     assert(denied.response_.statusCode==401);
     DeviceHttpServer server; server.protocol_=nullptr; server.dispatchJson();
     assert(server.response_.statusCode==200);
+    assert(flashFormatCalls > 0);
     auto body=server.response_.bodyView();
     assert(body.find("\"freeHeapBytes\":17234")!=std::string_view::npos);
     assert(body.find("\"maxFreeBlockBytes\":9876")!=std::string_view::npos);

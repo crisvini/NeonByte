@@ -10,7 +10,7 @@
 
 using namespace neonbyte;
 
-static_assert(sizeof(AnimationDecoder) <= 1536, "NBIF v2 decoder state must remain within 1.5 KiB.");
+static_assert(sizeof(AnimationDecoder) <= 832, "NBIF v2 decoder must use caller-owned row workspaces.");
 
 namespace {
 
@@ -82,8 +82,7 @@ FrameRecord hold() {
     return {AnimationFrameKind::Hold, 90, {}, 0, 0, {}};
 }
 
-void writeTestAnimation(DecoderStorage& storage) {
-    const std::vector<FrameRecord> records{keyframe(), delta(), hold()};
+void writeAnimation(DecoderStorage& storage, const std::vector<FrameRecord>& records) {
     const std::uint32_t dataOffset = NBIF_V2_HEADER_BYTES + records.size() * NBIF_V2_DIRECTORY_ENTRY_BYTES;
     std::uint32_t totalBytes = dataOffset;
     for (const auto& record : records) totalBytes += record.bytes.size();
@@ -91,7 +90,13 @@ void writeTestAnimation(DecoderStorage& storage) {
     auto& bytes = storage.bytes;
     bytes[0] = 'N'; bytes[1] = 'B'; bytes[2] = 'I'; bytes[3] = 'F'; bytes[4] = 2;
     bytes[6] = 240; bytes[8] = 240; bytes[10] = static_cast<std::uint8_t>(records.size());
-    bytes[12] = 240; bytes[16] = static_cast<std::uint8_t>(totalBytes);
+    std::uint32_t duration = 0;
+    for (const auto& record : records) duration += record.delayMs;
+    bytes[12] = static_cast<std::uint8_t>(duration);
+    bytes[13] = static_cast<std::uint8_t>(duration >> 8);
+    bytes[14] = static_cast<std::uint8_t>(duration >> 16);
+    bytes[15] = static_cast<std::uint8_t>(duration >> 24);
+    bytes[16] = static_cast<std::uint8_t>(totalBytes);
     bytes[17] = static_cast<std::uint8_t>(totalBytes >> 8);
     bytes[18] = static_cast<std::uint8_t>(totalBytes >> 16);
     std::uint32_t offset = dataOffset;
@@ -118,11 +123,112 @@ void writeTestAnimation(DecoderStorage& storage) {
     }
 }
 
+void writeTestAnimation(DecoderStorage& storage) {
+    writeAnimation(storage, {keyframe(), delta(), hold()});
+}
+
+void testV2DecoderHandlesMaximumDirectoryAndRestart() {
+    DecoderStorage storage;
+    std::vector<FrameRecord> records{keyframe()};
+    for (unsigned index = 1; index < 20; ++index) {
+        auto frame = hold();
+        frame.delayMs = static_cast<std::uint16_t>(20 + index);
+        records.push_back(frame);
+    }
+    writeAnimation(storage, records);
+    std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> output{};
+    std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> encoded{};
+    AnimationDecoder decoder(storage, output.data(), output.size(), encoded.data(), encoded.size());
+    AnimationV2Metadata metadata{};
+    TEST_ASSERT_TRUE(decoder.open(metadata));
+    TEST_ASSERT_EQUAL_UINT16(20, metadata.frameCount);
+    for (unsigned pass = 0; pass < 2; ++pass) {
+        unsigned frameIndex = 0;
+        while (true) {
+            const auto status = decoder.step();
+            if (status == AnimationDecodeStatus::AnimationComplete) break;
+            TEST_ASSERT_NOT_EQUAL(AnimationDecodeStatus::Error, status);
+            if (status == AnimationDecodeStatus::RowReady) decoder.consumeRow();
+            if (status == AnimationDecodeStatus::FrameComplete) {
+                TEST_ASSERT_EQUAL_UINT16(frameIndex, decoder.frameInfo().frameIndex);
+                TEST_ASSERT_EQUAL_UINT16(records[frameIndex].delayMs, decoder.frameInfo().delayMs);
+                ++frameIndex;
+            }
+        }
+        TEST_ASSERT_EQUAL_UINT(20, frameIndex);
+        decoder.restart();
+    }
+}
+
+void testValidationOnlyUsesSharedScratchAndRejectsInvalidPaletteIndex() {
+    DecoderStorage storage;
+    std::vector<FrameRecord> records{keyframe(), delta(), hold()};
+    records[1].bytes.back() = 1;
+    writeAnimation(storage, records);
+    std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> sharedScratch{};
+    AnimationDecoder validator(storage, nullptr, 0, sharedScratch.data(), sharedScratch.size());
+    AnimationV2Metadata metadata{};
+    TEST_ASSERT_TRUE(validator.open(metadata));
+    unsigned rows = 0;
+    while (true) {
+        const auto status = validator.step();
+        if (status == AnimationDecodeStatus::Error) break;
+        TEST_ASSERT_NOT_EQUAL(AnimationDecodeStatus::AnimationComplete, status);
+        if (status == AnimationDecodeStatus::RowReady) {
+            TEST_ASSERT_NULL(validator.row().pixels);
+            validator.consumeRow();
+            ++rows;
+        }
+        std::fill(sharedScratch.begin(), sharedScratch.end(), 0xa5);
+    }
+    TEST_ASSERT_EQUAL_UINT(240, rows);
+    TEST_ASSERT_FALSE(validator.valid());
+}
+
+void testValidationAndPlaybackAgreeOnMutatedAnimations() {
+    DecoderStorage storage;
+    writeTestAnimation(storage);
+    const auto original = storage.bytes;
+    for (std::size_t mutation = 0; mutation < original.size(); mutation += 37) {
+        storage.bytes = original;
+        storage.bytes[mutation] ^= static_cast<std::uint8_t>(1u << (mutation % 8));
+        std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> output{}, playbackScratch{}, validationScratch{};
+        AnimationDecoder playback(storage, output.data(), output.size(), playbackScratch.data(), playbackScratch.size());
+        AnimationDecoder validator(storage, nullptr, 0, validationScratch.data(), validationScratch.size());
+        AnimationV2Metadata playbackMetadata{}, validationMetadata{};
+        const auto playbackOpened = playback.open(playbackMetadata);
+        TEST_ASSERT_EQUAL(playbackOpened, validator.open(validationMetadata));
+        if (!playbackOpened) continue;
+        while (true) {
+            const auto playbackStatus = playback.step();
+            const auto validationStatus = validator.step();
+            TEST_ASSERT_EQUAL_INT(playbackStatus, validationStatus);
+            if (playbackStatus == AnimationDecodeStatus::Error ||
+                playbackStatus == AnimationDecodeStatus::AnimationComplete) break;
+            if (playbackStatus == AnimationDecodeStatus::RowReady) {
+                const auto row = playback.row();
+                const auto checked = validator.row();
+                TEST_ASSERT_EQUAL_UINT16(row.x, checked.x);
+                TEST_ASSERT_EQUAL_UINT16(row.y, checked.y);
+                TEST_ASSERT_EQUAL_UINT16(row.width, checked.width);
+                TEST_ASSERT_EQUAL_UINT16(row.byteCount, checked.byteCount);
+                playback.consumeRow();
+                validator.consumeRow();
+            } else if (playbackStatus == AnimationDecodeStatus::FrameComplete) {
+                TEST_ASSERT_EQUAL_UINT16(playback.frameInfo().delayMs, validator.frameInfo().delayMs);
+                TEST_ASSERT_EQUAL_INT(playback.frameInfo().kind, validator.frameInfo().kind);
+            }
+            std::fill(validationScratch.begin(), validationScratch.end(), 0xa5);
+        }
+    }
+}
+
 void testV2DecoderStreamsAllRowCodecsDeltasAndHolds() {
     DecoderStorage storage;
     writeTestAnimation(storage);
     std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> output{};
-    AnimationDecoder decoder(storage, output.data(), output.size());
+    std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> encoded{};
+    AnimationDecoder decoder(storage, output.data(), output.size(), encoded.data(), encoded.size());
     AnimationV2Metadata metadata{};
     TEST_ASSERT_TRUE(decoder.open(metadata));
     TEST_ASSERT_EQUAL_UINT16(3, metadata.frameCount);
@@ -173,17 +279,23 @@ void testV2DecoderRejectsBadDirectoryAndRowPayloads() {
     DecoderStorage storage;
     writeTestAnimation(storage);
     std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> output{};
+    std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> encoded{};
     AnimationV2Metadata metadata{};
+
+    AnimationDecoder overlapping(storage, output.data(), output.size(), output.data(), output.size());
+    TEST_ASSERT_FALSE(overlapping.open(metadata));
+    AnimationDecoder undersized(storage, output.data(), output.size(), encoded.data(), encoded.size() - 1);
+    TEST_ASSERT_FALSE(undersized.open(metadata));
 
     auto malformedDirectory = storage.bytes;
     malformedDirectory[NBIF_V2_HEADER_BYTES + 16] = 1;
     storage.bytes = malformedDirectory;
-    AnimationDecoder badDirectory(storage, output.data(), output.size());
+    AnimationDecoder badDirectory(storage, output.data(), output.size(), encoded.data(), encoded.size());
     TEST_ASSERT_FALSE(badDirectory.open(metadata));
 
     writeTestAnimation(storage);
     storage.bytes[NBIF_V2_HEADER_BYTES + 3 * NBIF_V2_DIRECTORY_ENTRY_BYTES + 4 + 3] = 99;
-    AnimationDecoder badRow(storage, output.data(), output.size());
+    AnimationDecoder badRow(storage, output.data(), output.size(), encoded.data(), encoded.size());
     TEST_ASSERT_TRUE(badRow.open(metadata));
     AnimationDecodeStatus badRowStatus = AnimationDecodeStatus::Progress;
     while (badRowStatus == AnimationDecodeStatus::Progress) badRowStatus = badRow.step();
@@ -192,7 +304,7 @@ void testV2DecoderRejectsBadDirectoryAndRowPayloads() {
 
     writeTestAnimation(storage);
     storage.bytes.pop_back();
-    AnimationDecoder truncated(storage, output.data(), output.size());
+    AnimationDecoder truncated(storage, output.data(), output.size(), encoded.data(), encoded.size());
     TEST_ASSERT_FALSE(truncated.open(metadata));
 }
 
@@ -202,5 +314,8 @@ int main() {
     UNITY_BEGIN();
     RUN_TEST(testV2DecoderStreamsAllRowCodecsDeltasAndHolds);
     RUN_TEST(testV2DecoderRejectsBadDirectoryAndRowPayloads);
+    RUN_TEST(testV2DecoderHandlesMaximumDirectoryAndRestart);
+    RUN_TEST(testValidationOnlyUsesSharedScratchAndRejectsInvalidPaletteIndex);
+    RUN_TEST(testValidationAndPlaybackAgreeOnMutatedAnimations);
     return UNITY_END();
 }

@@ -31,7 +31,8 @@ protected:
 class DeviceDisplay final : public DisplayRenderer {
 public:
     explicit DeviceDisplay(PersistentStorage& storage)
-        : storage_(storage), animation_(storage), animationV2_(storage,pixels_.data(),pixels_.size()),
+        : storage_(storage), animation_(storage), animationV2_(storage,pixels_.data(),pixels_.size(),
+          encodedRow_.data(),encodedRow_.size()),
           panel_(-1,DISPLAY_DC,DISPLAY_RESET) {}
     void begin();
     void setupCredentials(const DeviceConfiguration& configuration);
@@ -49,6 +50,7 @@ private:
     void drawSpotifyText(const SpotifyText& text, int y, std::uint16_t color, bool clear);
     PersistentStorage& storage_;
     std::array<std::uint8_t,480> pixels_{};
+    std::array<std::uint8_t,480> encodedRow_{};
     AnimationReader animation_;
     AnimationDecoder animationV2_;
     BoundedDisplayPanel panel_;

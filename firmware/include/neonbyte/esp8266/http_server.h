@@ -42,7 +42,7 @@ public:
           transfer_(storage), animationUpload_(storage),
           maintenanceOta_(maintenanceBackend_,digest_), maintenanceTransfer_(maintenanceOta_),
           stockRestoreOta_(maintenanceBackend_,digest_,MaintenanceImageKind::stockV106), stockRestoreTransfer_(stockRestoreOta_),
-          validationDecoder_(candidateSource_,validationRow_.data(),validationRow_.size()) {}
+          validationDecoder_(candidateSource_,nullptr,0,chunk_.data(),chunk_.size()) {}
     void setBuildIdentity(std::string_view bootId, std::string_view buildId, std::string_view profile,
                           std::string_view recoveryIdentityFingerprint) {
         bootId_ = bootId; buildId_ = buildId; profile_ = profile; recoveryIdentityFingerprint_ = recoveryIdentityFingerprint;
@@ -95,7 +95,7 @@ private:
     AnimationSource* hashSource_ = nullptr;
     std::unique_ptr<HashJob> hashJob_;
     std::array<std::uint8_t,512> chunk_{};
-    std::array<std::uint8_t,480> validationRow_{};
+    // Validation consumes each encoded row before the shared transfer buffer is reused.
     AnimationDecoder validationDecoder_;
     std::unique_ptr<std::uint8_t[]> animationChunkBody_;
     HttpResponse response_{};
@@ -120,5 +120,6 @@ private:
     std::uint32_t legacyAnimationGeneration_ = 0;
     bool rebootPending_ = false, finalizing_ = false, readingBody_ = false, sending_ = false, binary_ = false, firmware_ = false;
 };
+static_assert(sizeof(DeviceHttpServer) <= 8600, "The HTTP server must reuse its transfer workspace during animation validation.");
 } // namespace neonbyte
 #endif
