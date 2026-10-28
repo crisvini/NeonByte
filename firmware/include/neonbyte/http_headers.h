@@ -4,7 +4,7 @@ namespace neonbyte {
 // Views refer to the supplied header buffer, which must outlive dispatch.
 struct HttpHeaders {
     HttpMethod method = HttpMethod::other;
-    std::string_view path, authorization, contentType, sha256, trackId;
+    std::string_view path, query, authorization, contentType, sha256, trackId;
     std::uint32_t contentLength = 0;
     bool parse(std::string_view input);
 };

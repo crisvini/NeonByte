@@ -112,10 +112,14 @@ std::uint64_t PersistentStorage::freeBytes() const {
 }
 std::uint32_t PersistentStorage::animationSize() const {
     if (!ready) return 0;
+    if (animationRead_) return animationRead_.size();
     File file = LittleFS.open("/neonbyte/animation.nbif","r"); return file ? file.size() : 0;
 }
 bool PersistentStorage::readAnimationAt(std::uint32_t offset, std::uint8_t* out, std::size_t length) const {
-    FileSource source("/neonbyte/animation.nbif"); return ready && source.readAt(offset,out,length);
+    if (!ready || (!animationRead_ && !(animationRead_ = LittleFS.open("/neonbyte/animation.nbif","r")))) return false;
+    yield();
+    return offset <= animationRead_.size() && length <= animationRead_.size() - offset &&
+        animationRead_.seek(offset,SeekSet) && animationRead_.read(out,length) == static_cast<int>(length);
 }
 const char* PersistentStorage::stagedPath() const {
     return kind_ == AssetKind::cover ? "/neonbyte/cover.part" : kind_ == AssetKind::animation ? "/neonbyte/animation.part" : "/neonbyte/firmware.part";
@@ -142,8 +146,69 @@ bool PersistentStorage::write(const std::uint8_t* data, std::size_t length) {
 }
 bool PersistentStorage::commit() {
     if (staged_) return false; // A closed candidate must pass readback validation first.
-    if (!LittleFS.rename(stagedPath(),installedPath())) return false;
-    ++assetRevision; return true;
+    if (kind_ == AssetKind::animation) {
+        animationCandidateRead_.close();
+        animationCandidateReady_ = true;
+        animationPromotionFailed_ = false;
+        return true;
+    }
+    if (!LittleFS.rename(stagedPath(),installedPath())) {
+        return false;
+    }
+    if (kind_ == AssetKind::cover) ++assetRevision;
+    return true;
+}
+bool PersistentStorage::beginAnimationCandidate(std::uint32_t length) {
+    animationCandidateRead_.close();
+    animationCandidateReady_ = false;
+    animationPromotionFailed_ = false;
+    return selectAsset(AssetKind::animation,{}) && begin(length);
+}
+std::uint32_t PersistentStorage::animationCandidateSize() const {
+    if (animationCandidateRead_) return animationCandidateRead_.size();
+    File file = LittleFS.open("/neonbyte/animation.part","r");
+    return file ? file.size() : 0;
+}
+bool PersistentStorage::readAnimationCandidateAt(std::uint32_t offset, std::uint8_t* bytes,
+                                                 std::size_t length) const {
+    if (!ready || (!animationCandidateRead_ &&
+        !(animationCandidateRead_ = LittleFS.open("/neonbyte/animation.part","r")))) return false;
+    yield();
+    return offset <= animationCandidateRead_.size() &&
+        length <= animationCandidateRead_.size() - offset &&
+        animationCandidateRead_.seek(offset,SeekSet) &&
+        animationCandidateRead_.read(bytes,length) == static_cast<int>(length);
+}
+bool PersistentStorage::sealAnimationCandidate() {
+    animationCandidateRead_.close();
+    sealStaged();
+    return !staged_;
+}
+bool PersistentStorage::markAnimationCandidateReady() {
+    if (!ready || staged_ || animationCandidateReady_) return false;
+    animationCandidateReady_ = true;
+    animationPromotionFailed_ = false;
+    return true;
+}
+void PersistentStorage::discardAnimationCandidate() {
+    animationCandidateRead_.close();
+    animationCandidateReady_ = false;
+    if (kind_ == AssetKind::animation) abort();
+}
+bool PersistentStorage::promoteAnimationCandidateAtBoundary() {
+    if (!animationCandidateReady_) return false;
+    animationCandidateRead_.close();
+    animationRead_.close();
+    if (!LittleFS.rename("/neonbyte/animation.part","/neonbyte/animation.nbif")) {
+        animationRead_ = LittleFS.open("/neonbyte/animation.nbif","r");
+        animationPromotionFailed_ = true;
+        animationCandidateReady_ = false;
+        return false;
+    }
+    animationCandidateReady_ = false;
+    animationPromotionFailed_ = false;
+    ++animationRevision;
+    return true;
 }
 void PersistentStorage::abort() { staged_.close(); if (ready) LittleFS.remove(stagedPath()); }
 void PersistentStorage::sealStaged() { staged_.flush(); staged_.close(); }

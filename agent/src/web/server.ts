@@ -2,7 +2,8 @@ import type { DeviceIntegration } from "../device/integration.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { parseOAuthCallback } from "../spotify/oauth-callback.js";
-import { convertGifToAnimation, createCoverAsset, validateAnimation } from "../media/animation.js";
+import { convertGifToAnimationV2, createCoverAsset } from "../media/animation.js";
+import { validateAnimationV2 } from "../media/animation-decoder.js";
 import type { SpotifyOAuthClient } from "../spotify/oauth.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 import type { PlaybackSnapshot } from "../spotify/types.js";
@@ -210,7 +211,8 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
   }
 
   let mode: DisplayMode = options.initialMode ?? "auto";
-  let animation: ReturnType<typeof convertGifToAnimation> | null = null;
+  let animation: ReturnType<typeof convertGifToAnimationV2> | null = null;
+  let animationOriginalSizeBytes = 0;
   let cover: ReturnType<typeof createCoverAsset> | null = null;
   let pendingOAuth: PendingOAuth | null = null;
 
@@ -284,6 +286,9 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
             durationMs: animation.durationMs,
             sizeBytes: animation.bytes.length,
             sha256: animation.sha256,
+            originalSizeBytes: animationOriginalSizeBytes,
+            compressionPercent: animationOriginalSizeBytes > 0 ? (1 - animation.bytes.length / animationOriginalSizeBytes) * 100 : 0,
+            previewSha256: animation.sha256,
           } : { available: false },
           cover: cover ? { available: true, sizeBytes: cover.bytes.length, sha256: cover.sha256 } : { available: false },
           protocolVersion: "v1",
@@ -305,7 +310,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           sendError(response, 404, "Upload a GIF to start the fullscreen preview.");
           return;
         }
-        validateAnimation(animation.bytes, animation.sha256);
+        validateAnimationV2(animation.bytes, animation.sha256);
         response.writeHead(200, {
           ...securityHeaders(),
           "Content-Type": "application/vnd.neonbyte.animation",
@@ -509,9 +514,10 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
         }
         try {
           const input = await readBody(request, GIF_LIMIT_BYTES);
-          const converted = convertGifToAnimation(input);
-          validateAnimation(converted.bytes, converted.sha256);
+          const converted = convertGifToAnimationV2(input);
+          validateAnimationV2(converted.bytes, converted.sha256);
           animation = converted;
+          animationOriginalSizeBytes = input.byteLength;
           options.device?.setAnimation(converted);
           sendJson(response, 201, {
             width: 240,
@@ -520,6 +526,9 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
             durationMs: converted.durationMs,
             sizeBytes: converted.bytes.length,
             sha256: converted.sha256,
+            originalSizeBytes: input.byteLength,
+            compressionPercent: (1 - converted.bytes.length / input.byteLength) * 100,
+            previewSha256: converted.sha256,
           });
         } catch (error) {
           sendError(response, error instanceof PayloadTooLargeError ? 413 : 422, error instanceof Error ? error.message : "Unable to convert the GIF.");

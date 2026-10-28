@@ -20,11 +20,17 @@ bool HttpHeaders::parse(std::string_view input) {
     const auto space = first.find(' '), lastSpace = first.rfind(' ');
     if (space == first.npos || space == lastSpace || first.substr(lastSpace+1) != "HTTP/1.1") return false;
     const auto verb = first.substr(0,space);
-    method = verb == "GET" ? HttpMethod::get : verb == "PUT" ? HttpMethod::put : verb == "POST" ? HttpMethod::post : HttpMethod::other;
+    method = verb == "GET" ? HttpMethod::get : verb == "PUT" ? HttpMethod::put :
+        verb == "POST" ? HttpMethod::post : verb == "DELETE" ? HttpMethod::deleteMethod : HttpMethod::other;
     if (method == HttpMethod::other) return false;
-    path = first.substr(space+1,lastSpace-space-1);
-    if (path.empty() || path.front() != '/' || path.size() > 96) return false;
+    const auto target = first.substr(space+1,lastSpace-space-1);
+    const auto queryStart = target.find('?');
+    path = target.substr(0,queryStart);
+    query = queryStart == target.npos ? std::string_view{} : target.substr(queryStart+1);
+    if (path.empty() || path.front() != '/' || path.size() > 96 ||
+        (queryStart != target.npos && (query.empty() || target.find('?',queryStart+1) != target.npos))) return false;
     for (unsigned char c : path) if (c <= 32 || c >= 127 || c == '?' || c == '#') return false;
+    for (unsigned char c : query) if (c <= 32 || c >= 127 || c == '?' || c == '#') return false;
     unsigned seen = 0;
     std::size_t position = firstEnd+2;
     while (position < input.size()-2) {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateAnimation, validateCover } from "../src/media/animation.js";
+import { validateCover } from "../src/media/animation.js";
+import { validateAnimationV2 } from "../src/media/animation-decoder.js";
 import { MockSpotifyProvider } from "../src/spotify/mock.js";
 import { PlaybackPoller } from "../src/spotify/poller.js";
 import { startLocalWebApp, type FirmwareUpdateControl } from "../src/web/server.js";
@@ -70,8 +71,8 @@ test("serves the local panel and protects mode changes with a loopback origin ch
     const page = await fetch(origin);
     assert.equal(page.status, 200);
     const html = await page.text();
-    assert.match(html, /original GIF received by the Windows agent/);
-    assert.match(html, /240 × 240 RGB565/);
+    assert.match(html, /The Windows agent composes the GIF at 240 × 240/);
+    assert.match(html, /exact RGB565 colors with palettes, row compression, and frame differences/);
     assert.match(html, /20 frames and 30 seconds/);
     assert.match(html, /32 KiB reserve/);
     assert.doesNotMatch(html, /device-token|Pairing token/);
@@ -222,14 +223,16 @@ test("validates GIF uploads and serves the converted fullscreen animation with i
       body: gif,
     });
     assert.equal(upload.status, 201);
-    const uploaded = await upload.json() as { sha256: string; frameCount: number };
+    const uploaded = await upload.json() as { sha256: string; frameCount: number; previewSha256: string };
     assert.equal(uploaded.frameCount, 1);
+    assert.equal(uploaded.sha256, uploaded.previewSha256);
 
     const animationResponse = await fetch(`${origin}/api/animation`);
     assert.equal(animationResponse.status, 200);
     assert.match(animationResponse.headers.get("content-type") ?? "", /application\/vnd\.neonbyte\.animation/);
     const animationBytes = Buffer.from(await animationResponse.arrayBuffer());
-    assert.equal(validateAnimation(animationBytes, uploaded.sha256).frameCount, 1);
+    assert.equal(animationBytes.readUInt8(4), 2);
+    assert.equal(validateAnimationV2(animationBytes, uploaded.previewSha256).frameCount, 1);
 
     const invalid = await fetch(`${origin}/api/animation`, {
       method: "POST",

@@ -16,6 +16,7 @@ enum class HttpMethod : std::uint8_t {
     get,
     put,
     post,
+    deleteMethod,
     other,
 };
 

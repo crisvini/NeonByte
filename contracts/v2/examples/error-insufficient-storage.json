@@ -1,0 +1,4 @@
+{
+  "code": "insufficient_storage",
+  "message": "The animation and safe replacement reserve do not fit in LittleFS."
+}

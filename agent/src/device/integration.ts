@@ -1,9 +1,9 @@
 import sharp from "sharp";
 import { readFile } from "node:fs/promises";
-import { createCoverAsset, type MediaAsset } from "../media/animation.js";
+import { createCoverAsset, type AnimationAsset, type MediaAsset } from "../media/animation.js";
 import { downloadSpotifyCover } from "../web/server.js";
 import type { DisplayMode } from "../web/scene.js";
-import { AnimationStorageError, DeviceClient, DeviceSynchronizer, MEDIA_STORAGE_RESERVE_BYTES } from "./client.js";
+import { AnimationStorageError, DeviceClient, DeviceSynchronizer } from "./client.js";
 import { DeviceScheduler, type DeviceConnectionStatus } from "./scheduler.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 import { MaintenanceClient } from "./maintenance-client.js";
@@ -52,7 +52,7 @@ export class DeviceIntegration {
   private closed = false;
   private maintenanceHeld = false;
   private desiredMode: DisplayMode | null = null;
-  private animation: MediaAsset | null = null;
+  private animation: MediaAsset | AnimationAsset | null = null;
   private animationState: DeviceView["animation"] = { state: "none", attempts: 0 };
   private animationSent: string | null = null;
   private coverJob: { url: string; promise: Promise<MediaAsset> } | null = null;
@@ -68,7 +68,7 @@ export class DeviceIntegration {
 
   setMode(mode: DisplayMode): void { this.desiredMode = mode; }
 
-  setAnimation(asset: MediaAsset): void {
+  setAnimation(asset: MediaAsset | AnimationAsset): void {
     if (this.animation?.sha256 === asset.sha256) return;
     this.animation = asset;
     this.animationSent = null;
@@ -211,13 +211,9 @@ export class DeviceIntegration {
         if (mode && status.mode !== mode) await client.setMode(mode);
         const animation = this.animation;
         if (animation && animation.sha256 !== this.animationSent) {
-          if (animation.bytes.length + MEDIA_STORAGE_RESERVE_BYTES > status.freeStorageBytes) {
-            this.animationState = { state: "blocked", attempts: this.animationState.attempts };
-            return true; // Keep playback and heartbeat synchronization alive while storage is full.
-          }
           this.animationState = { state: "uploading", attempts: this.animationState.attempts + 1 };
           try {
-            await client.uploadAnimation(animation);
+            await client.uploadAnimation(animation, () => synchronizer.serviceUploadControls());
             if (this.animation === animation) {
               this.animationSent = animation.sha256;
               this.animationState = { state: "complete", attempts: this.animationState.attempts };

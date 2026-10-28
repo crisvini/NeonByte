@@ -1,5 +1,6 @@
 #pragma once
 
+#include "neonbyte/animation_source.h"
 #include "neonbyte/types.h"
 
 #include <cstddef>
@@ -15,7 +16,7 @@ public:
     virtual std::uint64_t unixMillis() const = 0;
 };
 
-class Storage {
+class Storage : public AnimationSource {
 public:
     virtual ~Storage() = default;
     virtual bool loadMode(DisplayMode& mode) const = 0;
@@ -23,6 +24,10 @@ public:
     virtual std::uint64_t freeBytes() const = 0;
     virtual std::uint32_t animationSize() const = 0;
     virtual bool readAnimationAt(std::uint32_t offset, std::uint8_t* destination, std::size_t length) const = 0;
+    std::uint32_t size() const override { return animationSize(); }
+    bool readAt(std::uint32_t offset, std::uint8_t* destination, std::size_t length) const override {
+        return readAnimationAt(offset,destination,length);
+    }
 };
 
 class DisplayRenderer {

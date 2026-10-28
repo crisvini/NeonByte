@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neonbyte.local/contracts/v2/upload-session.schema.json",
+  "title": "NeonByte animation upload session v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["uploadId", "nextOffset", "state"],
+  "properties": {
+    "uploadId": { "type": "string", "pattern": "^[0-9a-f]{8}$" },
+    "nextOffset": { "const": 0 },
+    "state": { "const": "receiving" }
+  }
+}

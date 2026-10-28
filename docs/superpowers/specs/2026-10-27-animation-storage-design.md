@@ -1,13 +1,13 @@
 # Animation Storage and Playback Optimization Design
 
-**Status:** proposal for review; implementation is not authorized by this document.
-**Date:** 2026-10-27. **Scope:** planning only, based on local source inspection and
-public primary sources. No device access, discovery, build for a board, OTA,
-partition operation, credential access, or commit is part of this work.
+**Status:** approved implementation baseline; local offline implementation and
+validation were authorized by the maintainer on 2026-10-28.
+**Date:** 2026-10-27. **Scope:** design based on local source inspection and public
+primary sources. No device access, discovery, OTA, partition operation, credential
+access, private installation firmware, or commit is authorized by that request.
 
-The maintainer requested a complete comparison and recommendation, so the choices
-below are engineering proposals, not decisions already approved by the maintainer.
-The existing uncommitted firmware work must be preserved. No task in
+The maintainer approved the recommendation below. The existing uncommitted firmware
+work must be preserved. No task in
 [`PLANNING.md`](../../../PLANNING.md) is completed by this proposal.
 
 ## 1. Recommendation and Decision Gate
@@ -48,7 +48,8 @@ output size, actual decode time, and physical FPS remain PENDING.**
 | Hardware | `docs/hardware.md`, `PLANNING.md` | ESP8266 module and maintainer-reported orientation evidence exist. Physical flash geometry, runtime memory, timing, durability, and remaining display acceptance are PENDING. |
 
 The current code requests 20 MHz display SPI, rotation 2, MADCTL `0x00`, inversion,
-and 0/0 offsets. Preserve these settings and the Spotify marquee. A software
+and 0/0 offsets. Preserve these settings and the current fixed Spotify title and
+artist fields with compact ellipses. A software
 setting is not a measured bus rate or proof of display compatibility.
 
 ## 3. Alternatives
@@ -230,9 +231,9 @@ Propose an authenticated media extension under `/api/v2`:
 
 | Route | Proposed behavior |
 |---|---|
-| `GET /api/v2/media-capabilities` | Advertise nbif-v1/v2, dimensions, frame/duration/encoded limits, 32 KiB reserve, and maxChunkBytes=2048. Do not change the closed v1 status schema or claim every API is v2. |
+| `GET /api/v2/media-capabilities` | Advertise nbif-v1/v2, dimensions, frame/duration/encoded limits, 32 KiB reserve, and maxChunkBytes=1024. The implementation uses a conservative 1 KiB body cap to bound temporary RAM. Do not change the closed v1 status schema or claim every API is v2. |
 | `POST /api/v2/animation/uploads` | JSON `{sizeBytes, sha256}`. Admit space, create candidate, return 201 with uploadId and nextOffset=0. One session; a competing begin returns 409. |
-| `PUT /api/v2/animation/uploads/{id}/chunks?offset=N` | Accept 1..2048 bytes at the next offset, write <=512 bytes per loop, return 204. Replay of the immediately preceding identical chunk succeeds without rewriting; other offset/data conflicts return 409. |
+| `PUT /api/v2/animation/uploads/{id}/chunks?offset=N` | Accept 1..1024 bytes at the next offset, write <=512 bytes per loop, return 204. Replay of the immediately preceding identical chunk succeeds without rewriting; other offset/data conflicts return 409. |
 | `POST /api/v2/animation/uploads/{id}/complete` | Only after exact byte receipt; seal and start background verification, return 202 immediately. Repeated completion is idempotent. |
 | `GET /api/v2/animation/uploads/{id}` | Return state, nextOffset, and a stable safe error if failed: receiving/verifying/ready/installed/failed/cancelled. Retain one terminal result until a new session starts or for 60 seconds, whichever occurs first; unknown/expired IDs return 404. |
 | `DELETE /api/v2/animation/uploads/{id}` | Cancel an uninstalled session and remove only its candidate; repeat cancellation is safe. |
@@ -244,9 +245,11 @@ without allocating a second large parser. A stalled client can still occupy the
 single connection until its bounded timeout; hostile-client concurrency is not
 solved by this design.
 
-The desktop uploader is advanced in bounded scheduler work, rather than awaited
-as one whole-file synchronization operation. A pending cover upload waits until
-the animation session ends; heartbeat and metadata updates remain eligible.
+The current agent awaits the animation upload as one synchronization job, but
+calls a bounded control-service callback between chunks and validation polls.
+A pending cover upload waits until the animation session ends; Spotify metadata
+and heartbeat requests remain eligible. This preserves control traffic but does
+not establish a bounded scheduler-cycle duration on the desktop.
 
 Keep a 5-second per-connection inactivity limit; add 60 seconds without session
 progress and a 10-minute total session deadline, including validation/promotion.
@@ -324,7 +327,7 @@ the v2 path and steady playback, not concurrent service inside legacy uploads.
   Show original/converted bytes, reduction, frames/duration, and capacity errors.
   Keep project UI/errors in English and avoid a hidden quality downgrade.
 - Preserve auto/spotify/gif, independent 45-second freshness, colors, orientation,
-  marquee, recovery identity, maintenance behavior, and OTA gates. A cover revision
+  fixed Spotify text, recovery identity, maintenance behavior, and OTA gates. A cover revision
   must not restart animation; animation replacement must not erase Spotify text.
 
 ## 8. Benchmark and Test Matrix

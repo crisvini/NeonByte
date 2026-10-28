@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neonbyte.local/contracts/v2/upload-status.schema.json",
+  "title": "NeonByte animation upload status v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["uploadId", "state", "nextOffset", "expectedBytes", "receivedBytes", "error"],
+  "properties": {
+    "uploadId": { "type": "string", "pattern": "^[0-9a-f]{8}$" },
+    "state": { "enum": ["receiving", "verifying", "ready", "installed", "failed", "cancelled"] },
+    "nextOffset": { "type": "integer", "minimum": 0, "maximum": 2359296 },
+    "expectedBytes": { "type": "integer", "minimum": 1, "maximum": 2359296 },
+    "receivedBytes": { "type": "integer", "minimum": 0, "maximum": 2359296 },
+    "error": { "type": "string", "enum": ["", "invalid_request", "insufficient_storage", "write_failed", "read_failed", "checksum_mismatch", "invalid_animation", "promotion_failed", "expired"] }
+  }
+}

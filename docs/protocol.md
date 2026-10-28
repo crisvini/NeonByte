@@ -72,6 +72,39 @@ There is no clear-playback operation in v1, and `trackId` must be nonempty. The 
 | PUT | /api/v1/animation | Binary bytes and X-Content-SHA256 | 204 after validation and storage. NBIF v1, at most 2,304,051 bytes and available atomic staging space. |
 | POST | /api/v1/heartbeat | No body | 204; records presence when received. |
 
+## NBIF v2 Animation Uploads
+
+The authenticated `/api/v2/*` animation endpoints are additive. They do not
+change any `/api/v1` request or response contract. Their closed JSON contracts
+and examples are in [`contracts/v2/`](../contracts/v2/); the binary format is
+specified in [NBIF animation format](animation-format.md).
+
+| Method | Route | Body/headers | Success |
+|---|---|---|---|
+| GET | /api/v2/media-capabilities | No body | 200 with supported formats, geometry, file/chunk limits, replacement reserve, and current free bytes. |
+| POST | /api/v2/animation/uploads | JSON `{ "sizeBytes": n, "sha256": "64 lowercase hex characters" }` | 201 with an upload ID, offset 0, and `receiving` state. The server reserves a `.part` candidate without closing playback. |
+| PUT | /api/v2/animation/uploads/{id}/chunks?offset=n | Octet stream; 1–1,024 bytes | 204 after bounded writes complete. Exact immediate replays are idempotent; other offset conflicts are rejected. |
+| POST | /api/v2/animation/uploads/{id}/complete | No body | 202 after receiving is complete; whole-file hashing and animation decoding continue cooperatively. |
+| GET | /api/v2/animation/uploads/{id} | No body | 200 with upload state, byte counts, and a stable error code. |
+| DELETE | /api/v2/animation/uploads/{id} | No body | 204 after cancellation; installed content cannot be cancelled. |
+
+Chunks are limited to 1,024 bytes per request and written in at most 512-byte
+steps per firmware loop. SHA-256 and complete NBIF v2 decode validation also run
+incrementally. The installed file remains readable throughout transfer and
+verification. The candidate replaces it only at a completed animation frame
+boundary (or while Spotify is active or playback is idle). A v1 agent continues to
+upload NBIF v1 through its original route; that route now waits for the same safe
+promotion boundary before returning 204.
+
+The agent services Spotify metadata and heartbeats during uploads without an
+extra status preflight on every control request. Controls are rate-limited to one
+refresh per five seconds during a transfer. A lost chunk response is reconciled
+against the server's next offset, and only an identical immediate chunk replay is
+accepted. A failed transfer or verification preserves the previously installed
+animation. The 32 KiB reserve is in addition to the candidate and installed file;
+HTTP 507 `insufficient_storage` means the candidate cannot be admitted safely and
+uses the error body in [`contracts/v2/error.schema.json`](../contracts/v2/error.schema.json).
+
 The ESP8266 profile accepts `application/octet-stream`, an exact nonzero `Content-Length`, and `X-Content-SHA256`: lowercase hexadecimal SHA-256 of the complete body. These limits describe the local implementation, not measured hardware performance. It rejects chunked transfers, `Expect`, duplicate sensitive headers, and incomplete input. Uploads use candidate files; checksum/format validation occurs after close and before atomic rename. Failed uploads preserve the installed asset.
 
 - Cover body: `NBIC`, version `1` (u8), width `240` and height `240` (u16 little-endian), followed by 115,200 little-endian RGB565 bytes. Example header bytes: `4e 42 49 43 01 f0 00 f0 00`.

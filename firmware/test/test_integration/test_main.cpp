@@ -87,6 +87,14 @@ void testStrictHttpFraming() {
     TEST_ASSERT_FALSE(headers.parse("GET /api/v1/status HTTP/1.1\r\nHost: a\r\n\r\nextra"));
     TEST_ASSERT_TRUE(headers.parse("GET /api/v1/status HTTP/1.1\r\nHost: a\r\n\r\n"));
     TEST_ASSERT_EQUAL_UINT32(0, headers.contentLength);
+    TEST_ASSERT_TRUE(headers.parse("PUT /api/v2/animation/uploads/0123abcd/chunks?offset=1024 HTTP/1.1\r\nHost: a\r\nContent-Length: 1\r\n\r\n"));
+    TEST_ASSERT_TRUE(headers.path == "/api/v2/animation/uploads/0123abcd/chunks");
+    TEST_ASSERT_TRUE(headers.query == "offset=1024");
+    TEST_ASSERT_TRUE(headers.parse("DELETE /api/v2/animation/uploads/0123abcd HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n"));
+    TEST_ASSERT_EQUAL_INT(HttpMethod::deleteMethod, headers.method);
+    TEST_ASSERT_TRUE(headers.parse("PUT /api/v2/animation/uploads/0123abcd/chunks?offset= HTTP/1.1\r\nHost: a\r\nContent-Length: 1\r\n\r\n"));
+    TEST_ASSERT_TRUE(headers.query == "offset="); // The route's closed parser rejects the empty value.
+    TEST_ASSERT_FALSE(headers.parse("GET /api/v2/media-capabilities? HTTP/1.1\r\nHost: a\r\n\r\n"));
 }
 void testWifiConfigurationRejectsMalformedCredentials() {
     WifiCredentials credentials;

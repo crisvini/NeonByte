@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neonbyte.local/contracts/v2/error.schema.json",
+  "title": "NeonByte animation API error v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "message"],
+  "properties": {
+    "code": { "enum": ["invalid_request", "unauthorized", "not_found", "conflict", "payload_too_large", "unsupported_media_type", "invalid_content", "insufficient_storage", "internal_error"] },
+    "message": { "type": "string", "minLength": 1, "maxLength": 240 }
+  }
+}

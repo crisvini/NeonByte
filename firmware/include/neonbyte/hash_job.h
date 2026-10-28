@@ -1,5 +1,5 @@
 #pragma once
-#include "neonbyte/firmware_image.h"
+#include "neonbyte/animation_source.h"
 #include <string_view>
 namespace neonbyte {
 class ContentDigest {
@@ -12,11 +12,11 @@ public:
 enum class HashStep { pending, complete, failed };
 class HashJob {
 public:
-    HashJob(const ImageSource& source, ContentDigest& digest, std::uint32_t prefix, std::uint32_t length)
+    HashJob(const AnimationSource& source, ContentDigest& digest, std::uint32_t prefix, std::uint32_t length)
         : source_(source), digest_(digest), prefix_(prefix), length_(length) { digest_.reset(); }
     HashStep step(std::uint8_t* buffer, std::size_t capacity);
 private:
-    const ImageSource& source_;
+    const AnimationSource& source_;
     ContentDigest& digest_;
     std::uint32_t prefix_, length_, position_ = 0;
     bool failed_ = false;

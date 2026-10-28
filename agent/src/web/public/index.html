@@ -107,7 +107,7 @@
               <span>Looping preview that fills the screen</span>
             </label>
             <input id="gif-file" type="file" accept="image/gif,.gif" hidden>
-            <p class="card-copy">The 8 MB (8 MiB) limit applies to the original GIF received by the Windows agent. Conversion produces a centered, cropped 240 × 240 RGB565 animation for the ESP8266, using 115,200 pixel bytes per frame.</p>
+            <p class="card-copy">The Windows agent composes the GIF at 240 × 240 and encodes exact RGB565 colors with palettes, row compression, and frame differences. It also keeps the original v1 encoding for older firmware.</p>
             <p class="card-copy">Up to 20 frames and 30 seconds; files exceeding these limits are rejected. Decoding memory limits also apply. The converted animation must fit in device storage alongside the installed GIF and a 32 KiB reserve for safe replacement.</p>
             <p class="upload-status" id="upload-status" aria-live="polite">No GIF uploaded in this session.</p>
           </article>

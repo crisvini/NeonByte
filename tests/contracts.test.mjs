@@ -3,9 +3,10 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const contractRoot = new URL("../contracts/v1/", import.meta.url);
+const contractV2Root = new URL("../contracts/v2/", import.meta.url);
 
-async function readJson(relativePath) {
-  const contents = await readFile(new URL(relativePath, contractRoot), "utf8");
+async function readJson(relativePath, root = contractRoot) {
+  const contents = await readFile(new URL(relativePath, root), "utf8");
   return JSON.parse(contents);
 }
 
@@ -33,6 +34,19 @@ function validateContractValue(schema, value, path = "$") {
     return;
   }
 
+  if (schema.type === "array") {
+    assert.equal(Array.isArray(value), true, path + " must be an array");
+    if (schema.minItems !== undefined) assert.ok(value.length >= schema.minItems, path + " has too few items");
+    if (schema.maxItems !== undefined) assert.ok(value.length <= schema.maxItems, path + " has too many items");
+    if (schema.prefixItems) {
+      assert.ok(value.length <= schema.prefixItems.length, path + " has too many items");
+      schema.prefixItems.forEach((itemSchema, index) => {
+        if (index < value.length) validateContractValue(itemSchema, value[index], path + "[" + index + "]");
+      });
+    }
+    return;
+  }
+
   if (schema.type === "string") {
     assert.equal(typeof value, "string", path + " must be a string");
     if (schema.minLength !== undefined) {
@@ -41,11 +55,13 @@ function validateContractValue(schema, value, path = "$") {
     if (schema.maxLength !== undefined) {
       assert.ok(value.length <= schema.maxLength, path + " is too long");
     }
+    if (schema.pattern !== undefined) assert.match(value, new RegExp(schema.pattern), path + " has an invalid format");
   } else if (schema.type === "integer") {
     assert.equal(Number.isInteger(value), true, path + " must be an integer");
     if (schema.minimum !== undefined) {
       assert.ok(value >= schema.minimum, path + " is below its minimum");
     }
+    if (schema.maximum !== undefined) assert.ok(value <= schema.maximum, path + " is above its maximum");
   } else if (schema.type === "boolean") {
     assert.equal(typeof value, "boolean", path + " must be a boolean");
   }
@@ -116,5 +132,27 @@ test("error example has a stable code and bounded non-empty message", async () =
 
   validateContractValue(schema, example);
   assert.throws(() => validateContractValue(schema, { code: "invalid_request" }));
+});
+
+test("v2 animation schemas use the declared draft and unique ids", async () => {
+  const files = ["media-capabilities.schema.json", "upload-session.schema.json", "upload-status.schema.json", "error.schema.json"];
+  const schemas = await Promise.all(files.map((file) => readJson(file, contractV2Root)));
+  assert.ok(schemas.every((schema) => schema.$schema === "https://json-schema.org/draft/2020-12/schema"));
+  assert.equal(new Set(schemas.map((schema) => schema.$id)).size, schemas.length);
+});
+
+test("v2 media capabilities and upload examples match bounded upload contracts", async () => {
+  const capabilities = await readJson("media-capabilities.schema.json", contractV2Root);
+  const session = await readJson("upload-session.schema.json", contractV2Root);
+  const status = await readJson("upload-status.schema.json", contractV2Root);
+  const error = await readJson("error.schema.json", contractV2Root);
+  const capabilitiesExample = await readJson("examples/media-capabilities.json", contractV2Root);
+  const statusExample = await readJson("examples/upload-status.json", contractV2Root);
+  validateContractValue(capabilities, capabilitiesExample);
+  validateContractValue(session, await readJson("examples/upload-session.json", contractV2Root));
+  validateContractValue(status, statusExample);
+  validateContractValue(error, await readJson("examples/error-insufficient-storage.json", contractV2Root));
+  assert.throws(() => validateContractValue(capabilities, { ...capabilitiesExample, maxChunkBytes: 4096 }));
+  assert.throws(() => validateContractValue(status, { ...statusExample, unexpected: true }));
 });
 

@@ -1,11 +1,17 @@
 import { isIP } from "node:net";
-import type { MediaAsset } from "../media/animation.js";
+import type { AnimationAsset, MediaAsset } from "../media/animation.js";
 import { validateAnimation, validateCover } from "../media/animation.js";
+import { validateAnimationV2 } from "../media/animation-decoder.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 import type { NowPlayingV1, PlaybackSnapshot } from "../spotify/types.js";
 import type { DisplayMode } from "../web/scene.js";
 
 export const MEDIA_STORAGE_RESERVE_BYTES = 32 * 1024;
+const ANIMATION_CHUNK_BYTES = 1024;
+
+class DeviceHttpStatusError extends Error {
+  constructor(readonly status: number) { super("Device request rejected."); }
+}
 
 export class AnimationStorageError extends Error {
   constructor() {
@@ -34,6 +40,52 @@ function validStatus(value: unknown): value is DeviceStatus {
     Number.isSafeInteger(status["freeStorageBytes"]) && Number(status["freeStorageBytes"]) >= 0 &&
     typeof status["mode"] === "string" && ["auto", "spotify", "gif"].includes(status["mode"]) &&
     typeof status["activeScene"] === "string" && ["spotify", "gif"].includes(status["activeScene"]);
+}
+
+interface MediaCapabilities {
+  formats: string[];
+  maxEncodedBytes: number;
+  maxChunkBytes: number;
+  reserveBytes: number;
+  freeStorageBytes: number;
+}
+
+function validMediaCapabilities(value: unknown): value is MediaCapabilities {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const capabilities = value as Record<string, unknown>;
+  return Object.keys(capabilities).length === 9 &&
+    Array.isArray(capabilities["formats"]) && capabilities["formats"].length === 2 &&
+    capabilities["formats"][0] === "nbif-v1" && capabilities["formats"][1] === "nbif-v2" &&
+    capabilities["width"] === 240 && capabilities["height"] === 240 &&
+    capabilities["maxFrames"] === 20 && capabilities["maxDurationMs"] === 30_000 &&
+    Number.isSafeInteger(capabilities["maxEncodedBytes"]) && Number(capabilities["maxEncodedBytes"]) > 0 &&
+    Number.isSafeInteger(capabilities["maxChunkBytes"]) && Number(capabilities["maxChunkBytes"]) >= 1 && Number(capabilities["maxChunkBytes"]) <= 1024 &&
+    Number.isSafeInteger(capabilities["reserveBytes"]) && Number(capabilities["reserveBytes"]) >= MEDIA_STORAGE_RESERVE_BYTES &&
+    Number.isSafeInteger(capabilities["freeStorageBytes"]) && Number(capabilities["freeStorageBytes"]) >= 0;
+}
+
+interface AnimationUploadStatus {
+  uploadId: string;
+  state: "receiving" | "verifying" | "ready" | "installed" | "failed" | "cancelled";
+  nextOffset: number;
+  expectedBytes: number;
+  receivedBytes: number;
+  error: string;
+}
+
+function validAnimationUploadStatus(value: unknown, uploadId: string): value is AnimationUploadStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const status = value as Record<string, unknown>;
+  return Object.keys(status).length === 6 && status["uploadId"] === uploadId &&
+    typeof status["state"] === "string" && ["receiving", "verifying", "ready", "installed", "failed", "cancelled"].includes(status["state"]) &&
+    Number.isSafeInteger(status["nextOffset"]) && Number(status["nextOffset"]) >= 0 &&
+    Number.isSafeInteger(status["expectedBytes"]) && Number(status["expectedBytes"]) >= 1 &&
+    Number.isSafeInteger(status["receivedBytes"]) && Number(status["receivedBytes"]) >= 0 &&
+    typeof status["error"] === "string";
+}
+
+function safeResponseJson(response: Response): Promise<unknown> {
+  return response.json().catch(() => null);
 }
 
 function isPrivateDeviceAddress(hostname: string): boolean {
@@ -65,22 +117,25 @@ export class DeviceClient {
     if (!Number.isInteger(this.timeoutMs) || this.timeoutMs < 1) throw new Error("Use a positive device timeout.");
   }
 
-  private async request(path: string, method: string, body?: string | Buffer, headers: Record<string, string> = {}, timeoutMs = this.timeoutMs): Promise<Response> {
+  private async request(path: string, method: string, body?: string | Buffer, headers: Record<string, string> = {},
+                        timeoutMs = this.timeoutMs, acceptedStatuses?: readonly number[], preserveStatusError = false): Promise<Response> {
     try {
+      const publicStatus = method === "GET" && path === "/api/v1/status";
       const response = await this.fetchDevice(new URL(path, this.baseUrl), {
         method, redirect: "error", signal: AbortSignal.timeout(timeoutMs),
-        headers: { ...headers, ...(method === "GET" ? {} : { Authorization: `Bearer ${this.token}` }),
+        headers: { ...headers, ...(publicStatus ? {} : { Authorization: `Bearer ${this.token}` }),
           ...(method === "GET" ? {} : { "Content-Length": String(body === undefined ? 0 : Buffer.byteLength(body)) }) },
         ...(body === undefined ? {} : { body }),
       });
-      if (response.status !== (method === "GET" ? 200 : 204)) {
+      const expected = acceptedStatuses ?? [method === "GET" ? 200 : 204];
+      if (!expected.includes(response.status)) {
         await response.body?.cancel();
         if (path === "/api/v1/animation" && response.status === 413) throw new AnimationStorageError();
-        throw new Error("Device request rejected.");
+        throw new DeviceHttpStatusError(response.status);
       }
       return response;
     } catch (error) {
-      if (error instanceof AnimationStorageError) throw error;
+      if (error instanceof AnimationStorageError || (preserveStatusError && error instanceof DeviceHttpStatusError)) throw error;
       // Never echo remote bodies, addresses, pairing tokens, or fetch exception details.
       throw new Error("Device communication failed; check pairing, compatibility, and connectivity.");
     }
@@ -120,6 +175,23 @@ export class DeviceClient {
     await this.mutate("/api/v1/spotify", "PUT", JSON.stringify(payload), { "Content-Type": "application/json" });
     this.lastPlayback = payload;
   }
+  async serviceUploadControls(snapshot: PlaybackSnapshot): Promise<void> {
+    // The upload session has already authenticated this client. Avoid an
+    // extra status round trip for every 1 KiB chunk while keeping Spotify
+    // freshness and heartbeat timers alive.
+    if (snapshot.status !== "unavailable") {
+      const payload = snapshot.nowPlaying ?? (this.lastPlayback ? {
+        ...this.lastPlayback, isPlaying: false, sampledAtUnixMs: snapshot.sampledAtUnixMs,
+      } : null);
+      if (payload) {
+        try {
+          await this.request("/api/v1/spotify", "PUT", JSON.stringify(payload), { "Content-Type": "application/json" });
+          this.lastPlayback = payload;
+        } catch { /* A heartbeat still keeps upload and device presence alive. */ }
+      }
+    }
+    await this.request("/api/v1/heartbeat", "POST");
+  }
   async uploadCover(trackId: string, asset: MediaAsset): Promise<void> {
     validateCover(asset.bytes, asset.sha256);
     await this.mutate("/api/v1/cover", "PUT", asset.bytes, {
@@ -127,18 +199,115 @@ export class DeviceClient {
       "X-Track-Id": encodeURIComponent(trackId),
     }, this.hasTimeoutOverride ? this.timeoutMs : 15_000);
   }
-  async uploadAnimation(asset: MediaAsset): Promise<void> {
+  private async uploadLegacyAnimation(asset: MediaAsset, freeStorageBytes: number): Promise<void> {
     validateAnimation(asset.bytes, asset.sha256);
-    const status = await this.status();
-    if (asset.bytes.length + MEDIA_STORAGE_RESERVE_BYTES > status.freeStorageBytes) throw new AnimationStorageError();
+    if (asset.bytes.length + MEDIA_STORAGE_RESERVE_BYTES > freeStorageBytes) throw new AnimationStorageError();
     await this.request("/api/v1/animation", "PUT", asset.bytes, {
       "Content-Type": "application/octet-stream", "X-Content-SHA256": asset.sha256,
     }, this.uploadTimeout(asset.bytes.length));
+  }
+
+  private async animationUploadStatus(uploadId: string): Promise<AnimationUploadStatus> {
+    const response = await this.request(`/api/v2/animation/uploads/${uploadId}`, "GET");
+    const value = await safeResponseJson(response);
+    if (!validAnimationUploadStatus(value, uploadId)) throw new Error("The device returned an invalid animation upload status.");
+    return value;
+  }
+
+  async uploadAnimation(asset: MediaAsset | AnimationAsset, betweenChunks: () => Promise<void> = async () => {}): Promise<void> {
+    const status = await this.status();
+    if (asset.bytes[4] !== 2) {
+      await this.uploadLegacyAnimation(asset, status.freeStorageBytes);
+      return;
+    }
+    validateAnimationV2(asset.bytes, asset.sha256);
+    const legacy = (asset as AnimationAsset).legacy;
+    let capabilitiesResponse: Response;
+    try {
+      capabilitiesResponse = await this.request("/api/v2/media-capabilities", "GET", undefined, {}, this.timeoutMs, [200], true);
+    } catch (error) {
+      if (error instanceof DeviceHttpStatusError && error.status === 404) {
+        if (!legacy) throw new Error("This device supports only legacy animations; the compatible v1 copy is unavailable.");
+        await this.uploadLegacyAnimation(legacy, status.freeStorageBytes);
+        return;
+      }
+      throw new Error("Device communication failed; the media capability response was unavailable.");
+    }
+    const capabilitiesValue = await safeResponseJson(capabilitiesResponse);
+    if (!validMediaCapabilities(capabilitiesValue)) throw new Error("The device returned invalid media capabilities.");
+    const capabilities = capabilitiesValue;
+    if (!capabilities.formats.includes("nbif-v2")) {
+      if (!legacy) throw new Error("The device does not support NBIF v2 and the compatible v1 copy is unavailable.");
+      await this.uploadLegacyAnimation(legacy, status.freeStorageBytes);
+      return;
+    }
+    const freeStorageBytes = Math.min(status.freeStorageBytes, capabilities.freeStorageBytes);
+    if (asset.bytes.length > capabilities.maxEncodedBytes || asset.bytes.length + capabilities.reserveBytes > freeStorageBytes) {
+      throw new AnimationStorageError();
+    }
+
+    const startResponse = await this.request("/api/v2/animation/uploads", "POST",
+      JSON.stringify({ sizeBytes: asset.bytes.length, sha256: asset.sha256 }),
+      { "Content-Type": "application/json" }, this.timeoutMs, [201, 507]);
+    const startValue = await safeResponseJson(startResponse);
+    if (startResponse.status === 507) {
+      const error = startValue && typeof startValue === "object" ? (startValue as Record<string, unknown>)["code"] : null;
+      if (error === "insufficient_storage") throw new AnimationStorageError();
+      throw new Error("The device could not reserve safe storage for the animation.");
+    }
+    if (!startValue || typeof startValue !== "object") throw new Error("The device returned an invalid animation upload session.");
+    const start = startValue as Record<string, unknown>;
+    if (Object.keys(start).length !== 3 || typeof start["uploadId"] !== "string" || !/^[0-9a-f]{8}$/.test(start["uploadId"]) ||
+        start["nextOffset"] !== 0 || start["state"] !== "receiving") throw new Error("The device returned an invalid animation upload session.");
+    const uploadId = start["uploadId"];
+    const chunkSize = Math.min(ANIMATION_CHUNK_BYTES, capabilities.maxChunkBytes);
+    let installed = false;
+    try {
+      let offset = 0;
+      while (offset < asset.bytes.length) {
+        const end = Math.min(asset.bytes.length, offset + chunkSize);
+        const chunk = Buffer.from(asset.bytes.subarray(offset, end));
+        try {
+          await this.request(`/api/v2/animation/uploads/${uploadId}/chunks?offset=${offset}`, "PUT", chunk,
+            { "Content-Type": "application/octet-stream" }, this.hasTimeoutOverride ? this.timeoutMs : 15_000);
+          offset = end;
+        } catch {
+          const current = await this.animationUploadStatus(uploadId);
+          if (current.state !== "receiving") throw new Error("The animation upload session stopped receiving data.");
+          if (current.nextOffset === end) offset = end;
+          else if (current.nextOffset === offset) {
+            await this.request(`/api/v2/animation/uploads/${uploadId}/chunks?offset=${offset}`, "PUT", chunk,
+              { "Content-Type": "application/octet-stream" }, this.hasTimeoutOverride ? this.timeoutMs : 15_000);
+            offset = end;
+          } else throw new Error("The device animation upload offset is inconsistent.");
+        }
+        await betweenChunks();
+      }
+      await this.request(`/api/v2/animation/uploads/${uploadId}/complete`, "POST", undefined, {}, this.timeoutMs, [202]);
+      for (let poll = 0; poll < 6000; poll += 1) {
+        await betweenChunks();
+        const current = await this.animationUploadStatus(uploadId);
+        if (current.state === "installed") { installed = true; return; }
+        if (current.state === "failed") {
+          if (current.error === "insufficient_storage") throw new AnimationStorageError();
+          throw new Error("The device could not validate or install the animation.");
+        }
+        if (current.state === "cancelled") throw new Error("The device animation upload was cancelled.");
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error("The device animation validation timed out.");
+    } finally {
+      if (!installed) {
+        try { await this.request(`/api/v2/animation/uploads/${uploadId}`, "DELETE", undefined, {}, this.timeoutMs); }
+        catch { /* A lost connection leaves the bounded session to expire on the device. */ }
+      }
+    }
   }
 }
 
 export class DeviceSynchronizer {
   private pending: Promise<boolean> | null = null;
+  private lastUploadControlsAt = 0;
   private coverKey: string | null = null;
   private coverPreparation: { key: string; trackId: string; pending: boolean; asset: MediaAsset | null } | null = null;
 
@@ -156,6 +325,13 @@ export class DeviceSynchronizer {
     if (this.pending) return this.pending;
     this.pending = this.synchronizeOnce().finally(() => { this.pending = null; });
     return this.pending;
+  }
+
+  serviceUploadControls(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastUploadControlsAt < 5_000) return Promise.resolve();
+    this.lastUploadControlsAt = now;
+    return this.options.client.serviceUploadControls(this.options.poller.currentSnapshot);
   }
 
   private async synchronizeOnce(): Promise<boolean> {

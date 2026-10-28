@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { decompressFrames, parseGIF, type ParsedFrame } from "gifuct-js";
+import { encodeAnimationV2 } from "./animation-encoder.js";
 
 export const DISPLAY_WIDTH = 240;
 export const DISPLAY_HEIGHT = 240;
@@ -33,6 +34,7 @@ export interface MediaAsset {
 export interface AnimationAsset extends MediaAsset {
   frameCount: number;
   durationMs: number;
+  legacy?: MediaAsset;
 }
 
 export interface MediaMetadata {
@@ -286,6 +288,17 @@ export function convertGifToAnimation(input: Uint8Array, limits: AnimationLimits
     }
     throw new Error("Invalid or unsupported GIF. Choose a smaller animated GIF and try again.");
   }
+}
+
+export function convertGifToAnimationV2(input: Uint8Array, limits: AnimationLimits = {}): AnimationAsset & { legacy: MediaAsset } {
+  const legacy = convertGifToAnimation(input, limits);
+  const frames: Array<{ pixels: Buffer; delayMs: number }> = [];
+  const frameBytes = COVER_BYTES + 2;
+  for (let index = 0, offset = ANIMATION_HEADER_BYTES; index < legacy.frameCount; index += 1, offset += frameBytes) {
+    frames.push({ pixels: legacy.bytes.subarray(offset + 2, offset + frameBytes), delayMs: legacy.bytes.readUInt16LE(offset) });
+  }
+  const encoded = encodeAnimationV2(frames);
+  return { ...encoded, legacy: { bytes: legacy.bytes, sha256: legacy.sha256 } };
 }
 
 export function validateAnimation(

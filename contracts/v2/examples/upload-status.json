@@ -1,0 +1,8 @@
+{
+  "uploadId": "0123abcd",
+  "state": "verifying",
+  "nextOffset": 24576,
+  "expectedBytes": 24576,
+  "receivedBytes": 24576,
+  "error": ""
+}

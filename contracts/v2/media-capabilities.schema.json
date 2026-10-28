@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neonbyte.local/contracts/v2/media-capabilities.schema.json",
+  "title": "NeonByte animation media capabilities v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["formats", "width", "height", "maxFrames", "maxDurationMs", "maxEncodedBytes", "maxChunkBytes", "reserveBytes", "freeStorageBytes"],
+  "properties": {
+    "formats": { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "const": "nbif-v1" }, { "const": "nbif-v2" }], "items": false },
+    "width": { "const": 240 },
+    "height": { "const": 240 },
+    "maxFrames": { "const": 20 },
+    "maxDurationMs": { "const": 30000 },
+    "maxEncodedBytes": { "type": "integer", "minimum": 1, "maximum": 2359296 },
+    "maxChunkBytes": { "type": "integer", "minimum": 1, "maximum": 1024 },
+    "reserveBytes": { "const": 32768 },
+    "freeStorageBytes": { "type": "integer", "minimum": 0 }
+  }
+}

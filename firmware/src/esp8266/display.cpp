@@ -53,9 +53,20 @@ void DeviceDisplay::setupCredentials(const DeviceConfiguration& configuration) {
 void DeviceDisplay::showGif() {
     if (!initialized_) return;
     if (scene_ != 0) {
-        panel_.fillScreen(ST77XX_BLACK); scene_ = 0; offset_ = 0; frame_ = 0; nextFrame_ = 0;
-        animation_.open(metadata_);
+        scene_ = 0; offset_ = 0; frame_ = 0; nextFrame_ = 0; animationFrameNeedsStart_ = true;
+        animationNeedsReopen_ = false;
+        animationRevision_ = storage_.animationRevision;
+        openAnimation();
     }
+}
+bool DeviceDisplay::openAnimation() {
+    metadata_ = {}; metadataV2_ = {}; animationV2Active_ = false;
+    std::uint8_t version = 0;
+    if (!storage_.readAnimationAt(4,&version,1)) return false;
+    if (version == 1) return animation_.open(metadata_);
+    if (version != 2 || !animationV2_.open(metadataV2_)) return false;
+    animationV2Active_ = true;
+    return true;
 }
 void DeviceDisplay::showSpotifyWaiting() {
     if (!initialized_) return;
@@ -76,9 +87,9 @@ void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t) {
     if (entering) panel_.fillScreen(ST77XX_BLACK);
     const bool trackChanged = displayedTrack_.view() != track.trackId.view();
     if (trackChanged && !entering) panel_.fillRect(32,4,SPOTIFY_COVER_SIZE,SPOTIFY_COVER_SIZE,ST77XX_BLACK);
-    if (entering || trackChanged || revision_ != storage_.assetRevision) {
+    if (entering || trackChanged || coverRevision_ != storage_.assetRevision) {
         displayedTrack_ = track.trackId;
-        coverRow_ = 0; revision_ = storage_.assetRevision;
+        coverRow_ = 0; coverRevision_ = storage_.assetRevision;
     }
     scene_ = 2;
     SpotifyText title, artist;
@@ -95,10 +106,14 @@ void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t) {
 }
 void DeviceDisplay::beginAnimationFrame(std::uint16_t, std::uint16_t) {}
 void DeviceDisplay::writeAnimationPixels(std::uint32_t offset, const std::uint8_t* pixels, std::size_t length) {
-    if (!initialized_ || offset%480 || length != 480) return;
-    // Copy little-endian RGB565 to aligned host-endian pixels without a full frame.
-    panel_.startWrite(); panel_.setAddrWindow(0,offset/480,240,1);
-    for (unsigned i=0;i<480;i+=2) panel_.SPI_WRITE16(pixels[i] | (std::uint16_t(pixels[i+1])<<8));
+    if (!initialized_ || pixels == nullptr || (offset & 1) || (length & 1) || length == 0 || length > 480) return;
+    const auto pixelOffset = offset / 2;
+    const auto x = pixelOffset % 240;
+    const auto y = pixelOffset / 240;
+    const auto width = length / 2;
+    if (y >= 240 || x + width > 240) return;
+    panel_.startWrite(); panel_.setAddrWindow(x,y,width,1);
+    for (std::size_t i=0;i<length;i+=2) panel_.SPI_WRITE16(pixels[i] | (std::uint16_t(pixels[i+1])<<8));
     panel_.endWrite();
 }
 void DeviceDisplay::endAnimationFrame(std::uint16_t) {}
@@ -106,6 +121,7 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
     if (!initialized_) return;
     const auto state = scenes.currentState();
     if (state.activeScene == ActiveScene::spotify) {
+        storage_.promoteAnimationCandidateAtBoundary();
         if (state.waiting) showSpotifyWaiting();
         else {
             showSpotify(*state.nowPlaying,state.progressMs);
@@ -125,19 +141,50 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
         return;
     }
     showGif();
-    if (revision_ != storage_.assetRevision) {
-        revision_ = storage_.assetRevision; frame_ = 0; offset_ = 0; nextFrame_ = 0;
-        animation_.open(metadata_);
+    if (!metadata_.frameCount && !metadataV2_.frameCount) storage_.promoteAnimationCandidateAtBoundary();
+    if (animationNeedsReopen_ || animationRevision_ != storage_.animationRevision) {
+        animationRevision_ = storage_.animationRevision; frame_ = 0; offset_ = 0; nextFrame_ = 0;
+        animationFrameNeedsStart_ = true;
+        animationNeedsReopen_ = false;
+        openAnimation();
     }
+    if (animationV2Active_) {
+        if (!metadataV2_.frameCount || now < nextFrame_) return;
+        const auto status = animationV2_.step();
+        if (status == AnimationDecodeStatus::Error) { metadataV2_ = {}; animationNeedsReopen_ = true; return; }
+        if (status == AnimationDecodeStatus::AnimationComplete) {
+            animationV2_.restart(); animationFrameNeedsStart_ = true; nextFrame_ = now;
+            return;
+        }
+        if (animationFrameNeedsStart_) {
+            beginAnimationFrame(240,240); frameStarted_ = now; animationFrameNeedsStart_ = false;
+        }
+        if (status == AnimationDecodeStatus::RowReady) {
+            const auto decoded = animationV2_.row();
+            const auto pixelByteOffset = (static_cast<std::uint32_t>(decoded.y) * 240 + decoded.x) * 2;
+            writeAnimationPixels(pixelByteOffset,decoded.pixels,decoded.byteCount);
+            animationV2_.consumeRow();
+        } else if (status == AnimationDecodeStatus::FrameComplete) {
+            const auto info = animationV2_.frameInfo();
+            endAnimationFrame(info.delayMs);
+            storage_.promoteAnimationCandidateAtBoundary();
+            if (info.kind == AnimationFrameKind::Hold) frameStarted_ = now;
+            nextFrame_ = frameStarted_ + info.delayMs;
+            animationFrameNeedsStart_ = true;
+        }
+        return;
+    }
+    if (!metadata_.frameCount) return;
     if (!metadata_.frameCount || now < nextFrame_) return;
     if (!offset_) { beginAnimationFrame(240,240); frameStarted_ = now; }
     std::size_t count = 0;
-    if (!animation_.readFrameChunk(frame_,offset_,pixels_.data(),pixels_.size(),count)) { metadata_ = {}; return; }
+    if (!animation_.readFrameChunk(frame_,offset_,pixels_.data(),pixels_.size(),count)) { metadata_ = {}; animationNeedsReopen_ = true; return; }
     writeAnimationPixels(offset_,pixels_.data(),count); offset_ += count;
     if (offset_ == ANIMATION_FRAME_PIXEL_BYTES) {
         std::uint16_t delayMs = 0;
-        if (!animation_.frameDelayMs(frame_,delayMs)) { metadata_ = {}; return; }
+        if (!animation_.frameDelayMs(frame_,delayMs)) { metadata_ = {}; animationNeedsReopen_ = true; return; }
         endAnimationFrame(delayMs); nextFrame_ = frameStarted_+delayMs; offset_ = 0; frame_ = (frame_+1)%metadata_.frameCount;
+        storage_.promoteAnimationCandidateAtBoundary();
     }
 }
 } // namespace neonbyte

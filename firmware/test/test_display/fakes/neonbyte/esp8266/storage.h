@@ -17,6 +17,9 @@ struct DeviceConfiguration {
 class PersistentStorage final : public Storage {
 public:
     std::uint32_t assetRevision = 0;
+    std::uint32_t animationRevision = 0;
+    bool promotionPending = false;
+    bool failAnimationReads = false;
     std::vector<std::uint8_t> animationBytes;
     std::vector<std::uint8_t> coverBytes;
     std::string_view coverTrack = "track";
@@ -35,8 +38,15 @@ public:
         return static_cast<std::uint32_t>(animationBytes.size());
     }
     bool readAnimationAt(std::uint32_t offset, std::uint8_t* destination, std::size_t length) const override {
+        if (failAnimationReads) return false;
         if (offset > animationBytes.size() || length > animationBytes.size() - offset) return false;
         std::copy_n(animationBytes.data() + offset, length, destination);
+        return true;
+    }
+    bool promoteAnimationCandidateAtBoundary() {
+        if (!promotionPending) return false;
+        promotionPending = false;
+        ++animationRevision;
         return true;
     }
     bool readCover(std::string_view trackId, std::uint32_t offset, std::uint8_t* bytes, std::size_t length) const {

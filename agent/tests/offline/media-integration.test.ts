@@ -12,9 +12,9 @@ class Store implements DeviceConfigStore {
   async get() { return this.value; }
   async set(value: DeviceConfig) { this.value = value; }
 }
-async function waitFor(predicate: () => boolean) {
+async function waitFor(predicate: () => boolean | Promise<boolean>) {
   const end = Date.now() + 4000;
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() > end) throw new Error("Timed out waiting for media synchronization.");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -38,7 +38,7 @@ test("dashboard mode, decoded artwork, and GIF reach the native device and retry
     headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   assert.equal((await post("/api/device", { address: harness.url, enabled: true })).status, 204);
   await waitFor(() => device.status.connection === "connected");
-  assert.equal((await harness.state()).coverPixel, 0xf800);
+  await waitFor(async () => (await harness.state()).coverPixel === 0xf800);
   const count = harness.requests.filter((r) => r.path === "/api/v1/cover").length;
   await new Promise((resolve) => setTimeout(resolve, 120));
   assert.equal(harness.requests.filter((r) => r.path === "/api/v1/cover").length, count);

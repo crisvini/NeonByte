@@ -25,6 +25,58 @@ void appendLittleEndian16(std::vector<std::uint8_t>& bytes, std::uint16_t value)
     bytes.push_back(static_cast<std::uint8_t>(value >> 8));
 }
 
+void appendV2Row(std::vector<std::uint8_t>& bytes, std::uint8_t y, std::uint8_t x,
+                 std::uint8_t width, std::uint8_t codec, const std::vector<std::uint8_t>& payload) {
+    bytes.push_back(y); bytes.push_back(x); bytes.push_back(width); bytes.push_back(codec);
+    appendLittleEndian16(bytes, static_cast<std::uint16_t>(payload.size()));
+    bytes.insert(bytes.end(), payload.begin(), payload.end());
+}
+
+void installV2Animation(PersistentStorage& storage) {
+    std::vector<std::uint8_t> keyframe;
+    for (unsigned y = 0; y < 240; ++y) {
+        appendV2Row(keyframe, static_cast<std::uint8_t>(y), 0, 240, 1,
+            {0xff, 0x00, 0xf8, 0xef, 0x00, 0xf8});
+    }
+    std::vector<std::uint8_t> delta;
+    appendLittleEndian16(delta, 0x07e0);
+    appendV2Row(delta, 10, 20, 2, 3, {0x81, 0});
+    constexpr std::uint32_t directoryOffset = 24;
+    constexpr std::uint32_t recordOffset = directoryOffset + 3 * 20;
+    const auto secondOffset = recordOffset + static_cast<std::uint32_t>(keyframe.size());
+    const auto totalBytes = secondOffset + static_cast<std::uint32_t>(delta.size());
+    storage.animationBytes.assign(totalBytes, 0);
+    auto& bytes = storage.animationBytes;
+    bytes[0] = 'N'; bytes[1] = 'B'; bytes[2] = 'I'; bytes[3] = 'F'; bytes[4] = 2;
+    bytes[6] = 240; bytes[8] = 240; bytes[10] = 3;
+    bytes[12] = 44; bytes[13] = 1; bytes[16] = static_cast<std::uint8_t>(totalBytes);
+    bytes[17] = static_cast<std::uint8_t>(totalBytes >> 8);
+    bytes[18] = static_cast<std::uint8_t>(totalBytes >> 16);
+    auto writeEntry = [&](std::size_t offset, std::uint32_t dataOffset, std::uint32_t recordBytes,
+                          std::uint16_t delay, std::uint8_t kind, std::uint8_t indexBits,
+                          std::uint16_t paletteCount, std::uint16_t rowCount) {
+        auto put32 = [&](std::size_t at, std::uint32_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1] = static_cast<std::uint8_t>(value >> 8);
+            bytes[at + 2] = static_cast<std::uint8_t>(value >> 16);
+            bytes[at + 3] = static_cast<std::uint8_t>(value >> 24);
+        };
+        put32(offset, dataOffset); put32(offset + 4, recordBytes);
+        bytes[offset + 8] = static_cast<std::uint8_t>(delay);
+        bytes[offset + 9] = static_cast<std::uint8_t>(delay >> 8);
+        bytes[offset + 10] = kind; bytes[offset + 11] = indexBits;
+        bytes[offset + 12] = static_cast<std::uint8_t>(paletteCount);
+        bytes[offset + 13] = static_cast<std::uint8_t>(paletteCount >> 8);
+        bytes[offset + 14] = static_cast<std::uint8_t>(rowCount);
+        bytes[offset + 15] = static_cast<std::uint8_t>(rowCount >> 8);
+    };
+    writeEntry(24, recordOffset, keyframe.size(), 50, 0, 0, 0, 240);
+    writeEntry(44, secondOffset, delta.size(), 50, 1, 1, 1, 1);
+    writeEntry(64, totalBytes, 0, 200, 2, 0, 0, 0);
+    std::copy(keyframe.begin(), keyframe.end(), bytes.begin() + recordOffset);
+    std::copy(delta.begin(), delta.end(), bytes.begin() + secondOffset);
+}
+
 void appendFrame(std::vector<std::uint8_t>& bytes, std::uint16_t delayMs, std::uint16_t pixel) {
     appendLittleEndian16(bytes, delayMs);
     for (std::uint32_t index = 0; index < ANIMATION_FRAME_PIXEL_BYTES / 2; ++index) {
@@ -70,6 +122,96 @@ void testGifFrameDelayAndLoopingUseDeviceDisplayTick() {
     TEST_ASSERT_EQUAL_UINT32(480, display_test::panelState.rows.size());
 
     tickFrame(display, scenes, 120, 0x1234);
+}
+
+void testV2PlayerDrawsChangedSpansWithoutClearingAndRestartsAtKeyframe() {
+    display_test::panelState = {};
+    PersistentStorage storage; installV2Animation(storage);
+    TestClock clock; SceneManager scenes(clock, storage);
+    TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
+    DeviceDisplay display(storage); display.begin();
+    auto& panel = display_test::panelState;
+    const auto initialClears = panel.screenClears;
+    for (unsigned tick = 0; tick < 300 && panel.rows.size() < 240; ++tick) display.tick(scenes, 0);
+    TEST_ASSERT_EQUAL_UINT32(240, panel.rows.size());
+    for (unsigned y = 0; y < 240; ++y) {
+        TEST_ASSERT_EQUAL_INT(0, panel.rows[y].x);
+        TEST_ASSERT_EQUAL_INT(y, panel.rows[y].y);
+        TEST_ASSERT_EQUAL_UINT32(240, panel.rows[y].pixelCount);
+        TEST_ASSERT_EQUAL_HEX16(0xf800, panel.rows[y].firstPixel);
+    }
+    display.tick(scenes, 0); // Complete the keyframe before its 50 ms hold.
+    for (unsigned tick = 0; tick < 10; ++tick) display.tick(scenes, 49);
+    TEST_ASSERT_EQUAL_UINT32(240, panel.rows.size());
+    for (unsigned tick = 0; tick < 10 && panel.rows.size() < 241; ++tick) display.tick(scenes, 50);
+    TEST_ASSERT_EQUAL_UINT32(241, panel.rows.size());
+    TEST_ASSERT_EQUAL_INT(20, panel.rows.back().x);
+    TEST_ASSERT_EQUAL_INT(10, panel.rows.back().y);
+    TEST_ASSERT_EQUAL_UINT32(2, panel.rows.back().pixelCount);
+    TEST_ASSERT_EQUAL_HEX16(0x07e0, panel.rows.back().firstPixel);
+    display.tick(scenes, 100); // Complete the delta record.
+    display.tick(scenes, 100); // Advance the decoder to the hold record.
+    display.tick(scenes, 100); // Start and complete the hold record.
+    for (unsigned tick = 0; tick < 20; ++tick) display.tick(scenes, 299);
+    TEST_ASSERT_EQUAL_UINT32(241, panel.rows.size());
+    for (unsigned tick = 0; tick < 300 && panel.rows.size() < 481; ++tick) display.tick(scenes, 300);
+    TEST_ASSERT_EQUAL_UINT32(481, panel.rows.size());
+    TEST_ASSERT_EQUAL_INT(0, panel.rows[241].x);
+    TEST_ASSERT_EQUAL_INT(0, panel.rows[241].y);
+    TEST_ASSERT_EQUAL_INT(0, panel.rows.back().x);
+    TEST_ASSERT_EQUAL_INT(239, panel.rows.back().y);
+    TEST_ASSERT_EQUAL_HEX16(0xf800, panel.rows.back().firstPixel);
+    TEST_ASSERT_EQUAL_UINT32(initialClears, panel.screenClears);
+}
+
+void testV2CandidatePromotionWaitsForFrameBoundaryAndRestartsAtKeyframe() {
+    display_test::panelState = {};
+    PersistentStorage storage; installV2Animation(storage);
+    TestClock clock; SceneManager scenes(clock, storage);
+    TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
+    DeviceDisplay display(storage); display.begin();
+    auto& panel = display_test::panelState;
+    for (unsigned tick = 0; tick < 300 && panel.rows.size() < 240; ++tick) display.tick(scenes, 0);
+    TEST_ASSERT_EQUAL_UINT32(240, panel.rows.size());
+    display.tick(scenes, 0); // Complete the keyframe before its 50 ms hold.
+    storage.promotionPending = true;
+    for (unsigned tick = 0; tick < 10; ++tick) display.tick(scenes, 49);
+    TEST_ASSERT_TRUE(storage.promotionPending);
+    TEST_ASSERT_EQUAL_UINT32(240, panel.rows.size());
+    for (unsigned tick = 0; tick < 10 && panel.rows.size() < 241; ++tick) display.tick(scenes, 50);
+    TEST_ASSERT_EQUAL_UINT32(241, panel.rows.size());
+    TEST_ASSERT_TRUE(storage.promotionPending);
+    display.tick(scenes, 100); // Finish the delta, then promote at this frame boundary.
+    TEST_ASSERT_FALSE(storage.promotionPending);
+    TEST_ASSERT_EQUAL_UINT32(1, storage.animationRevision);
+    for (unsigned tick = 0; tick < 320 && panel.rows.size() < 481; ++tick) display.tick(scenes, 100);
+    TEST_ASSERT_EQUAL_UINT32(481, panel.rows.size());
+    TEST_ASSERT_EQUAL_INT(0, panel.rows[241].x);
+    TEST_ASSERT_EQUAL_INT(0, panel.rows[241].y);
+    TEST_ASSERT_EQUAL_HEX16(0xf800, panel.rows[241].firstPixel);
+    TEST_ASSERT_EQUAL_UINT32(1, panel.screenClears);
+}
+
+void testV2PlayerReopensFromKeyframeAfterAStorageReadFailure() {
+    display_test::panelState = {};
+    PersistentStorage storage; installV2Animation(storage);
+    TestClock clock; SceneManager scenes(clock, storage);
+    TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
+    DeviceDisplay display(storage); display.begin();
+    auto& panel = display_test::panelState;
+    for (unsigned tick = 0; tick < 300 && panel.rows.size() < 240; ++tick) display.tick(scenes, 0);
+    TEST_ASSERT_EQUAL_UINT32(240, panel.rows.size());
+    display.tick(scenes, 0); // Finish the first keyframe.
+    storage.failAnimationReads = true;
+    display.tick(scenes, 50); // Advance to the second frame.
+    display.tick(scenes, 50); // Start its palette.
+    display.tick(scenes, 50); // Encounter the injected read failure.
+    storage.failAnimationReads = false;
+    for (unsigned tick = 0; tick < 320 && panel.rows.size() < 480; ++tick) display.tick(scenes, 51);
+    TEST_ASSERT_EQUAL_UINT32(480, panel.rows.size());
+    TEST_ASSERT_EQUAL_INT(0, panel.rows[240].x);
+    TEST_ASSERT_EQUAL_INT(0, panel.rows[240].y);
+    TEST_ASSERT_EQUAL_HEX16(0xf800, panel.rows[240].firstPixel);
 }
 
 void testSlowFrameRenderingDoesNotAddASecondFullDelay() {
@@ -324,6 +466,9 @@ void testTrackChangeClearsCompletedCoverBeforeNewMetadata() {
 int main() {
     UNITY_BEGIN();
     RUN_TEST(testGifFrameDelayAndLoopingUseDeviceDisplayTick);
+    RUN_TEST(testV2PlayerDrawsChangedSpansWithoutClearingAndRestartsAtKeyframe);
+    RUN_TEST(testV2CandidatePromotionWaitsForFrameBoundaryAndRestartsAtKeyframe);
+    RUN_TEST(testV2PlayerReopensFromKeyframeAfterAStorageReadFailure);
     RUN_TEST(testSlowFrameRenderingDoesNotAddASecondFullDelay);
     RUN_TEST(testDisplayInitializationUsesBoundedSpiAndRetainsProvisionalProfile);
     RUN_TEST(testDisplayHalfTurnUsesRgbWithoutOverridingRotation);

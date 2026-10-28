@@ -56,9 +56,9 @@ private:
     std::string name_;
     FileSource source_;
 };
-class AnimationSource final : public Storage {
+class AnimationStorageAdapter final : public Storage {
 public:
-    explicit AnimationSource(const ImageSource& source) : source_(source) {}
+    explicit AnimationStorageAdapter(const ImageSource& source) : source_(source) {}
     bool loadMode(DisplayMode&) const override { return false; }
     bool saveMode(DisplayMode) override { return false; }
     std::uint64_t freeBytes() const override { return 0; }
@@ -129,7 +129,7 @@ void DiskStorage::abort() { if (candidate.is_open()) candidate.close(); fs::remo
 bool DiskStorage::validate() const {
     if (!readOk) return false;
     FileSource file(directory / stagedName());
-    if (!isCover) { AnimationSource storage(file); AnimationReader reader(storage); AnimationMetadata metadata; return reader.open(metadata); }
+    if (!isCover) { AnimationStorageAdapter storage(file); AnimationReader reader(storage); AnimationMetadata metadata; return reader.open(metadata); }
     std::uint8_t header[9]; const std::uint8_t expected[] = {'N','B','I','C',1,240,0,240,0};
     return file.size() == 2 + MAX_TEXT_UTF8_BYTES + COVER_BYTES && file.readAt(2 + MAX_TEXT_UTF8_BYTES, header, 9) && !std::memcmp(header, expected, 9);
 }

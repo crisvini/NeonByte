@@ -1,6 +1,7 @@
 #pragma once
 #ifdef ARDUINO_ARCH_ESP8266
 #include "neonbyte/animation_reader.h"
+#include "neonbyte/animation_upload.h"
 #include "neonbyte/firmware_image.h"
 #include "neonbyte/storage_mount.h"
 #include "neonbyte/transfer.h"
@@ -23,7 +24,7 @@ public:
 private:
     mutable File file_;
 };
-class PersistentStorage final : public Storage, public TransferSink {
+class PersistentStorage final : public Storage, public AnimationUploadBackend {
 public:
     bool mountForConfiguration();
     bool beginStorage();
@@ -34,6 +35,15 @@ public:
     std::uint64_t freeBytes() const override;
     std::uint32_t animationSize() const override;
     bool readAnimationAt(std::uint32_t offset, std::uint8_t* destination, std::size_t length) const override;
+    std::uint64_t animationUploadFreeBytes() const override { return freeBytes(); }
+    std::uint32_t animationCandidateSize() const override;
+    bool beginAnimationCandidate(std::uint32_t length) override;
+    bool readAnimationCandidateAt(std::uint32_t offset, std::uint8_t* bytes, std::size_t length) const override;
+    bool sealAnimationCandidate() override;
+    bool markAnimationCandidateReady() override;
+    void discardAnimationCandidate() override;
+    bool promoteAnimationCandidateAtBoundary();
+    bool animationPromotionFailed() const { return animationPromotionFailed_; }
     bool selectAsset(AssetKind kind, std::string_view trackId);
     bool begin(std::uint32_t length) override;
     bool write(const std::uint8_t* data, std::size_t length) override;
@@ -45,6 +55,7 @@ public:
     bool readCover(std::string_view trackId, std::uint32_t offset, std::uint8_t* bytes, std::size_t length) const;
     DeviceConfiguration configuration{};
     std::uint32_t assetRevision = 0;
+    std::uint32_t animationRevision = 0;
     bool ready = false;
 private:
     StorageMountState mountState_{};
@@ -53,6 +64,10 @@ private:
     AssetKind kind_ = AssetKind::animation;
     FixedText coverTrack_{};
     File staged_;
+    mutable File animationRead_;
+    mutable File animationCandidateRead_;
+    bool animationCandidateReady_ = false;
+    bool animationPromotionFailed_ = false;
 };
 } // namespace neonbyte
 #endif

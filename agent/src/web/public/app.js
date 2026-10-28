@@ -106,8 +106,11 @@ function updateStatusText() {
   setDemoControls(status.demoEnabled);
 
   const animation = status.animation;
+  const compressionText = animation.compressionPercent >= 0
+    ? `${animation.compressionPercent.toFixed(1)}% smaller`
+    : `${Math.abs(animation.compressionPercent).toFixed(1)}% larger`;
   document.querySelector("#upload-status").textContent = animation.available
-    ? `Converted animation · ${animation.frameCount} frames · ${formatBytes(animation.sizeBytes)} · ${animation.sha256.slice(0, 12)}…`
+    ? `Original ${formatBytes(animation.originalSizeBytes)} · converted ${formatBytes(animation.sizeBytes)} (${compressionText}) · ${animation.frameCount} frames · ${animation.sha256.slice(0, 12)}…`
     : "No GIF uploaded in this session.";
   const transfer = device.animation;
   if (animation.available && transfer && transfer.state !== "none") {
@@ -194,7 +197,7 @@ async function refreshStatus() {
 }
 
 async function refreshAnimation() {
-  const nextHash = status?.animation?.sha256 ?? "";
+  const nextHash = status?.animation?.previewSha256 ?? "";
   if (nextHash === animationSha256) return;
   animationSha256 = nextHash;
   animationFrames = [];
@@ -217,11 +220,14 @@ function decodeAnimation(bytes) {
   const view = new DataView(bytes);
   const magic = new TextDecoder().decode(new Uint8Array(bytes, 0, 4));
   const version = view.getUint8(4);
+  if (magic !== "NBIF") throw new Error("The animation format does not match the 240 × 240 preview.");
+  if (version === 2) return decodeAnimationV2(bytes, view);
+  if (version !== 1) throw new Error("The animation format does not match the 240 × 240 preview.");
   const width = view.getUint16(5, true);
   const height = view.getUint16(7, true);
   const count = view.getUint16(9, true);
   const frameBytes = width * height * 2;
-  if (magic !== "NBIF" || version !== 1 || width !== DISPLAY_SIZE || height !== DISPLAY_SIZE || count < 1 || bytes.byteLength !== ANIMATION_HEADER_BYTES + count * (2 + frameBytes)) {
+  if (width !== DISPLAY_SIZE || height !== DISPLAY_SIZE || count < 1 || bytes.byteLength !== ANIMATION_HEADER_BYTES + count * (2 + frameBytes)) {
     throw new Error("The animation format does not match the 240 × 240 preview.");
   }
   const frames = [];
@@ -229,22 +235,182 @@ function decodeAnimation(bytes) {
   for (let frame = 0; frame < count; frame += 1) {
     const delayMs = view.getUint16(offset, true);
     offset += 2;
-    const image = context.createImageData(width, height);
-    for (let pixel = 0; pixel < width * height; pixel += 1) {
-      const color = view.getUint16(offset + pixel * 2, true);
-      const red = (color >> 11) & 31;
-      const green = (color >> 5) & 63;
-      const blue = color & 31;
-      const target = pixel * 4;
-      image.data[target] = Math.round(red * 255 / 31);
-      image.data[target + 1] = Math.round(green * 255 / 63);
-      image.data[target + 2] = Math.round(blue * 255 / 31);
-      image.data[target + 3] = 255;
-    }
-    frames.push({ image, delayMs: Math.max(20, delayMs) });
+    const pixels = new Uint16Array(width * height);
+    for (let pixel = 0; pixel < width * height; pixel += 1) pixels[pixel] = view.getUint16(offset + pixel * 2, true);
+    frames.push({ image: animationImage(pixels, width, height), delayMs: Math.max(20, delayMs) });
     offset += frameBytes;
   }
   return frames;
+}
+
+function animationImage(pixels, width, height) {
+  const image = context.createImageData(width, height);
+  for (let pixel = 0; pixel < pixels.length; pixel += 1) {
+    const color = pixels[pixel];
+    const target = pixel * 4;
+    image.data[target] = Math.round(((color >> 11) & 31) * 255 / 31);
+    image.data[target + 1] = Math.round(((color >> 5) & 63) * 255 / 63);
+    image.data[target + 2] = Math.round((color & 31) * 255 / 31);
+    image.data[target + 3] = 255;
+  }
+  return image;
+}
+
+function decodeAnimationV2(bytes, view) {
+  const width = view.getUint16(6, true);
+  const height = view.getUint16(8, true);
+  const frameCount = view.getUint16(10, true);
+  const durationMs = view.getUint32(12, true);
+  const fileBytes = view.getUint32(16, true);
+  if (view.getUint8(5) !== 0 || view.getUint32(20, true) !== 0 || width !== DISPLAY_SIZE || height !== DISPLAY_SIZE ||
+      frameCount < 1 || frameCount > 20 || fileBytes > 2359296 || fileBytes !== bytes.byteLength ||
+      bytes.byteLength < 24 + frameCount * 20 || durationMs > 30000) {
+    throw new Error("The NBIF v2 animation header is invalid.");
+  }
+  let recordOffset = 24 + frameCount * 20;
+  let summedDuration = 0;
+  const entries = [];
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    const offset = 24 + frame * 20;
+    const entry = {
+      recordOffset: view.getUint32(offset, true),
+      recordBytes: view.getUint32(offset + 4, true),
+      delayMs: view.getUint16(offset + 8, true),
+      kind: view.getUint8(offset + 10),
+      indexBits: view.getUint8(offset + 11),
+      paletteCount: view.getUint16(offset + 12, true),
+      rowCount: view.getUint16(offset + 14, true),
+    };
+    if (view.getUint32(offset + 16, true) !== 0 || entry.recordOffset !== recordOffset ||
+        entry.recordOffset > fileBytes || entry.recordBytes > fileBytes - entry.recordOffset ||
+        entry.delayMs < 20 || entry.kind > 2 || (frame === 0 && entry.kind !== 0)) {
+      throw new Error("The NBIF v2 frame directory is invalid.");
+    }
+    if (entry.kind === 2) {
+      if (entry.recordBytes !== 0 || entry.rowCount !== 0 || entry.paletteCount !== 0 || entry.indexBits !== 0) {
+        throw new Error("The NBIF v2 hold frame is invalid.");
+      }
+    } else if (entry.rowCount < 1 || entry.rowCount > height || entry.paletteCount > 256 ||
+        (entry.paletteCount === 0 && entry.indexBits !== 0) ||
+        (entry.paletteCount > 0 && entry.indexBits !== (entry.paletteCount <= 2 ? 1 : entry.paletteCount <= 4 ? 2 : entry.paletteCount <= 16 ? 4 : 8)) ||
+        entry.recordBytes < entry.paletteCount * 2 + entry.rowCount * 6 ||
+        (entry.kind === 0 && entry.rowCount !== height)) {
+      throw new Error("The NBIF v2 frame directory is invalid.");
+    }
+    recordOffset += entry.recordBytes;
+    summedDuration += entry.delayMs;
+    entries.push(entry);
+  }
+  if (recordOffset !== fileBytes || summedDuration !== durationMs) throw new Error("The NBIF v2 animation length or duration is invalid.");
+
+  const frames = [];
+  let previousPixels = null;
+  for (const entry of entries) {
+    let pixels;
+    if (entry.kind === 2) {
+      if (!previousPixels) throw new Error("The NBIF v2 animation starts without a keyframe.");
+      pixels = new Uint16Array(previousPixels);
+    } else {
+      const palette = [];
+      const paletteSet = new Set();
+      let cursor = entry.recordOffset;
+      for (let index = 0; index < entry.paletteCount; index += 1) {
+        const color = view.getUint16(cursor + index * 2, true);
+        if (paletteSet.has(color)) throw new Error("The NBIF v2 palette contains duplicate colors.");
+        paletteSet.add(color);
+        palette.push(color);
+      }
+      cursor += entry.paletteCount * 2;
+      if (entry.kind === 0) pixels = new Uint16Array(width * height);
+      else {
+        if (!previousPixels) throw new Error("The NBIF v2 animation starts without a keyframe.");
+        pixels = new Uint16Array(previousPixels);
+      }
+      let previousY = -1;
+      for (let rowIndex = 0; rowIndex < entry.rowCount; rowIndex += 1) {
+        const recordEnd = entry.recordOffset + entry.recordBytes;
+        if (cursor + 6 > recordEnd) throw new Error("The NBIF v2 row header is truncated.");
+        const y = view.getUint8(cursor);
+        const x = view.getUint8(cursor + 1);
+        const spanWidth = view.getUint8(cursor + 2);
+        const codec = view.getUint8(cursor + 3);
+        const encodedBytes = view.getUint16(cursor + 4, true);
+        cursor += 6;
+        if (y >= height || y <= previousY || spanWidth < 1 || spanWidth > width || x + spanWidth > width ||
+            encodedBytes > 480 || cursor + encodedBytes > recordEnd ||
+            (entry.kind === 0 && (x !== 0 || spanWidth !== width || y !== rowIndex))) {
+          throw new Error("The NBIF v2 row bounds are invalid.");
+        }
+        const values = decodeAnimationRow(view, cursor, cursor + encodedBytes, spanWidth, codec, palette, entry.indexBits);
+        pixels.set(values, y * width + x);
+        cursor += encodedBytes;
+        previousY = y;
+      }
+      if (cursor !== entry.recordOffset + entry.recordBytes) throw new Error("The NBIF v2 frame record has trailing data.");
+    }
+    previousPixels = pixels;
+    frames.push({ image: animationImage(pixels, width, height), delayMs: entry.delayMs });
+  }
+  return frames;
+}
+
+function decodeAnimationRow(view, start, end, width, codec, palette, indexBits) {
+  const pixels = new Uint16Array(width);
+  if (codec === 0) {
+    if (end - start !== width * 2) throw new Error("The NBIF v2 raw row length is invalid.");
+    for (let index = 0; index < width; index += 1) pixels[index] = view.getUint16(start + index * 2, true);
+    return pixels;
+  }
+  if (codec === 2) {
+    if (palette.length === 0 || indexBits === 0 || end - start !== Math.ceil(width * indexBits / 8)) {
+      throw new Error("The NBIF v2 packed row length is invalid.");
+    }
+    let bitOffset = 0;
+    for (let index = 0; index < width; index += 1) {
+      let paletteIndex = 0;
+      for (let bit = 0; bit < indexBits; bit += 1) {
+        paletteIndex = (paletteIndex << 1) | ((view.getUint8(start + (bitOffset >> 3)) >> (7 - (bitOffset & 7))) & 1);
+        bitOffset += 1;
+      }
+      if (paletteIndex >= palette.length) throw new Error("The NBIF v2 row uses an invalid palette index.");
+      pixels[index] = palette[paletteIndex];
+    }
+    const paddingBits = (end - start) * 8 - width * indexBits;
+    if (paddingBits && (view.getUint8(end - 1) & ((1 << paddingBits) - 1))) throw new Error("The NBIF v2 packed row padding is invalid.");
+    return pixels;
+  }
+  if (codec !== 1 && codec !== 3) throw new Error("The NBIF v2 row codec is unsupported.");
+  const indexed = codec === 3;
+  if (indexed && palette.length === 0) throw new Error("The NBIF v2 indexed row has no palette.");
+  let input = start;
+  let output = 0;
+  while (input < end) {
+    const control = view.getUint8(input++);
+    const count = (control & 0x7f) + 1;
+    if (output + count > width) throw new Error("The NBIF v2 run exceeds its row span.");
+    if (control & 0x80) {
+      const valueBytes = indexed ? 1 : 2;
+      if (input + valueBytes > end) throw new Error("The NBIF v2 repeated run is truncated.");
+      const value = indexed ? view.getUint8(input) : view.getUint16(input, true);
+      input += valueBytes;
+      const color = indexed ? palette[value] : value;
+      if (color === undefined) throw new Error("The NBIF v2 row uses an invalid palette index.");
+      pixels.fill(color, output, output + count);
+      output += count;
+    } else {
+      const valueBytes = indexed ? 1 : 2;
+      if (input + count * valueBytes > end) throw new Error("The NBIF v2 literal run is truncated.");
+      for (let item = 0; item < count; item += 1) {
+        const value = indexed ? view.getUint8(input) : view.getUint16(input, true);
+        input += valueBytes;
+        const color = indexed ? palette[value] : value;
+        if (color === undefined) throw new Error("The NBIF v2 row uses an invalid palette index.");
+        pixels[output++] = color;
+      }
+    }
+  }
+  if (output !== width) throw new Error("The NBIF v2 row does not fill its span.");
+  return pixels;
 }
 
 function loadCover(url) {
