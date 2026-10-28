@@ -123,6 +123,7 @@ interface FirmwareInboxPort { prepare(binding: Pick<RecoveryCredential, "deviceI
 interface UpdateDeviceControl {
   suspendAndDrain(): Promise<void>;
   holdForMaintenance?(): void;
+  resumeAfterSafePreflightAbort(): void;
   resumeAfterExplicitRun(): void;
   rebindVerifiedAddress?(address: string, resumeScheduler?: boolean): Promise<void>;
 }
@@ -255,6 +256,7 @@ export class FirmwareUpdateService {
     await this.restore();
     if (!this.enter()) throw new Error("A firmware update operation is already in progress.");
     if (this.journalUnavailable) { this.leave(); throw new Error("The protected firmware update journal is unavailable."); }
+    let safeSchedulerResume = false;
     try {
       const candidate = this.candidate;
       if (!candidate || this.state !== "ready" || candidate.id !== candidateId) throw new Error("Prepare firmware again before confirming this update.");
@@ -283,8 +285,15 @@ export class FirmwareUpdateService {
       if (postDrainInfo.bootId !== info.bootId || postDrainInfo.buildId !== info.buildId) {
         throw new Error("The device rebooted or changed build during preflight; prepare and review the candidate again.");
       }
-      await client.pause();
-      if ((await client.status()).applicationRunning) throw new Error("The application did not pause; no firmware was sent.");
+      const postDrainStatus = await client.status();
+      safeSchedulerResume = postDrainStatus.applicationRunning;
+      const postDrainDiagnostics = await client.diagnostics();
+      this.assertPreflight(postDrainInfo, postDrainStatus, postDrainDiagnostics, candidate);
+      if (postDrainStatus.applicationRunning) {
+        safeSchedulerResume = false;
+        await client.pause();
+        if ((await client.status()).applicationRunning) throw new Error("The application did not pause; no firmware was sent.");
+      }
 
       this.record = this.recordFor(candidate, credential, postDrainInfo, "uploading", true);
       await this.persist();
@@ -322,10 +331,15 @@ export class FirmwareUpdateService {
         this.candidatePreparedAt = 0;
         this.record = { ...this.record, state: "outcomeUnknown" };
         try { await this.persist(); } catch { /* Keep the in-memory job non-replayable. */ }
-      } else if (this.state !== "ready" && this.state !== "idle") {
-        this.state = "rejected";
-        this.candidate = null;
-        this.candidatePreparedAt = 0;
+      } else {
+        if (safeSchedulerResume) {
+          try { this.options.device.resumeAfterSafePreflightAbort(); } catch { /* Keep OTA blocked if the scheduler cannot be restored safely. */ }
+        }
+        if (this.state !== "ready" && this.state !== "idle") {
+          this.state = "rejected";
+          this.candidate = null;
+          this.candidatePreparedAt = 0;
+        }
       }
       const safeError = safeUpdateError(error, "Preflight failed. No automatic firmware retry or application restart was attempted.");
       this.detailMessage = safeError.message;
@@ -526,7 +540,7 @@ export class FirmwareUpdateService {
   }
 
   private assertPreflight(info: MaintenanceInfo, status: MaintenanceStatus, diagnostics: MaintenanceDiagnostics, candidate: PreparedFirmwareCandidate): void {
-    if (status.pendingWifi || status.volatileWifi || !status.recoveryApRunning || !status.configurationLoaded || !status.applicationRunning) {
+    if (status.pendingWifi || status.volatileWifi || !status.recoveryApRunning || !status.configurationLoaded) {
       throw new Error("The device is not in a stable maintenance-ready state.");
     }
     if (diagnostics.freeHeapBytes < candidate.manifest.minimumResources.minimumFreeHeapBytes ||

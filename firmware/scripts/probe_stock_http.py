@@ -59,14 +59,25 @@ struct Digest : ContentDigest {
 constexpr std::uint32_t COVER_TRACK_BYTES = 1026;
 struct Startup {
     bool paused = true;
+    bool identity = true;
     bool authorized(std::string_view auth) { return auth == "Bearer recovery-test"; }
+    bool identityValid() { return identity; }
     bool applicationPaused() { return paused; }
 };
 struct Auth { bool isAuthorized(std::string_view auth) { return auth == "Bearer pairing-test"; } };
+struct EspRuntime {
+    std::uint32_t flashBytes = OTA_FLASH_BYTES;
+    bool flashConfigValid = true;
+    std::uint32_t getFlashChipRealSize() { return flashBytes; }
+    bool checkFlashConfig(bool) { return flashConfigValid; }
+};
+EspRuntime ESP;
 class DeviceHttpServer {
 public:
     struct Diagnostics { unsigned uploadsStarted = 0, uploadsCompleted = 0; } diagnostics_;
     UploadStorage storage_; Startup startup_; Auth authenticator_;
+    std::string_view buildId_ = "probe-build", profile_ = "probe-profile";
+    std::string recoveryIdentityFingerprint_ = std::string(64,'a');
     Sink maintenanceOta_, stockRestoreOta_;
     Transfer transfer_{storage_}, maintenanceTransfer_{maintenanceOta_}, stockRestoreTransfer_{stockRestoreOta_};
     Transfer* activeTransfer_ = &transfer_;
@@ -129,6 +140,24 @@ int main() {
         assert(allowed.diagnostics_.uploadsStarted == 1 && allowed.diagnostics_.uploadsCompleted == 1 && !allowed.uploadActive_);
     } else assert(allowed.status == 409 && !allowed.readingBody_);
     assert(allowed.storage_.selections == 0 && allowed.storage_.begins == 0);
+    for (unsigned fault=0;fault<5;++fault) {
+        DeviceHttpServer denied;
+        if (fault == 0) denied.startup_.identity = false;
+        if (fault == 1) denied.buildId_ = {};
+        if (fault == 2) denied.profile_ = {};
+        if (fault == 3) denied.recoveryIdentityFingerprint_.resize(63);
+        if (fault == 4) ESP.flashConfigValid = false;
+        denied.request(request("/maintenance/v1/firmware"));
+        assert(denied.status == 409 && !denied.readingBody_);
+        assert(denied.maintenanceOta_.begins == 0 && denied.storage_.begins == 0);
+    }
+    ESP.flashConfigValid = true;
+    DeviceHttpServer wrongFlash;
+    ESP.flashBytes = OTA_FLASH_BYTES - 1;
+    wrongFlash.request(request("/maintenance/v1/firmware"));
+    assert(wrongFlash.status == 409 && !wrongFlash.readingBody_);
+    assert(wrongFlash.maintenanceOta_.begins == 0 && wrongFlash.storage_.begins == 0);
+    ESP.flashBytes = OTA_FLASH_BYTES;
     for (unsigned fault=0;fault<6;++fault) {
         DeviceHttpServer denied;
         denied.startup_.paused = fault != 1;

@@ -164,7 +164,7 @@ async function protectWindowsInbox(directory: string, files: readonly string[]):
     "$sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value;",
     "if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $allowed -notcontains $sid) { exit 23 } } }",
     "exit 0",
-  ].join(" ");
+  ].join("\n");
   try {
     await execFile("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", audit], {
       windowsHide: true, timeout: 5_000, env: { ...process.env, NEONBYTE_INBOX_DIRECTORY: directory, NEONBYTE_INBOX_FILES: files.join(String.fromCharCode(31)) },

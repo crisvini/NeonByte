@@ -139,6 +139,14 @@ export class DeviceIntegration {
   }
 
   resumeAfterExplicitRun(): void {
+    this.releaseMaintenanceHold();
+  }
+
+  resumeAfterSafePreflightAbort(): void {
+    this.releaseMaintenanceHold();
+  }
+
+  private releaseMaintenanceHold(): void {
     this.maintenanceHeld = false;
     if (!this.closed && this.config?.enabled && !this.scheduler) this.startScheduler(this.config);
   }

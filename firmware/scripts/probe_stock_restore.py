@@ -49,6 +49,8 @@ def main():
     repository = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stockImage", type=Path)
+    parser.add_argument("--candidate-image", type=Path,
+                        help="Optional combined image to check against the pinned stock Updater header gate")
     parser.add_argument("--framework", type=Path, default=Path.home() / ".platformio/packages/framework-arduinoespressif8266")
     parser.add_argument("--current-sketch-bytes", type=int, default=362960,
                         help="Hypothetical running length for provisional 4m3m geometry only")
@@ -95,7 +97,7 @@ struct Source : neonbyte::ImageSource {
 };
 ''' + extractFunction(updater, "bool UpdaterClass::_verifyEnd()") + r'''
 int main(int argc, char** argv) {
-    if (argc != 3) return 2;
+    if (argc < 3 || argc > 4) return 2;
     std::ifstream input(argv[1],std::ios::binary);
     bytes.assign(std::istreambuf_iterator<char>(input),{});
     const auto current = static_cast<uint32_t>(std::stoul(argv[2]));
@@ -113,7 +115,25 @@ int main(int argc, char** argv) {
                 "\"fitsHypothetical4m3m\":%s,\"stagingStart\":%u,\"stagingEnd\":%u}\n",
                 coreAccepts?"true":"false",structure?"true":"false",modernCrc?"true":"false",
                 fits?"true":"false",bounds.start,bounds.end);
-    return coreAccepts && !structure && !modernCrc && fits ? 0 : 1;
+    const bool stockRestorationAccepted = coreAccepts && !structure && !modernCrc && fits;
+    if (argc == 4) {
+        std::ifstream candidateInput(argv[3],std::ios::binary);
+        std::vector<uint8_t> candidateBytes(std::istreambuf_iterator<char>(candidateInput),{});
+        if (candidateBytes.empty()) return 2;
+        bytes = std::move(candidateBytes);
+        UpdaterClass candidateUpdater;
+        Source candidate;
+        const bool candidateHeaderAccepted = candidateUpdater._verifyEnd();
+        const bool candidateStructure = neonbyte::validateEsp8266Image(candidate);
+        const bool candidateCrc = neonbyte::validateArduinoImageCrc(candidate);
+        const bool candidateFitsLegacyEnvelope = candidate.size() <= 0xff000U;
+        std::printf("{\"manualInstallCandidate\":{\"bytes\":%u,\"stockUpdaterHeaderAccepts\":%s,"
+                    "\"modernStructureAccepts\":%s,\"modernCrcAccepts\":%s,\"fitsLegacyEnvelope\":%s}}\n",
+                    candidate.size(),candidateHeaderAccepted?"true":"false",candidateStructure?"true":"false",
+                    candidateCrc?"true":"false",candidateFitsLegacyEnvelope?"true":"false");
+        return stockRestorationAccepted && candidateHeaderAccepted && candidateStructure && candidateCrc && candidateFitsLegacyEnvelope ? 0 : 1;
+    }
+    return stockRestorationAccepted ? 0 : 1;
 }
 '''
     with tempfile.TemporaryDirectory(prefix="neonbyte-stock-restore-probe-") as directory:
@@ -125,9 +145,15 @@ int main(int argc, char** argv) {
                         str(code), *(str(repository / "firmware/src" / (name + ".cpp"))
                                      for name in ("firmware_image", "ota_staging", "http_headers", "transfer", "stock_restore")),
                         "-o", str(binary)], check=True)
-        completed = subprocess.run([str(binary), str(args.stockImage.resolve()), str(args.current_sketch_bytes)],
+        command = [str(binary), str(args.stockImage.resolve()), str(args.current_sketch_bytes)]
+        if args.candidate_image:
+            command.append(str(args.candidate_image.resolve()))
+        completed = subprocess.run(command,
                                    check=True, capture_output=True, text=True)
-        result["hostProbe"] = json.loads(completed.stdout)
+        probeLines = completed.stdout.splitlines()
+        result["hostProbe"] = json.loads(probeLines[0])
+        if args.candidate_image:
+            result["manualInstallCandidate"] = json.loads(probeLines[1])["manualInstallCandidate"]
         subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-Wall", "-Wextra", "-Werror", *sanitizerFlags,
                         "-I" + str(repository / "firmware/include"), str(repository / "firmware/scripts/validate_stock_transaction.cpp"),
                         *(str(repository / "firmware/src" / (name + ".cpp"))

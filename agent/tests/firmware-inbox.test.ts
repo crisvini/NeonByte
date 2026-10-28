@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FirmwareInbox, type FirmwareManifest } from "../src/device/firmware-inbox.js";
 import type { RecoveryCredential } from "../src/device/recovery-store.js";
+import { restrictWindowsAcl } from "./windows-acl.js";
 
 const binding: Pick<RecoveryCredential, "deviceId" | "profile" | "recoveryIdentityFingerprint"> = {
   deviceId: "esp8266-a1b2c3", profile: "esp8266-dio40-4mb", recoveryIdentityFingerprint: "a".repeat(64),
@@ -107,6 +108,7 @@ test("local inbox permissions are restricted and candidate preparation never wat
   const bytes = imageBytes();
   await writeFile(join(directory, "firmware.bin"), bytes, { mode: 0o600 });
   await writeFile(join(directory, "manifest.json"), JSON.stringify(manifest(bytes)), { mode: 0o600 });
+  for (const path of [directory, join(directory, "firmware.bin"), join(directory, "manifest.json")]) restrictWindowsAcl(path);
   const candidate = await new FirmwareInbox({ directory }).prepare(binding);
   assert.equal(candidate.fileName, "firmware.bin");
   assert.deepEqual((await readdir(directory)).sort(), ["firmware.bin", "manifest.json"]);

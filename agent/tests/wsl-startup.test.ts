@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
-test("WSL launcher uses explicit paths, records output, and propagates failures", async () => {
+test("WSL launcher uses explicit paths, records output, and propagates failures", {
+  skip: process.platform === "win32" ? "The WSL launcher is a POSIX shell script" : false,
+}, async () => {
   const base = await mkdtemp(join(tmpdir(), "neonbyte startup "));
   try {
     const root = join(base, "checkout");
