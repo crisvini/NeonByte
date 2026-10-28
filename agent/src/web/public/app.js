@@ -291,7 +291,7 @@ function decodeAnimationV2(bytes, view) {
   const durationMs = view.getUint32(12, true);
   const fileBytes = view.getUint32(16, true);
   if (view.getUint8(5) !== 0 || view.getUint32(20, true) !== 0 || width !== DISPLAY_SIZE || height !== DISPLAY_SIZE ||
-      frameCount < 1 || frameCount > 20 || fileBytes > 2359296 || fileBytes !== bytes.byteLength ||
+      frameCount < 1 || frameCount > 60 || fileBytes > 2359296 || fileBytes !== bytes.byteLength ||
       bytes.byteLength < 24 + frameCount * 20 || durationMs > 30000) {
     throw new Error("The NBIF v2 animation header is invalid.");
   }

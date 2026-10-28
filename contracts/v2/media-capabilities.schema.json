@@ -9,7 +9,7 @@
     "formats": { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "const": "nbif-v1" }, { "const": "nbif-v2" }], "items": false },
     "width": { "const": 240 },
     "height": { "const": 240 },
-    "maxFrames": { "const": 20 },
+    "maxFrames": { "type": "integer", "minimum": 1, "maximum": 60 },
     "maxDurationMs": { "const": 30000 },
     "maxEncodedBytes": { "type": "integer", "minimum": 1, "maximum": 2359296 },
     "maxChunkBytes": { "type": "integer", "minimum": 1, "maximum": 1024 },

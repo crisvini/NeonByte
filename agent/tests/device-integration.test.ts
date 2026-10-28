@@ -14,7 +14,7 @@ const poller = () => new PlaybackPoller({ provider: { getCurrentPlayback: async 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 test("insufficient converted storage is visible while heartbeats continue and recovers when space is available", async () => {
-  const asset = convertGifToAnimation(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64"));
+  const asset = convertGifToAnimation(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64"));
   let freeStorageBytes = 0, uploads = 0, heartbeats = 0;
   const device = new DeviceIntegration({ store: new MemoryStore(), poller: poller(), intervalMs: 10,
     fetchDevice: async (input, init) => {

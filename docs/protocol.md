@@ -105,6 +105,13 @@ animation. The 32 KiB reserve is in addition to the candidate and installed file
 HTTP 507 `insufficient_storage` means the candidate cannot be admitted safely and
 uses the error body in [`contracts/v2/error.schema.json`](../contracts/v2/error.schema.json).
 
+The v2 `maxFrames` capability is between 1 and 60; older firmware may advertise
+20. This limit applies to v2 transfers. NBIF v1 remains capped at 20 frames.
+The agent compares frame count, duration, encoded size, and storage reserve with
+the advertised values before opening an upload. An explicit capability-route
+404 permits a v1 fallback only for an animation of at most 20 frames; an
+over-limit animation is rejected without truncation or fallback.
+
 The ESP8266 profile accepts `application/octet-stream`, an exact nonzero `Content-Length`, and `X-Content-SHA256`: lowercase hexadecimal SHA-256 of the complete body. These limits describe the local implementation, not measured hardware performance. It rejects chunked transfers, `Expect`, duplicate sensitive headers, and incomplete input. Uploads use candidate files; checksum/format validation occurs after close and before atomic rename. Failed uploads preserve the installed asset.
 
 - Cover body: `NBIC`, version `1` (u8), width `240` and height `240` (u16 little-endian), followed by 115,200 little-endian RGB565 bytes. Example header bytes: `4e 42 49 43 01 f0 00 f0 00`.

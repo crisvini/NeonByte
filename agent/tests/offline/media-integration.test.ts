@@ -46,7 +46,7 @@ test("dashboard mode, decoded artwork, and GIF reach the native device and retry
   await waitFor(() => harness.requests.some((r) => r.path === "/api/v1/mode"));
   assert.equal((await harness.state()).scene, "gif");
   await harness.fault("promote", false);
-  const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+  const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64");
   assert.equal((await fetch(`${origin}/api/animation`, { method: "POST", headers: { Origin: origin, "Content-Type": "image/gif" }, body: gif })).status, 201);
   await waitFor(() => device.status.animation.state === "retrying");
   assert.equal((await harness.state()).animationFrames, 0);

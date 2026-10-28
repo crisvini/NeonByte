@@ -111,16 +111,17 @@ interrupted replacement, zero-capacity replacement and process-restart coverage.
 
 The panel now explicitly describes 8 MB as the original GIF input limit on the
 Windows agent: exactly 8 MiB, or 8,388,608 bytes. It is not a device animation
-budget. Conversion keeps the centered crop to 240 by 240 RGB565, up to 20 frames
-and 30,000 ms. Each output frame needs 115,200 pixel bytes plus a two-byte delay.
-NBIF has an 11-byte header, so its maximum is 2,304,051 bytes. A tiny compressed
-original can therefore produce a large converted file. Files over the frame limit
-are rejected; this change does not silently discard frames or increase limits.
+budget. Conversion keeps the centered crop to 240 by 240 RGB565, up to 60 NBIF v2
+frames and 30,000 ms. Each output frame needs 115,200 pixel bytes plus a two-byte delay.
+NBIF v1 has an 11-byte header and a maximum file size of 2,304,051 bytes; NBIF v2
+retains its 2,359,296-byte encoded-file limit. A tiny compressed original can
+therefore produce a large converted file. Files over the advertised device frame
+limit are rejected; conversion does not silently discard frames.
 
 Decoded logical/frame pixels remain limited to 1,048,576 per canvas/descriptor and
-4,194,304 across descriptors. Timing normalization, SHA-256 validation, atomic
-replacement and firmware storage admission are unchanged. No runtime dependency
-is added.
+16,777,216 source descriptor pixels per v2 conversion (4,194,304 for the v1 path).
+Timing normalization, SHA-256 validation, atomic replacement and firmware storage
+admission are unchanged. No runtime dependency is added.
 
 Before uploading an animation the agent checks its converted length against the
 device's reported free storage, retaining the existing 32 KiB staging reserve and

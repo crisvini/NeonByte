@@ -88,17 +88,17 @@ function palette256(): RgbColor[] {
   ] as const);
 }
 
-function createFrameIndexes(colorCount: number): Uint8Array[] {
+function createFrameIndexes(colorCount: number, frameCount = FRAME_COUNT): Uint8Array[] {
   const frames: Uint8Array[] = [];
   let state = 0x7f4a7c15;
-  for (let frameIndex = 0; frameIndex < FRAME_COUNT; frameIndex += 1) {
+  for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
     const frame = new Uint8Array(FRAME_BYTES / 2);
     for (let y = 0; y < DISPLAY_HEIGHT; y += 1) {
       for (let x = 0; x < DISPLAY_WIDTH; x += 1) {
         let index: number;
         if (colorCount === 4) {
           index = 0;
-          const objectX = 14 + frameIndex * 12;
+          const objectX = 14 + (frameIndex * 12) % (DISPLAY_WIDTH - 30);
           if (x >= objectX && x < objectX + 16 && y >= 90 && y < 106) {
             index = 1 + ((x + y + frameIndex) % 3);
           }
@@ -120,9 +120,9 @@ function createFrameIndexes(colorCount: number): Uint8Array[] {
   return frames;
 }
 
-function createStaticIndexes(): Uint8Array[] {
+function createStaticIndexes(frameCount = FRAME_COUNT): Uint8Array[] {
   const first = new Uint8Array(FRAME_BYTES / 2).fill(1);
-  return Array.from({ length: FRAME_COUNT }, () => first.slice());
+  return Array.from({ length: frameCount }, () => first.slice());
 }
 
 function bitWriter(): BitWriter {
@@ -200,7 +200,7 @@ function gifSubBlocks(bytes: Uint8Array): Buffer {
   return Buffer.concat(chunks);
 }
 
-function buildGif(palette: readonly RgbColor[], indexedFrames: readonly Uint8Array[]): Buffer {
+function buildGif(palette: readonly RgbColor[], indexedFrames: readonly Uint8Array[], delayMs = FRAME_DELAY_MS): Buffer {
   const tableBits = Math.max(1, Math.ceil(Math.log2(Math.max(2, palette.length))));
   const tableEntries = 1 << tableBits;
   const table = Buffer.alloc(tableEntries * 3);
@@ -222,7 +222,11 @@ function buildGif(palette: readonly RgbColor[], indexedFrames: readonly Uint8Arr
     if (frame.length !== DISPLAY_WIDTH * DISPLAY_HEIGHT || frame.some((index) => index >= tableEntries)) {
       throw new Error("Benchmark frame is outside the generated GIF canvas or palette.");
     }
-    const graphicsControl = Buffer.from([0x21, 0xf9, 4, 4, FRAME_DELAY_MS / 10, 0, 0, 0]);
+    if (!Number.isInteger(delayMs) || delayMs % 10 !== 0 || delayMs < 0 || delayMs > 655_350) {
+      throw new Error("Benchmark GIF delays must be nonnegative multiples of 10 ms within the GIF range.");
+    }
+    const graphicsControl = Buffer.from([0x21, 0xf9, 4, 4, 0, 0, 0, 0]);
+    graphicsControl.writeUInt16LE(delayMs / 10, 4);
     const descriptor = Buffer.alloc(10);
     descriptor[0] = 0x2c;
     descriptor.writeUInt16LE(DISPLAY_WIDTH, 5);
@@ -261,6 +265,49 @@ export function buildRepresentativeCorpus(): BenchmarkScenario[] {
     frames: rgb565Frames(palette, frames),
     delaysMs: Array(FRAME_COUNT).fill(FRAME_DELAY_MS) as number[],
   }));
+}
+
+export type FrameCountScenario = "static-holds" | "small-motion" | "full-motion" | "scattered-changes" | "high-entropy";
+
+function createScatteredIndexes(frameCount: number): Uint8Array[] {
+  let state = 0x6d2b79f5;
+  return Array.from({ length: frameCount }, (_, frameIndex) => {
+    const frame = new Uint8Array(DISPLAY_WIDTH * DISPLAY_HEIGHT);
+    for (let change = 0; change < 96; change += 1) {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      const pixel = (state >>> 0) % frame.length;
+      frame[pixel] = 1 + ((frameIndex + change) % 3);
+    }
+    return frame;
+  });
+}
+
+export function buildFrameCountFixture(
+  frameCount: number,
+  scenario: FrameCountScenario,
+  delayMs = 40,
+): BenchmarkScenario {
+  if (!Number.isInteger(frameCount) || frameCount < 1 || frameCount > 61) {
+    throw new RangeError("Benchmark fixtures support 1 to 61 frames.");
+  }
+  const colors = palette256();
+  const palette = scenario === "high-entropy" ? colors
+    : scenario === "full-motion" ? colors.slice(0, 64)
+      : [colors[0]!, colors[255]!, colors[51]!, colors[204]!];
+  const indexedFrames = scenario === "static-holds" ? createStaticIndexes(frameCount)
+    : scenario === "small-motion" ? createFrameIndexes(4, frameCount)
+      : scenario === "full-motion" ? createFrameIndexes(64, frameCount)
+        : scenario === "scattered-changes" ? createScatteredIndexes(frameCount)
+          : createFrameIndexes(256, frameCount);
+  const frames = rgb565Frames(palette, indexedFrames);
+  return {
+    name: `${scenario}-${frameCount}`,
+    gifBytes: buildGif(palette, indexedFrames, delayMs),
+    frames,
+    delaysMs: Array(frameCount).fill(delayMs) as number[],
+  };
 }
 
 function uniquePalette(frame: Buffer): { colors: number[]; lookup: Map<number, number> } | null {

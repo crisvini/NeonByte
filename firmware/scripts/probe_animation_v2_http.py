@@ -163,6 +163,18 @@ public:
 private:
     const UploadStorage& storage_;
 };
+class InstalledSource final : public AnimationSource {
+public:
+    explicit InstalledSource(const UploadStorage& storage) : storage_(storage) {}
+    std::uint32_t size() const override { return storage_.animationSize(); }
+    bool readAt(std::uint32_t offset, std::uint8_t* out, std::size_t length) const override {
+        largestRead = std::max(largestRead, length);
+        return storage_.readAnimationAt(offset, out, length);
+    }
+    mutable std::size_t largestRead = 0;
+private:
+    const UploadStorage& storage_;
+};
 class Digest final : public ContentDigest {
 public:
     Digest() : context_(EVP_MD_CTX_new()) { assert(context_); reset(); }
@@ -259,16 +271,23 @@ std::vector<std::uint8_t> makeV2() {
     std::vector<std::uint8_t> key; append16(key,0xf800);
     for (unsigned y=0;y<240;++y) appendRow(key,static_cast<std::uint8_t>(y),0,240,{0xff,0,0xef,0});
     std::vector<std::uint8_t> delta; append16(delta,0x07e0); appendRow(delta,10,20,2,{0x81,0});
-    const auto data=NBIF_V2_HEADER_BYTES+2*NBIF_V2_DIRECTORY_ENTRY_BYTES;
+    constexpr std::uint16_t frameCount = NBIF_V2_MAX_FRAMES;
+    const auto data=NBIF_V2_HEADER_BYTES+frameCount*NBIF_V2_DIRECTORY_ENTRY_BYTES;
     const auto deltaOffset=data+key.size(); const auto total=deltaOffset+delta.size();
     std::vector<std::uint8_t> bytes(total,0);
-    bytes[0]='N';bytes[1]='B';bytes[2]='I';bytes[3]='F';bytes[4]=2;bytes[6]=240;bytes[8]=240;bytes[10]=2;
-    write32(bytes,12,100);write32(bytes,16,total);
+    bytes[0]='N';bytes[1]='B';bytes[2]='I';bytes[3]='F';bytes[4]=2;bytes[6]=240;bytes[8]=240;bytes[10]=frameCount;
+    write32(bytes,12,frameCount*40);write32(bytes,16,total);
     auto entry=[&](std::size_t at,std::uint32_t offset,std::uint32_t length,std::uint16_t delay,std::uint8_t kind,std::uint16_t rows){
         write32(bytes,at,offset);write32(bytes,at+4,length);bytes[at+8]=delay;bytes[at+9]=delay>>8;bytes[at+10]=kind;
         bytes[at+11]=1;bytes[at+12]=1;bytes[at+14]=static_cast<std::uint8_t>(rows);bytes[at+15]=static_cast<std::uint8_t>(rows>>8);
     };
-    entry(24,data,key.size(),40,0,240);entry(44,deltaOffset,delta.size(),60,1,1);
+    entry(NBIF_V2_HEADER_BYTES,data,key.size(),40,0,240);
+    entry(NBIF_V2_HEADER_BYTES+NBIF_V2_DIRECTORY_ENTRY_BYTES,deltaOffset,delta.size(),40,1,1);
+    for (std::uint16_t index=2;index<frameCount;++index) {
+        const auto at=NBIF_V2_HEADER_BYTES+index*NBIF_V2_DIRECTORY_ENTRY_BYTES;
+        write32(bytes,at,static_cast<std::uint32_t>(total));
+        bytes[at+8]=40;bytes[at+10]=2;
+    }
     std::copy(key.begin(),key.end(),bytes.begin()+data);std::copy(delta.begin(),delta.end(),bytes.begin()+deltaOffset);
     return bytes;
 }
@@ -313,6 +332,7 @@ void validRouteUploadValidatesAndPromotesOnlyAtBoundary() {
     server.request("GET","/api/v2/media-capabilities",{},0,{}, {},"Bearer wrong");assert(server.status==401);
     server.request("GET","/api/v2/media-capabilities");assert(server.status==200);
     auto capabilities=server.response_.bodyView();assert(capabilities.find("nbif-v1")!=capabilities.npos&&capabilities.find("nbif-v2")!=capabilities.npos);
+    assert(capabilities.find("\"maxFrames\":60")!=capabilities.npos);
     const auto expected=makeV2();unsigned cooperativeTicks=0;uploadBytes(server,expected,clock,scenes,cooperativeTicks);
     assert(server.animationUpload_.state()==AnimationUploadState::Verifying&&server.storage_.installed==std::vector<std::uint8_t>({'N','B','I','F',1}));
     const auto uploadId=server.animationUpload_.uploadId();char path[64];std::snprintf(path,sizeof(path),"/api/v2/animation/uploads/%08x",uploadId);
@@ -332,6 +352,19 @@ void validRouteUploadValidatesAndPromotesOnlyAtBoundary() {
     assert(server.storage_.promoteAnimationCandidateAtBoundary());
     server.request("GET",path);assert(server.status==200&&server.response_.bodyView().find("\"state\":\"installed\"")!=server.response_.bodyView().npos);
     assert(server.storage_.installed==expected);
+    InstalledSource installed(server.storage_);
+    std::array<std::uint8_t,NBIF_V2_ROW_BUFFER_BYTES> output{}, encoded{};
+    AnimationDecoder playback(installed,output.data(),output.size(),encoded.data(),encoded.size());
+    AnimationV2Metadata playbackMetadata{};assert(playback.open(playbackMetadata));
+    assert(playbackMetadata.frameCount==NBIF_V2_MAX_FRAMES);
+    unsigned playbackFrames=0;
+    for(;;){const auto status=playback.step();
+        if(status==AnimationDecodeStatus::AnimationComplete)break;
+        assert(status!=AnimationDecodeStatus::Error);
+        if(status==AnimationDecodeStatus::RowReady)playback.consumeRow();
+        if(status==AnimationDecodeStatus::FrameComplete)++playbackFrames;
+    }
+    assert(playbackFrames==NBIF_V2_MAX_FRAMES&&installed.largestRead<=NBIF_V2_ROW_BUFFER_BYTES);
 }
 void checksumMismatchAndMalformedV2PreserveCurrentAnimation() {
     DeviceHttpServer badHash;badHash.storage_.installed={'N','B','I','F',1};const auto old=badHash.storage_.installed;

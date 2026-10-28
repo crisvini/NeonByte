@@ -1,6 +1,6 @@
 # NBIF v2: 60-Frame Feasibility and Proposed Plan
 
-**Date:** 2026-10-28. **Status:** research complete; proposal awaiting maintainer review. Implementation, target compilation, device access, OTA, flash, commits, and merges are not authorized by this document.
+**Date:** 2026-10-28. **Status:** research complete; stages A–C implemented and verified offline under the maintainer's authorization. Offline builds of the two existing ESP8266 profiles were also explicitly authorized and completed. Runtime resource acceptance and physical playback remain pending. Device access, OTA, flash, installation packaging, commits, and merges are not authorized.
 
 **Goal:** accept up to 60 frames through NBIF v2 while preserving source frame count, normalized delays, exact RGB565 output, bounded device memory, and existing NBIF v1/v2 files.
 
@@ -207,41 +207,56 @@ There is a rollout incompatibility in the existing client: it requires `maxFrame
 
 Document `maxFrames` as the v2 transfer capability in this response; legacy v1 remains fixed at 20. Add no fields to closed v1/v2 JSON objects just to report per-format limits. Only an explicit capability `404` permits the existing v1 fallback, and only a valid ≤20-frame legacy copy may be sent. Authentication failures, timeouts, malformed capabilities, or insufficient storage must not trigger fallback.
 
-## 8. Implementation Sequence for Later Approval
+## 8. Implementation Sequence and Execution Status
 
-All tasks below are proposed and unexecuted. Stop after each agreed stage for review of its evidence. Authorization to implement desktop/native code would not authorize target builds or device operations.
+The maintainer authorized stages A–C and compile-only validation of the existing ESP8266 profiles. The results below stop at those boundaries; stage D runtime resource acceptance and stage E physical acceptance remain pending.
 
 ### Stage A: Reproducible offline fixtures and diagnostics
 
-- [ ] Extend the existing animation benchmark/test helpers to cover 20, 48, and 60 frames, static holds, small motion, full changes, scattered changes, high entropy, and loop seams. Record source hashes and preserve original assets outside Git unless redistribution is authorized.
-- [ ] Add regressions for the astronaut's 800 × 600/48 × 40 ms descriptors and RGB565 output; retain Polish Waiting and historical v1/v2 files as controls.
-- [ ] Record per-frame record/row/palette bytes, spans/pixels/windows, decoder steps/reads, and ideal versus actual fake-clock starts. Add all-hold sequences, late HTTP work, loop restart, and scene reentry.
-- [ ] Verify current 20-frame behavior and rejection boundaries before adjusting limits. Add the >480-byte wire-directory case with canaries/sanitizers in both playback and validation modes.
+- [x] Extend GIF and decoder/player coverage to 14, 20, 48, and 60 frames, static holds, small motion, full changes, scattered changes, high entropy, and loop restart. Keep source GIFs outside Git and pin their source hashes.
+- [x] Add optional real-asset regressions for the astronaut's 800 × 600/48 × 40 ms descriptors and RGB565 output, plus Polish Waiting pixel/delay equality against v1 and its prior v2 hash.
+- [x] Record astronaut record, row, palette, span/pixel counts and pixel-bus-only lower bounds below. Exercise all-hold decoding, slow-frame delay behavior, keyframe loop restart, frame-boundary promotion, and heartbeat service during v2 upload/validation with deterministic timestamps. Physical frame starts and display timing remain unmeasured.
+- [x] Verify v1's 20-frame boundary and v2's 60/61 boundary. Exercise a >480-byte wire directory with guarded playback and validation buffers; the 60-frame HTTP upload, validation, promotion, and playback probe also passes ASan/UBSan.
 
 **Exit:** reproducible baseline and explicit evidence for the metadata/scheduling changes; no device claims.
 
 ### Stage B: Desktop conversion and backward-compatible negotiation
 
-- [ ] Introduce bounded per-frame conversion and validation, worker lifecycle, the reviewed source-pixel budget, and optional ≤20-frame legacy output. Keep all original count/delay/color assertions.
-- [ ] Change agent/browser v2 limits to 60 and capabilities validation to accept existing 20-frame firmware. Reject 48/60-frame uploads before `POST` when device maximum is 20.
-- [ ] Update v2 schemas/examples, format/protocol docs, preview/error text, and tests together. Preserve v1 contracts and 404-only fallback.
-- [ ] Test Windows-native peak memory/time and Spotify/heartbeat responsiveness during conversions, including malformed input timeout/cancellation.
+- [x] Introduce bounded per-frame conversion and validation, one active plus one pending worker job, a 10-second deadline, the 16,777,216-pixel v2 source budget, and on-demand ≤20-frame legacy output. Preserve exact count/delay/RGB565 assertions.
+- [x] Change agent/browser v2 limits to 60 and capabilities validation to accept maxima from 1 through 60, including 20-frame firmware. Reject an over-limit asset before `POST` and do not fall back when a capability endpoint responds with an unsupported or invalid result.
+- [x] Update v2 schemas/examples, format/protocol docs, preview/error text, and tests together. Preserve v1 limits and 404-only legacy fallback.
+- [x] Test worker responsiveness, heartbeat service, malformed-input rejection, deadline/cancellation, and bounded queue behavior on the available Linux host. Windows-native memory and latency measurements were unavailable in this environment and are not claimed.
 
 **Exit:** complete 20/48/60-frame assets decode exactly offline; the real astronaut fits the byte limit; older devices remain usable with compatible assets. No firmware build is needed for desktop/native validation.
 
 ### Stage C: Bounded firmware support and timing
 
-- [ ] Extend decoder admission to 60 and stream directory validation through bounded scratch. Start with compact metadata only if the +800-byte total budget and existing resource floors are acceptable; otherwise implement cached current-entry metadata and measure its reads.
-- [ ] Retain both row buffers, palette bounds, upload chunks, reserve, hashes, full candidate verification, and frame-boundary promotion. Review object-size guards against measured sizes.
-- [ ] Add nominal-deadline handling only where Stage A reproduces drift; preserve frame order, deltas, holds, cooperation, and explicit overload reporting. Keep diagnostic state bounded and avoid per-frame logs.
-- [ ] Exercise portable codec, display, upload, and pipeline tests normally and with ASan/UBSan. Run `npm run check` and `npm run test:offline`; verify that existing loopback v1 harness coverage is supplemented by v2 pipeline tests rather than mistaken for a real v2 HTTP adapter test.
+- [x] Extend decoder admission to 60 and validate directory entries sequentially through a 20-byte stack entry. Cache only the current entry; retain caller-owned row buffers. Tests confirm the largest decoder read stays at or below 480 bytes.
+- [x] Retain both row buffers, palette bounds, upload chunks, storage reserve, hashes, full candidate verification, and frame-boundary promotion. The decoder object-size guard remains in place; equivalent offline ESP8266 builds show lower static RAM.
+- [x] Keep the existing delay-from-frame-start scheduling because tests did not establish a benefit from nominal-deadline changes. Preserve order, deltas, holds, cooperation, and restart at the keyframe; report timing limitations below without claiming physical frame rates.
+- [x] Pass portable codec, display, upload, and pipeline tests; run the host offline suite and v2 HTTP pipeline probe normally and with ASan/UBSan. `npm run check` and `npm run test:offline` pass.
 
 **Exit:** all portable checks pass, no overwrite or new large allocation, deterministic compatibility/timing behavior, and documented limits. Target layout/resource acceptance is still pending.
 
-### Stage D: Separately authorized target resource review
+### Stage A–C execution findings
 
-- [ ] Only after explicit build authorization, compile the exact approved existing profile and compare linked RAM/program/stack data and binary guards. Do not assume a board from its product name or alter private credentials.
+The source astronaut GIF is 595,533 bytes, 800 × 600, and has 48 descriptors of 40 ms (1,920 ms total). Its cumulative descriptor area is 8,442,009 pixels, within the v2 desktop budget. The complete v2 file is **229,645 bytes**, below the 2,359,296-byte file limit. The optional real-asset test verifies the source SHA-256, all 48 composed RGB565 frame hashes, and every 40 ms delay. The prior Polish Waiting control also matches its v1 RGB565 frames and 100 ms delays; its v2 output SHA-256 remains `18463a47694680e1fa72b74b1fea74b5687e3b621e8b1a4622314da74b1e8bd8`.
+
+The astronaut's v2 has a 6,868-byte first keyframe (240 full-width rows, 144 palette bytes) and 47 deltas totaling 221,793 record bytes, 7,497 row spans, 6,736 palette bytes, and 513,971 transferred span pixels. Delta frames span 148–172 rows and 8,301–10,592 pixels each. Across the file there are 7,737 row spans and 6,880 palette bytes. At 20 MHz, pixel transfer alone is 46.08 ms for the full keyframe and 6.64–8.47 ms for a delta; the keyframe lower bound already exceeds its 40 ms delay. These calculations exclude row reads, filesystem/decoder work, commands, Wi-Fi, and scheduling, so they do not establish sustained 25 FPS. The current player counts a non-hold frame's delay from its start, prevents a slow render from adding another full delay, and restarts the loop at frame zero; no physical seam or accumulated-drift result is available.
+
+No frame drops, delay rewrites, scheduler changes, whole-frame firmware buffers, or v1 limit increases were introduced. The v2 converter does not create a legacy copy; fallback bytes are generated only on demand for ≤20-frame assets. The full candidate is still hashed and decoded before it can be promoted. The existing 32 KiB storage reserve, 30-second duration limit, 2,359,296-byte file ceiling, 512-byte write/hash chunks, 1,024-byte transfer chunk, and 480-byte row buffers remain in place.
+
+### Stage D: Target resource review
+
+- [x] Compile the two existing offline ESP8266 profiles explicitly authorized for this task and compare linked RAM/program sizes with their equivalent baselines. Do not assume physical board compatibility or alter private credentials.
 - [ ] Review expected runtime memory and the current approved heap/block floors before preparing any deployment proposal. Preserve OTA/maintenance conflicts, staging bounds, and recovery policy.
+
+| Existing profile | Baseline static RAM | Current static RAM | Change | Baseline linked flash | Current linked flash | Current `.bin` |
+|---|---:|---:|---:|---:|---:|---:|
+| `esp8266-provisional` | 46,492 B | 46,160 B | −332 B | 384,935 B | 384,643 B | 388,800 B |
+| `esp8266-integration-check` | 46,492 B | 46,160 B | −332 B | 385,959 B | 385,667 B | 389,824 B |
+
+The matching baseline `.bin` sizes were 389,088 B and 390,112 B respectively, so both current images are 288 B smaller. These compile-time figures compare equivalent local profiles only; they do not measure heap, largest free block, stack headroom, a physical board, or an installable package.
 
 **Exit:** measured target resource delta accepted. Compilation would not authorize an upload, OTA, flash, or physical test.
 
@@ -298,9 +313,11 @@ The more useful long-term limit is **up to 60 frames within independent byte, so
 
 ## 11. Verification and Evidence Boundary
 
-Research used existing functions through ephemeral stdin scripts and arithmetic calculations. No product source, defaults, contracts, tests, `PLANNING.md`, private profile, or original asset was modified. Only this English research document was added. No complete >20-frame v2 artifact or firmware image was generated, and no device/LAN endpoint was contacted.
+The original source GIFs remain outside Git. Tests use source hashes and frame hashes; no full source or generated NBIF asset was added to the repository. No real clock, connected device, LAN endpoint, OTA, flash, credential, private profile, installation package, commit, or merge was used.
 
-`npm run check` passed on Node.js 22.12.0: Markdown lint checked 48 files, language validation passed, root tests passed 11 with one Windows-only skip, and all 132 agent tests passed after build/typecheck. `git diff --check` passed. These checks validate the existing baseline and this document; they do not establish implemented 60-frame support. No native firmware suite, target compilation, Windows-native benchmark, device operation, commit, or merge was run in this research stage.
+`npm run check` passed: Markdown lint checked 48 files with no issues, language checks passed, root tests passed 11 with one Windows-only skip, and agent tests passed 141 with two environment-dependent real-GIF skips. Both real-GIF regressions passed when run with the source files outside Git. `npm run test:offline` passed 25/25 both with and without ASan/UBSan. Portable firmware native tests passed 110/110. The v2 HTTP probe passed a complete 60-frame upload, verification, promotion, and playback path normally and with ASan/UBSan. Both existing ESP8266 profiles compiled offline. Windows-native agent memory/latency measurements and hardware heap/largest-block measurements were unavailable; linked static RAM and program size do not substitute for those runtime measurements.
+
+The historical RAM figures in the original research snapshot above are prior observations, not new runtime measurements. No OTA readiness or physical 25 FPS claim follows from these offline checks.
 
 ## 12. References
 

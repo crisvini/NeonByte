@@ -104,7 +104,7 @@ test("device deadlines scale for validated binary uploads and respect explicit o
 });
 
 test("converted animation requires atomic staging space and reports capacity errors safely", async () => {
-  const asset = convertGifToAnimation(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64"));
+  const asset = convertGifToAnimation(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64"));
   let freeStorageBytes = asset.bytes.length + 32768 - 1;
   let uploadStatus = 204;
   let uploads = 0;

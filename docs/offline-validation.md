@@ -155,7 +155,7 @@ Both existing local compilation-only ESP8266 profiles were rebuilt. PlatformIO r
 
 The enabled profile's fresh Xtensa stack reports include `DeviceHttpServer::tick` 112 bytes, `dispatchJson` 1,152 bytes, `DeviceDisplay::tick` 96 bytes, `ProtocolHandler::handle` 208 bytes, `AnimationReader::open` 80 bytes, and `readFrameChunk` 16 bytes. Frames exclude nested library calls and do not establish a complete stack high-water mark. On the host, GCC 11.4.0 with `-Os -fstack-usage` reports `dispatchOneRequest` 1,216 bytes and `ProtocolHandler::handle` 272 bytes (`dynamic,bounded`); the refreshed host figures are recorded in [firmware-core-review.md](firmware-core-review.md).
 
-Portable code bounds remain explicit: the v1 JSON body limit is 12,288 bytes, HTTP binary chunks and hash steps are 512 bytes, display writes stream 480-byte rows, and the NBIF reader accepts at most 20 frames and 2,304,051 bytes. The host harness verifies these software limits; it does not measure target heap, fragmentation, throughput, or flash behavior.
+Portable code bounds remain explicit: the v1 JSON body limit is 12,288 bytes, HTTP binary chunks and hash steps are 512 bytes, display writes stream 480-byte rows, NBIF v1 remains capped at 20 frames, and the NBIF v2 reader accepts at most 60 frames and 2,359,296 bytes. The host harness verifies these software limits; it does not measure target heap, fragmentation, throughput, or flash behavior.
 
 ### Part 5 Results
 

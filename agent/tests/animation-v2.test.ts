@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  convertGifToAnimation,
   convertGifToAnimationV2,
 } from "../src/media/animation.js";
 import {
@@ -8,7 +9,7 @@ import {
   encodeAnimationV2,
   validateAnimationV2,
 } from "../src/media/animation-encoder.js";
-import { buildRepresentativeCorpus } from "../scripts/benchmark-animation.js";
+import { buildFrameCountFixture, buildRepresentativeCorpus } from "../scripts/benchmark-animation.js";
 
 const WIDTH = 240;
 const HEIGHT = 240;
@@ -28,6 +29,62 @@ test("NBIF v2 exactly reconstructs representative GIF frames and preserves delay
     assert.deepEqual(decoded.delaysMs, scenario.delaysMs, scenario.name);
     assert.equal(asset.frameCount, scenario.frames.length);
   }
+});
+
+test("NBIF v2 preserves exact pixels and 40 ms delays at 20, 48, and 60 frames", () => {
+  const fixtures = [
+    buildFrameCountFixture(14, "scattered-changes"),
+    buildFrameCountFixture(20, "full-motion"),
+    buildFrameCountFixture(48, "small-motion"),
+    buildFrameCountFixture(60, "static-holds"),
+  ];
+  for (const fixture of fixtures) {
+    const asset = convertGifToAnimationV2(fixture.gifBytes);
+    const decoded = decodeAnimationV2(asset.bytes);
+    assert.equal(asset.frameCount, fixture.frames.length, fixture.name);
+    assert.equal(asset.durationMs, fixture.frames.length * 40, fixture.name);
+    assert.deepEqual(decoded.delaysMs, fixture.delaysMs, fixture.name);
+    assert.deepEqual(decoded.frames, fixture.frames, fixture.name);
+    assert.ok(asset.bytes.length <= 2_359_296, fixture.name);
+    if (fixture.frames.length > 20) assert.equal(asset.legacy, undefined, fixture.name);
+  }
+});
+
+test("high-entropy GIF frames convert within the source and output bounds", () => {
+  const fixture = buildFrameCountFixture(2, "high-entropy", 40);
+  const asset = convertGifToAnimationV2(fixture.gifBytes);
+  const decoded = decodeAnimationV2(asset.bytes);
+  assert.equal(asset.frameCount, 2);
+  assert.equal(asset.durationMs, 80);
+  assert.deepEqual(decoded.delaysMs, [40, 40]);
+  assert.deepEqual(decoded.frames, fixture.frames);
+  assert.ok(asset.bytes.length <= 2_359_296);
+});
+
+test("NBIF v1 remains capped at 20 frames and NBIF v2 rejects frame 61", () => {
+  const twenty = buildFrameCountFixture(20, "static-holds");
+  const twentyOne = buildFrameCountFixture(21, "static-holds");
+  const sixtyOne = buildFrameCountFixture(61, "static-holds");
+  assert.equal(convertGifToAnimation(twenty.gifBytes).frameCount, 20);
+  assert.throws(() => convertGifToAnimation(twentyOne.gifBytes), /21 frames.*limit is 20/);
+  assert.throws(() => convertGifToAnimationV2(sixtyOne.gifBytes), /61 frames.*limit is 60/);
+});
+
+test("GIF conversion rejects invalid LZW codes instead of accepting zero-filled frames", () => {
+  const malformed = Buffer.from(buildFrameCountFixture(1, "static-holds").gifBytes);
+  const imageDescriptor = malformed.indexOf(0x2c, 13);
+  assert.ok(imageDescriptor >= 0);
+  const firstDataByte = imageDescriptor + 12;
+  malformed[firstDataByte] = 0xff;
+  assert.throws(() => convertGifToAnimationV2(malformed), /LZW|compressed image data|invalid GIF/i);
+
+  const valid = buildFrameCountFixture(1, "static-holds").gifBytes;
+  assert.throws(() => convertGifToAnimationV2(valid.subarray(0, valid.length - 1)), /trailer|incomplete|GIF/i);
+  const invalidDescriptor = Buffer.from(valid);
+  const descriptorOffset = invalidDescriptor.indexOf(0x2c, 13);
+  invalidDescriptor.writeUInt16LE(240, descriptorOffset + 1);
+  assert.throws(() => convertGifToAnimationV2(invalidDescriptor), /descriptor|bounds/i);
+  assert.throws(() => convertGifToAnimationV2(valid, { maxUploadBytes: valid.length - 1 }), /byte limit/i);
 });
 
 test("NBIF v2 uses exact RGB565 palettes, RLE, deltas, and holds without full frames", () => {

@@ -439,8 +439,9 @@ void DeviceHttpServer::dispatchAnimationV2() {
     if (animationV2Request_ == AnimationV2Request::capabilities) {
         response_ = {}; response_.statusCode = 200; response_.contentType = "application/json";
         const int written = snprintf_P(response_.body.data(),response_.body.size(),PSTR("{\"formats\":[\"nbif-v1\",\"nbif-v2\"],\"width\":240,\"height\":240,"
-            "\"maxFrames\":20,\"maxDurationMs\":30000,\"maxEncodedBytes\":%lu,"
+            "\"maxFrames\":%u,\"maxDurationMs\":30000,\"maxEncodedBytes\":%lu,"
             "\"maxChunkBytes\":%lu,\"reserveBytes\":%lu,\"freeStorageBytes\":%llu}"),
+            static_cast<unsigned>(NBIF_V2_MAX_FRAMES),
             static_cast<unsigned long>(ANIMATION_UPLOAD_MAX_BYTES),
             static_cast<unsigned long>(ANIMATION_UPLOAD_MAX_CHUNK_BYTES),
             static_cast<unsigned long>(ANIMATION_UPLOAD_RESERVE_BYTES),

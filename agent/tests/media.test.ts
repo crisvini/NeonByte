@@ -9,12 +9,12 @@ import {
   validateCover,
 } from "../src/media/animation.js";
 
-const onePixelGif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+const onePixelGif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64");
 const twoFrameGif = Buffer.concat([
   Buffer.from(onePixelGif.subarray(0, -1)),
   Buffer.from([0x21, 0xf9, 0x04, 0x00, 0x07, 0x00, 0x00, 0x00]),
   Buffer.from([0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]),
-  Buffer.from([0x02, 0x01, 0x44, 0x00, 0x3b]),
+  Buffer.from([0x02, 0x02, 0x44, 0x01, 0x00, 0x3b]),
 ]);
 twoFrameGif[23] = 0x05;
 
@@ -24,8 +24,7 @@ disposalTwoWithOpaqueBackgroundGif[16] = 255;
 disposalTwoWithOpaqueBackgroundGif[17] = 0;
 disposalTwoWithOpaqueBackgroundGif[18] = 0;
 disposalTwoWithOpaqueBackgroundGif[22] = 0x08;
-disposalTwoWithOpaqueBackgroundGif[44] = 0x01;
-disposalTwoWithOpaqueBackgroundGif[47] = 0;
+disposalTwoWithOpaqueBackgroundGif[45] = 0x81;
 
 const localPaletteGif = Buffer.concat([
   onePixelGif.subarray(0, 13),

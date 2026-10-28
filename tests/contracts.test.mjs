@@ -147,8 +147,11 @@ test("v2 media capabilities and upload examples match bounded upload contracts",
   const status = await readJson("upload-status.schema.json", contractV2Root);
   const error = await readJson("error.schema.json", contractV2Root);
   const capabilitiesExample = await readJson("examples/media-capabilities.json", contractV2Root);
+  const capabilities60Example = await readJson("examples/media-capabilities-60.json", contractV2Root);
   const statusExample = await readJson("examples/upload-status.json", contractV2Root);
   validateContractValue(capabilities, capabilitiesExample);
+  validateContractValue(capabilities, capabilities60Example);
+  assert.deepEqual([capabilitiesExample.maxFrames, capabilities60Example.maxFrames], [20, 60]);
   validateContractValue(session, await readJson("examples/upload-session.json", contractV2Root));
   validateContractValue(status, statusExample);
   validateContractValue(error, await readJson("examples/error-insufficient-storage.json", contractV2Root));

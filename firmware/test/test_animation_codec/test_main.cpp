@@ -25,6 +25,7 @@ public:
     std::uint32_t animationSize() const override { return static_cast<std::uint32_t>(bytes.size()); }
     bool readAnimationAt(std::uint32_t offset, std::uint8_t* destination, std::size_t length) const override {
         largestRead = std::max(largestRead, length);
+        if (length > NBIF_V2_ROW_BUFFER_BYTES) return false;
         if (offset > bytes.size() || length > bytes.size() - offset) return false;
         std::copy_n(bytes.data() + offset, length, destination);
         return true;
@@ -160,6 +161,62 @@ void testV2DecoderHandlesMaximumDirectoryAndRestart() {
     }
 }
 
+struct GuardedRow {
+    std::array<std::uint8_t, 8> before{};
+    std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> bytes{};
+    std::array<std::uint8_t, 8> after{};
+
+    GuardedRow() {
+        before.fill(0xa5);
+        after.fill(0x5a);
+    }
+
+    bool intact() const {
+        return std::all_of(before.begin(), before.end(), [](auto value) { return value == 0xa5; }) &&
+            std::all_of(after.begin(), after.end(), [](auto value) { return value == 0x5a; });
+    }
+};
+
+void testV2DecoderStreamsSixtyEntriesThroughBoundedReadsInPlaybackAndValidation() {
+    DecoderStorage storage;
+    std::vector<FrameRecord> records{keyframe()};
+    for (unsigned index = 1; index < 60; ++index) records.push_back(hold());
+    writeAnimation(storage, records);
+    GuardedRow playbackRow, playbackScratch, validationScratch;
+    AnimationDecoder playback(storage, playbackRow.bytes.data(), playbackRow.bytes.size(),
+        playbackScratch.bytes.data(), playbackScratch.bytes.size());
+    AnimationDecoder validator(storage, nullptr, 0, validationScratch.bytes.data(), validationScratch.bytes.size());
+    AnimationV2Metadata playbackMetadata{}, validationMetadata{};
+    TEST_ASSERT_TRUE(playback.open(playbackMetadata));
+    TEST_ASSERT_TRUE(validator.open(validationMetadata));
+    TEST_ASSERT_EQUAL_UINT16(60, playbackMetadata.frameCount);
+    TEST_ASSERT_EQUAL_UINT16(60, validationMetadata.frameCount);
+    unsigned playbackFrames = 0, validationFrames = 0;
+    for (;;) {
+        const auto playbackStatus = playback.step();
+        const auto validationStatus = validator.step();
+        TEST_ASSERT_EQUAL_INT(playbackStatus, validationStatus);
+        if (playbackStatus == AnimationDecodeStatus::AnimationComplete) break;
+        TEST_ASSERT_NOT_EQUAL(AnimationDecodeStatus::Error, playbackStatus);
+        if (playbackStatus == AnimationDecodeStatus::RowReady) {
+            playback.consumeRow();
+            validator.consumeRow();
+        }
+        if (playbackStatus == AnimationDecodeStatus::FrameComplete) {
+            TEST_ASSERT_EQUAL_UINT16(playbackFrames, playback.frameInfo().frameIndex);
+            TEST_ASSERT_EQUAL_UINT16(records[playbackFrames].delayMs, playback.frameInfo().delayMs);
+            ++playbackFrames;
+            ++validationFrames;
+        }
+    }
+    TEST_ASSERT_EQUAL_UINT(60, playbackFrames);
+    TEST_ASSERT_EQUAL_UINT(60, validationFrames);
+    TEST_ASSERT_TRUE(storage.largestRead <= NBIF_V2_ROW_BUFFER_BYTES);
+    TEST_ASSERT_TRUE(playbackRow.intact());
+    TEST_ASSERT_TRUE(playbackScratch.intact());
+    TEST_ASSERT_TRUE(validationScratch.intact());
+}
+
 void testValidationOnlyUsesSharedScratchAndRejectsInvalidPaletteIndex() {
     DecoderStorage storage;
     std::vector<FrameRecord> records{keyframe(), delta(), hold()};
@@ -272,7 +329,7 @@ void testV2DecoderStreamsAllRowCodecsDeltasAndHolds() {
     TEST_ASSERT_EQUAL_INT(AnimationDecodeStatus::FrameComplete, holdStatus); // hold
     TEST_ASSERT_EQUAL_INT(AnimationDecodeStatus::AnimationComplete, decoder.step());
     TEST_ASSERT_EQUAL_UINT16(90, decoder.frameInfo().delayMs);
-    TEST_ASSERT_TRUE(storage.largestRead <= 512);
+    TEST_ASSERT_TRUE(storage.largestRead <= NBIF_V2_ROW_BUFFER_BYTES);
 }
 
 void testV2DecoderRejectsBadDirectoryAndRowPayloads() {
@@ -315,6 +372,7 @@ int main() {
     RUN_TEST(testV2DecoderStreamsAllRowCodecsDeltasAndHolds);
     RUN_TEST(testV2DecoderRejectsBadDirectoryAndRowPayloads);
     RUN_TEST(testV2DecoderHandlesMaximumDirectoryAndRestart);
+    RUN_TEST(testV2DecoderStreamsSixtyEntriesThroughBoundedReadsInPlaybackAndValidation);
     RUN_TEST(testValidationOnlyUsesSharedScratchAndRejectsInvalidPaletteIndex);
     RUN_TEST(testValidationAndPlaybackAgreeOnMutatedAnimations);
     return UNITY_END();

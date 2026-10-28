@@ -145,8 +145,8 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
     if (animationNeedsReopen_ || animationRevision_ != storage_.animationRevision) {
         animationRevision_ = storage_.animationRevision; frame_ = 0; offset_ = 0; nextFrame_ = 0;
         animationFrameNeedsStart_ = true;
+        if (!openAnimation()) { animationNeedsReopen_ = true; return; }
         animationNeedsReopen_ = false;
-        openAnimation();
     }
     if (animationV2Active_) {
         if (!metadataV2_.frameCount || now < nextFrame_) return;

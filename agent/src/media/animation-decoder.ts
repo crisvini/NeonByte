@@ -25,6 +25,10 @@ function fail(message: string): never {
   throw new Error(`NBIF v2 ${message}.`);
 }
 
+function byteView(input: Uint8Array): Buffer {
+  return Buffer.from(input.buffer, input.byteOffset, input.byteLength);
+}
+
 function readDirectory(bytes: Buffer, count: number): AnimationDirectoryEntry[] {
   const directory: AnimationDirectoryEntry[] = [];
   for (let index = 0; index < count; index += 1) {
@@ -178,8 +182,7 @@ function decodeRows(
   }
 }
 
-export function decodeAnimationV2(input: Uint8Array): DecodedAnimationV2 {
-  const bytes = Buffer.from(input);
+function inspectAnimationV2(bytes: Buffer): { metadata: AnimationV2Metadata; directory: AnimationDirectoryEntry[] } {
   if (bytes.length < NBIF_V2_HEADER_BYTES || bytes.toString("ascii", 0, 4) !== "NBIF" || bytes[4] !== 2) fail("header is invalid or unsupported");
   if (bytes[5] !== 0 || bytes.readUInt32LE(20) !== 0) fail("header flags or reserved field are invalid");
   if (bytes.readUInt16LE(6) !== NBIF_WIDTH || bytes.readUInt16LE(8) !== NBIF_HEIGHT) fail("dimensions are invalid");
@@ -209,6 +212,15 @@ export function decodeAnimationV2(input: Uint8Array): DecodedAnimationV2 {
   }
   if (expectedOffset !== bytes.length || summedDuration !== durationMs || durationMs > NBIF_V2_MAX_DURATION_MS) fail("directory totals do not match the file header");
 
+  return {
+    directory,
+    metadata: { width: NBIF_WIDTH, height: NBIF_HEIGHT, frameCount, durationMs, fileBytes, directory },
+  };
+}
+
+export function decodeAnimationV2(input: Uint8Array): DecodedAnimationV2 {
+  const bytes = byteView(input);
+  const { metadata, directory } = inspectAnimationV2(bytes);
   const frames: Buffer[] = [];
   for (const entry of directory) {
     if (entry.kind === AnimationFrameKind.Hold && frames.length === 0) fail("hold has no preceding frame");
@@ -219,15 +231,25 @@ export function decodeAnimationV2(input: Uint8Array): DecodedAnimationV2 {
     }
     frames.push(frame);
   }
-  const metadata: AnimationV2Metadata = { width: NBIF_WIDTH, height: NBIF_HEIGHT, frameCount, durationMs, fileBytes, directory };
   return { metadata, frames, delaysMs: directory.map((entry) => entry.delayMs) };
 }
 
 export function validateAnimationV2(input: Uint8Array, expectedSha256?: string): AnimationV2Metadata {
-  const bytes = Buffer.from(input);
+  const bytes = byteView(input);
   if (expectedSha256 !== undefined) {
     const actual = createHash("sha256").update(bytes).digest("hex");
     if (actual !== expectedSha256.toLowerCase()) throw new Error("The animation checksum does not match.");
   }
-  return decodeAnimationV2(bytes).metadata;
+  const { metadata, directory } = inspectAnimationV2(bytes);
+  const canvas = Buffer.alloc(NBIF_FRAME_BYTES);
+  for (let index = 0; index < directory.length; index += 1) {
+    const entry = directory[index]!;
+    if (entry.kind === AnimationFrameKind.Hold) {
+      if (index === 0) fail("hold has no preceding frame");
+      continue;
+    }
+    const { colors, offset } = unpackPalette(bytes, entry);
+    decodeRows(bytes, entry, colors, offset, canvas);
+  }
+  return metadata;
 }

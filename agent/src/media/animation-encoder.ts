@@ -45,7 +45,7 @@ interface EncodedFrame {
   delayMs: number;
   indexBits: number;
   palette: number[];
-  rows: EncodedRow[];
+  rowCount: number;
   record: Buffer;
 }
 
@@ -210,85 +210,103 @@ function createCandidate(
   const rawRows = encodeRows(rows, null);
   const rawRecord = createRecord(rawRows, []);
   if (!palette) {
-    return { kind, delayMs, indexBits: 0, palette: [], rows: rawRows, record: rawRecord };
+    return { kind, delayMs, indexBits: 0, palette: [], rowCount: rawRows.length, record: rawRecord };
   }
   const indexedRows = encodeRows(rows, palette);
   const indexedRecord = createRecord(indexedRows, palette.colors);
   if (indexedRecord.length < rawRecord.length) {
     return {
       kind, delayMs, indexBits: indexBitCount(palette.colors.length), palette: palette.colors,
-      rows: indexedRows, record: indexedRecord,
+      rowCount: indexedRows.length,
+      record: indexedRecord,
     };
   }
-  return { kind, delayMs, indexBits: 0, palette: [], rows: rawRows, record: rawRecord };
+  return { kind, delayMs, indexBits: 0, palette: [], rowCount: rawRows.length, record: rawRecord };
+}
+
+export class AnimationV2StreamEncoder {
+  private readonly encoded: EncodedFrame[] = [];
+  private previous: Buffer | null = null;
+  private durationMs = 0;
+  private recordBytes = 0;
+  private finished = false;
+
+  addFrame(input: AnimationFrameInput): void {
+    if (this.finished) throw new Error("NBIF v2 encoder is already finished.");
+    if (this.encoded.length >= NBIF_V2_MAX_FRAMES) throw new Error(`NBIF v2 requires 1 to ${NBIF_V2_MAX_FRAMES} frames.`);
+    const pixels = framePixels(input);
+    this.durationMs += input.delayMs;
+    if (this.durationMs > NBIF_V2_MAX_DURATION_MS) throw new Error("NBIF v2 animation duration exceeds 30000 ms.");
+
+    let selected = createCandidate(
+      pixels,
+      this.previous,
+      input.delayMs,
+      this.encoded.length === 0 ? AnimationFrameKind.Keyframe : AnimationFrameKind.Delta,
+    );
+    if (this.previous) {
+      if (pixels.equals(this.previous)) {
+        selected = { kind: AnimationFrameKind.Hold, delayMs: input.delayMs, indexBits: 0, palette: [], rowCount: 0, record: Buffer.alloc(0) };
+      } else {
+        const keyframe = createCandidate(pixels, null, input.delayMs, AnimationFrameKind.Keyframe);
+        if (keyframe.record.length < selected.record.length) selected = keyframe;
+      }
+    }
+
+    this.recordBytes += selected.record.length;
+    const prospectiveSize = NBIF_V2_HEADER_BYTES + (this.encoded.length + 1) * NBIF_V2_DIRECTORY_ENTRY_BYTES + this.recordBytes;
+    if (prospectiveSize > NBIF_V2_MAX_FILE_BYTES) throw new Error("NBIF v2 encoded animation exceeds the file size limit.");
+    this.encoded.push(selected);
+    this.previous = pixels;
+  }
+
+  finish(): EncodedAnimationV2 {
+    if (this.finished) throw new Error("NBIF v2 encoder is already finished.");
+    this.finished = true;
+    if (this.encoded.length === 0) throw new Error(`NBIF v2 requires 1 to ${NBIF_V2_MAX_FRAMES} frames.`);
+    const fileBytes = NBIF_V2_HEADER_BYTES + this.encoded.length * NBIF_V2_DIRECTORY_ENTRY_BYTES + this.recordBytes;
+    const output = Buffer.alloc(fileBytes);
+    output.write("NBIF", 0, "ascii");
+    output[4] = 2;
+    output[5] = 0;
+    output.writeUInt16LE(NBIF_WIDTH, 6);
+    output.writeUInt16LE(NBIF_HEIGHT, 8);
+    output.writeUInt16LE(this.encoded.length, 10);
+    output.writeUInt32LE(this.durationMs, 12);
+    output.writeUInt32LE(fileBytes, 16);
+    output.writeUInt32LE(0, 20);
+
+    let recordOffset = NBIF_V2_HEADER_BYTES + this.encoded.length * NBIF_V2_DIRECTORY_ENTRY_BYTES;
+    this.encoded.forEach((frame, index) => {
+      const entryOffset = NBIF_V2_HEADER_BYTES + index * NBIF_V2_DIRECTORY_ENTRY_BYTES;
+      output.writeUInt32LE(recordOffset, entryOffset);
+      output.writeUInt32LE(frame.record.length, entryOffset + 4);
+      output.writeUInt16LE(frame.delayMs, entryOffset + 8);
+      output[entryOffset + 10] = frame.kind;
+      output[entryOffset + 11] = frame.indexBits;
+      output.writeUInt16LE(frame.palette.length, entryOffset + 12);
+      output.writeUInt16LE(frame.rowCount, entryOffset + 14);
+      output.writeUInt32LE(0, entryOffset + 16);
+      frame.record.copy(output, recordOffset);
+      recordOffset += frame.record.length;
+    });
+
+    const sha256 = createHash("sha256").update(output).digest("hex");
+    validateAnimationV2(output, sha256);
+    this.encoded.length = 0;
+    this.previous = null;
+    return { bytes: output, sha256, frameCount: Number(output.readUInt16LE(10)), durationMs: this.durationMs };
+  }
+
 }
 
 export function encodeAnimationV2(frames: readonly AnimationFrameInput[]): EncodedAnimationV2 {
   if (frames.length < 1 || frames.length > NBIF_V2_MAX_FRAMES) {
     throw new Error(`NBIF v2 requires 1 to ${NBIF_V2_MAX_FRAMES} frames.`);
   }
-  const normalized = frames.map((frame) => ({ ...frame, pixels: framePixels(frame) }));
-  const durationMs = normalized.reduce((sum, frame) => sum + frame.delayMs, 0);
-  if (durationMs > NBIF_V2_MAX_DURATION_MS) throw new Error("NBIF v2 animation duration exceeds 30000 ms.");
-
-  const encoded: EncodedFrame[] = [];
-  let previous: Buffer | null = null;
-  for (let index = 0; index < normalized.length; index += 1) {
-    const frame = normalized[index]!;
-    let selected = createCandidate(
-      frame.pixels,
-      previous,
-      frame.delayMs,
-      index === 0 ? AnimationFrameKind.Keyframe : AnimationFrameKind.Delta,
-    );
-    if (index > 0) {
-      const isHold = frame.pixels.equals(previous!);
-      if (isHold) {
-        selected = { kind: AnimationFrameKind.Hold, delayMs: frame.delayMs, indexBits: 0, palette: [], rows: [], record: Buffer.alloc(0) };
-      } else {
-        const keyframe = createCandidate(frame.pixels, null, frame.delayMs, AnimationFrameKind.Keyframe);
-        if (keyframe.record.length < selected.record.length) selected = keyframe;
-      }
-    }
-    encoded.push(selected);
-    previous = frame.pixels;
-  }
-
-  const directoryOffset = NBIF_V2_HEADER_BYTES;
-  const dataOffset = directoryOffset + encoded.length * NBIF_V2_DIRECTORY_ENTRY_BYTES;
-  let fileBytes = dataOffset;
-  for (const frame of encoded) fileBytes += frame.record.length;
-  if (fileBytes > NBIF_V2_MAX_FILE_BYTES) throw new Error("NBIF v2 encoded animation exceeds the file size limit.");
-
-  const output = Buffer.alloc(fileBytes);
-  output.write("NBIF", 0, "ascii");
-  output[4] = 2;
-  output[5] = 0;
-  output.writeUInt16LE(NBIF_WIDTH, 6);
-  output.writeUInt16LE(NBIF_HEIGHT, 8);
-  output.writeUInt16LE(encoded.length, 10);
-  output.writeUInt32LE(durationMs, 12);
-  output.writeUInt32LE(fileBytes, 16);
-  output.writeUInt32LE(0, 20);
-
-  let recordOffset = dataOffset;
-  encoded.forEach((frame, index) => {
-    const entryOffset = directoryOffset + index * NBIF_V2_DIRECTORY_ENTRY_BYTES;
-    output.writeUInt32LE(recordOffset, entryOffset);
-    output.writeUInt32LE(frame.record.length, entryOffset + 4);
-    output.writeUInt16LE(frame.delayMs, entryOffset + 8);
-    output[entryOffset + 10] = frame.kind;
-    output[entryOffset + 11] = frame.indexBits;
-    output.writeUInt16LE(frame.palette.length, entryOffset + 12);
-    output.writeUInt16LE(frame.rows.length, entryOffset + 14);
-    output.writeUInt32LE(0, entryOffset + 16);
-    frame.record.copy(output, recordOffset);
-    recordOffset += frame.record.length;
-  });
-
-  const sha256 = createHash("sha256").update(output).digest("hex");
-  validateAnimationV2(output, sha256);
-  return { bytes: output, sha256, frameCount: encoded.length, durationMs };
+  const encoder = new AnimationV2StreamEncoder();
+  for (const frame of frames) encoder.addFrame(frame);
+  return encoder.finish();
 }
 
 export { decodeAnimationV2, validateAnimationV2 };

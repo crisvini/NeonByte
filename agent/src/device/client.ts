@@ -1,7 +1,8 @@
 import { isIP } from "node:net";
+import { createHash } from "node:crypto";
 import type { AnimationAsset, MediaAsset } from "../media/animation.js";
-import { validateAnimation, validateCover } from "../media/animation.js";
-import { validateAnimationV2 } from "../media/animation-decoder.js";
+import { ANIMATION_HEADER_BYTES, COVER_BYTES, DISPLAY_HEIGHT, DISPLAY_WIDTH, MEDIA_VERSION, validateAnimation, validateCover } from "../media/animation.js";
+import { decodeAnimationV2, validateAnimationV2 } from "../media/animation-decoder.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 import type { NowPlayingV1, PlaybackSnapshot } from "../spotify/types.js";
 import type { DisplayMode } from "../web/scene.js";
@@ -43,6 +44,10 @@ function validStatus(value: unknown): value is DeviceStatus {
 }
 
 interface MediaCapabilities {
+  width: number;
+  height: number;
+  maxFrames: number;
+  maxDurationMs: number;
   formats: string[];
   maxEncodedBytes: number;
   maxChunkBytes: number;
@@ -57,11 +62,33 @@ function validMediaCapabilities(value: unknown): value is MediaCapabilities {
     Array.isArray(capabilities["formats"]) && capabilities["formats"].length === 2 &&
     capabilities["formats"][0] === "nbif-v1" && capabilities["formats"][1] === "nbif-v2" &&
     capabilities["width"] === 240 && capabilities["height"] === 240 &&
-    capabilities["maxFrames"] === 20 && capabilities["maxDurationMs"] === 30_000 &&
+    Number.isSafeInteger(capabilities["maxFrames"]) && Number(capabilities["maxFrames"]) >= 1 && Number(capabilities["maxFrames"]) <= 60 &&
+    Number.isSafeInteger(capabilities["maxDurationMs"]) && Number(capabilities["maxDurationMs"]) >= 1 && Number(capabilities["maxDurationMs"]) <= 30_000 &&
     Number.isSafeInteger(capabilities["maxEncodedBytes"]) && Number(capabilities["maxEncodedBytes"]) > 0 &&
     Number.isSafeInteger(capabilities["maxChunkBytes"]) && Number(capabilities["maxChunkBytes"]) >= 1 && Number(capabilities["maxChunkBytes"]) <= 1024 &&
     Number.isSafeInteger(capabilities["reserveBytes"]) && Number(capabilities["reserveBytes"]) >= MEDIA_STORAGE_RESERVE_BYTES &&
     Number.isSafeInteger(capabilities["freeStorageBytes"]) && Number(capabilities["freeStorageBytes"]) >= 0;
+}
+
+function createLegacyFallback(asset: AnimationAsset): MediaAsset {
+  if (asset.frameCount > 20) throw new Error(`This device supports at most 20 animation frames; this animation has ${asset.frameCount}.`);
+  const decoded = decodeAnimationV2(asset.bytes);
+  const bytes = Buffer.alloc(ANIMATION_HEADER_BYTES + decoded.frames.length * (2 + COVER_BYTES));
+  bytes.write("NBIF", 0, "ascii");
+  bytes[4] = MEDIA_VERSION;
+  bytes.writeUInt16LE(DISPLAY_WIDTH, 5);
+  bytes.writeUInt16LE(DISPLAY_HEIGHT, 7);
+  bytes.writeUInt16LE(decoded.frames.length, 9);
+  let offset = ANIMATION_HEADER_BYTES;
+  decoded.frames.forEach((frame, index) => {
+    bytes.writeUInt16LE(decoded.delaysMs[index]!, offset);
+    offset += 2;
+    frame.copy(bytes, offset);
+    offset += frame.length;
+  });
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  validateAnimation(bytes, sha256);
+  return { bytes, sha256 };
 }
 
 interface AnimationUploadStatus {
@@ -221,13 +248,16 @@ export class DeviceClient {
       return;
     }
     validateAnimationV2(asset.bytes, asset.sha256);
-    const legacy = (asset as AnimationAsset).legacy;
+    const animationAsset = asset as AnimationAsset;
     let capabilitiesResponse: Response;
     try {
       capabilitiesResponse = await this.request("/api/v2/media-capabilities", "GET", undefined, {}, this.timeoutMs, [200], true);
     } catch (error) {
       if (error instanceof DeviceHttpStatusError && error.status === 404) {
-        if (!legacy) throw new Error("This device supports only legacy animations; the compatible v1 copy is unavailable.");
+        if (animationAsset.frameCount > 20) {
+          throw new Error(`This device supports at most 20 animation frames; this animation has ${animationAsset.frameCount}.`);
+        }
+        const legacy = animationAsset.legacy ?? createLegacyFallback(animationAsset);
         await this.uploadLegacyAnimation(legacy, status.freeStorageBytes);
         return;
       }
@@ -236,10 +266,12 @@ export class DeviceClient {
     const capabilitiesValue = await safeResponseJson(capabilitiesResponse);
     if (!validMediaCapabilities(capabilitiesValue)) throw new Error("The device returned invalid media capabilities.");
     const capabilities = capabilitiesValue;
-    if (!capabilities.formats.includes("nbif-v2")) {
-      if (!legacy) throw new Error("The device does not support NBIF v2 and the compatible v1 copy is unavailable.");
-      await this.uploadLegacyAnimation(legacy, status.freeStorageBytes);
-      return;
+    if (!capabilities.formats.includes("nbif-v2")) throw new Error("The device does not support NBIF v2.");
+    if (animationAsset.frameCount > capabilities.maxFrames) {
+      throw new Error(`Device firmware supports at most ${capabilities.maxFrames} animation frames; this animation has ${animationAsset.frameCount}.`);
+    }
+    if (animationAsset.durationMs > capabilities.maxDurationMs) {
+      throw new Error(`Device firmware supports animations up to ${capabilities.maxDurationMs} ms; this animation is ${animationAsset.durationMs} ms.`);
     }
     const freeStorageBytes = Math.min(status.freeStorageBytes, capabilities.freeStorageBytes);
     if (asset.bytes.length > capabilities.maxEncodedBytes || asset.bytes.length + capabilities.reserveBytes > freeStorageBytes) {

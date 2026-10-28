@@ -6,7 +6,7 @@ import { MockSpotifyProvider } from "../src/spotify/mock.js";
 import { PlaybackPoller } from "../src/spotify/poller.js";
 import { startLocalWebApp, type FirmwareUpdateControl } from "../src/web/server.js";
 
-const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64");
 const track = (isPlaying = true, index = 0) => ({
   is_playing: isPlaying,
   progress_ms: 12_000,
@@ -73,7 +73,8 @@ test("serves the local panel and protects mode changes with a loopback origin ch
     const html = await page.text();
     assert.match(html, /The Windows agent composes the GIF at 240 × 240/);
     assert.match(html, /exact RGB565 colors with palettes, row compression, and frame differences/);
-    assert.match(html, /20 frames and 30 seconds/);
+    assert.match(html, /up to 60 frames/);
+    assert.match(html, /20-frame capacity/);
     assert.match(html, /32 KiB reserve/);
     assert.match(html, /id="ota-reconcile"/);
     assert.doesNotMatch(html, /device-token|Pairing token/);

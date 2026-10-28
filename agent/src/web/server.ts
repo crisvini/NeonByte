@@ -2,8 +2,7 @@ import type { DeviceIntegration } from "../device/integration.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { parseOAuthCallback } from "../spotify/oauth-callback.js";
-import { convertGifToAnimationV2, createCoverAsset } from "../media/animation.js";
-import { validateAnimationV2 } from "../media/animation-decoder.js";
+import { convertGifToAnimationV2InWorker, createCoverAsset, type AnimationAsset } from "../media/animation.js";
 import type { SpotifyOAuthClient } from "../spotify/oauth.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 import type { PlaybackSnapshot } from "../spotify/types.js";
@@ -212,7 +211,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
   }
 
   let mode: DisplayMode = options.initialMode ?? "auto";
-  let animation: ReturnType<typeof convertGifToAnimationV2> | null = null;
+  let animation: AnimationAsset | null = null;
   let animationOriginalSizeBytes = 0;
   let cover: ReturnType<typeof createCoverAsset> | null = null;
   let pendingOAuth: PendingOAuth | null = null;
@@ -311,7 +310,6 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           sendError(response, 404, "Upload a GIF to start the fullscreen preview.");
           return;
         }
-        validateAnimationV2(animation.bytes, animation.sha256);
         response.writeHead(200, {
           ...securityHeaders(),
           "Content-Type": "application/vnd.neonbyte.animation",
@@ -525,8 +523,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
         }
         try {
           const input = await readBody(request, GIF_LIMIT_BYTES);
-          const converted = convertGifToAnimationV2(input);
-          validateAnimationV2(converted.bytes, converted.sha256);
+          const converted = await convertGifToAnimationV2InWorker(input);
           animation = converted;
           animationOriginalSizeBytes = input.byteLength;
           options.device?.setAnimation(converted);

@@ -66,3 +66,31 @@ test("browser preview reconstructs NBIF v2 raw, RGB565 RLE, indexed RLE, packed,
     }
   }
 });
+
+test("browser preview accepts sixty v2 frames while preserving each hold delay", async () => {
+  const source = await readFile(new URL("../src/web/public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("function decodeAnimation(bytes) {");
+  const end = source.indexOf("\nfunction loadCover(", start);
+  const globals = {
+    DISPLAY_SIZE: 240,
+    ANIMATION_HEADER_BYTES: 11,
+    context: { createImageData: (width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4) }) },
+    DataView,
+    TextDecoder,
+    Uint8Array,
+    Uint16Array,
+    Uint8ClampedArray,
+    Set,
+    Math,
+    Error,
+  };
+  runInNewContext(`${source.slice(start, end)}\nglobalThis.previewDecode = decodeAnimation;`, globals);
+  const pixels = Buffer.alloc(pixelsPerFrame * 2);
+  for (let offset = 0; offset < pixels.length; offset += 2) pixels.writeUInt16LE(0x07e0, offset);
+  const frames = Array.from({ length: 60 }, () => ({ pixels, delayMs: 40 }));
+  const animation = encodeAnimationV2(frames);
+  const exactBuffer = animation.bytes.buffer.slice(animation.bytes.byteOffset, animation.bytes.byteOffset + animation.bytes.byteLength);
+  const preview = (globals as typeof globals & { previewDecode: (bytes: ArrayBuffer) => Array<{ delayMs: number }> }).previewDecode(exactBuffer);
+  assert.equal(preview.length, 60);
+  assert.deepEqual(Array.from(preview, (frame) => frame.delayMs), Array(60).fill(40));
+});

@@ -40,18 +40,22 @@ headers, from raw RGB565, RGB565 RLE, packed indices, and indexed RLE.
 
 Records are contiguous in directory order, without overlap, gaps, or trailing
 bytes. Rows have increasing `y`, a width from 1 to 240, and `x + width <= 240`.
-Files contain 1–20 frames, each delay is at least 20 ms, total duration is at most
-30 seconds, and the upload limit is 2,359,296 bytes. Implementations reject
+NBIF v2 files contain 1–60 frames; NBIF v1 remains limited to 20. Each delay is
+at least 20 ms, total duration is at most 30 seconds, and the v2 upload limit is
+2,359,296 bytes. Implementations reject
 invalid indexes, malformed run lengths, truncated values, nonzero reserved data,
 incorrect row coverage, and arithmetic overflow.
 
 ## Streaming and Memory
 
-Composition and encoding run on the desktop. Playback reads the directory once,
-then decodes a row span incrementally into the firmware's existing 480-byte RGB565
-pixel buffer. The decoder keeps a bounded directory, one bounded palette, and one
-row payload. It does not allocate a 240 × 240 framebuffer, read LCD pixels, or
-write reconstruction frames to flash. On the LCD, unchanged pixels remain in
+Composition and encoding run in a bounded desktop worker. GIF frames are parsed
+and composed one at a time; v2 encoding retains only the previous RGB565 frame
+and output records. Playback validates directory entries with individual
+20-byte reads and caches only the current entry, then decodes a row span
+incrementally into the firmware's existing 480-byte RGB565 pixel buffer. The
+decoder keeps one bounded directory entry, one bounded palette, and one row
+payload. It does not allocate a 240 × 240 framebuffer, read LCD pixels, or write
+reconstruction frames to flash. On the LCD, unchanged pixels remain in
 place; a delta only opens windows for rows containing a changed span.
 
 The firmware verifies the complete SHA-256 and independently decodes every row
@@ -64,7 +68,8 @@ promotion applies to legacy v1 uploads; the server acknowledges v1 after promoti
 
 New firmware reads installed NBIF v1 and v2. New agents use authenticated v2
 capability negotiation and send v2 only when supported. Only an explicit v2
-capability `404` allows the retained v1 copy to be uploaded to old firmware.
-Existing `/api/v1/animation` uploads remain v1 and are never reinterpreted as v2.
+capability `404` allows an on-demand v1 copy to be uploaded, and only for
+animations of at most 20 frames. Existing `/api/v1/animation` uploads remain v1
+and are never reinterpreted as v2.
 Old firmware cannot read a v2 asset after downgrade; restore a v1 asset before any
 separately authorized downgrade.

@@ -13,7 +13,7 @@ const playback = (id = "track/one", playing = true, progress = 12_000) => ({
     artists: [{ name: "Demo Artist" }], album: { images: [{ url: `https://i.scdn.co/${id}` }] } },
 });
 const cover = createCoverAsset(Uint8Array.from([255, 0, 0, 255]), 1, 1);
-const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64");
 
 test("native firmware receives agent metadata, artwork, progress corrections, and scene changes", async (t) => {
   const harness = await startHarness(t);

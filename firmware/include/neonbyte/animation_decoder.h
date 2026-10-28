@@ -12,11 +12,9 @@ constexpr std::uint32_t NBIF_V2_HEADER_BYTES = 24;
 constexpr std::uint32_t NBIF_V2_DIRECTORY_ENTRY_BYTES = 20;
 constexpr std::uint32_t NBIF_V2_ROW_HEADER_BYTES = 6;
 constexpr std::uint32_t NBIF_V2_MAX_FILE_BYTES = 2'359'296;
+constexpr std::uint16_t NBIF_V2_MAX_FRAMES = 60;
 constexpr std::uint32_t NBIF_V2_MAX_DURATION_MS = 30'000;
 constexpr std::size_t NBIF_V2_ROW_BUFFER_BYTES = 480;
-constexpr std::size_t NBIF_V2_COMPACT_DIRECTORY_ENTRY_BYTES = 10;
-constexpr std::size_t NBIF_V2_MAX_DIRECTORY_BYTES = 20 * NBIF_V2_COMPACT_DIRECTORY_ENTRY_BYTES;
-static_assert(20 * NBIF_V2_DIRECTORY_ENTRY_BYTES <= NBIF_V2_ROW_BUFFER_BYTES);
 
 enum class AnimationDecodeStatus : std::uint8_t {
     Progress,
@@ -81,7 +79,8 @@ private:
     };
 
     bool fail(const char* error);
-    DirectoryEntry directoryEntry(std::uint16_t index) const;
+    bool loadDirectoryEntry(std::uint16_t index);
+    DirectoryEntry directoryEntry() const;
     AnimationDecodeStatus finishFrame();
     bool decodeRow(std::uint8_t codec, const std::uint8_t* input, std::size_t inputLength,
                    std::uint16_t width);
@@ -93,7 +92,7 @@ private:
     std::size_t outputCapacity_;
     std::uint8_t* encodedRow_;
     std::size_t encodedCapacity_;
-    std::array<std::uint8_t, NBIF_V2_MAX_DIRECTORY_BYTES> directory_{};
+    std::array<std::uint8_t, NBIF_V2_DIRECTORY_ENTRY_BYTES> directoryEntryWire_{};
     std::array<std::uint16_t, 256> palette_{};
     AnimationV2Metadata metadata_{};
     AnimationFrameInfo frameInfo_{};
@@ -107,6 +106,7 @@ private:
     std::uint16_t rowWidth_ = 0;
     std::uint16_t rowBytes_ = 0;
     std::uint16_t paletteCount_ = 0;
+    std::uint16_t directoryEntryIndex_ = UINT16_MAX;
     bool valid_ = false;
     bool frameStarted_ = false;
     bool frameCompletionPending_ = false;

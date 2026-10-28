@@ -8,7 +8,6 @@ namespace {
 
 constexpr std::uint16_t WIDTH = 240;
 constexpr std::uint16_t HEIGHT = 240;
-constexpr std::uint16_t MAX_FRAMES = 20;
 constexpr std::uint8_t CODEC_RGB565_RAW = 0;
 constexpr std::uint8_t CODEC_RGB565_RLE = 1;
 constexpr std::uint8_t CODEC_PACKED_INDEX = 2;
@@ -48,19 +47,24 @@ bool AnimationDecoder::fail(const char* error) {
     return false;
 }
 
-AnimationDecoder::DirectoryEntry AnimationDecoder::directoryEntry(std::uint16_t index) const {
-    const auto* bytes = directory_.data() + static_cast<std::size_t>(index) * NBIF_V2_COMPACT_DIRECTORY_ENTRY_BYTES;
+bool AnimationDecoder::loadDirectoryEntry(std::uint16_t index) {
+    if (index >= metadata_.frameCount) return false;
+    if (!source_.readAt(NBIF_V2_HEADER_BYTES + static_cast<std::uint32_t>(index) * NBIF_V2_DIRECTORY_ENTRY_BYTES,
+                        directoryEntryWire_.data(), directoryEntryWire_.size())) return false;
+    directoryEntryIndex_ = index;
+    return true;
+}
+
+AnimationDecoder::DirectoryEntry AnimationDecoder::directoryEntry() const {
+    const auto* bytes = directoryEntryWire_.data();
     DirectoryEntry entry{};
     entry.recordOffset = read32(bytes);
-    // open() has already checked that records are contiguous, including holds.
-    const auto nextOffset = index + 1 < metadata_.frameCount
-        ? read32(bytes + NBIF_V2_COMPACT_DIRECTORY_ENTRY_BYTES) : metadata_.fileBytes;
-    entry.recordBytes = nextOffset - entry.recordOffset;
-    entry.delayMs = read16(bytes + 4);
-    entry.paletteCount = read16(bytes + 6);
-    entry.rowCount = bytes[8];
-    entry.kind = static_cast<AnimationFrameKind>(bytes[9]);
-    entry.indexBits = entry.paletteCount ? expectedIndexBits(entry.paletteCount) : 0;
+    entry.recordBytes = read32(bytes + 4);
+    entry.delayMs = read16(bytes + 8);
+    entry.kind = static_cast<AnimationFrameKind>(bytes[10]);
+    entry.indexBits = bytes[11];
+    entry.paletteCount = read16(bytes + 12);
+    entry.rowCount = read16(bytes + 14);
     return entry;
 }
 
@@ -74,6 +78,7 @@ bool AnimationDecoder::open(AnimationV2Metadata& metadata) {
     frameStarted_ = false;
     frameCompletionPending_ = false;
     rowReady_ = false;
+    directoryEntryIndex_ = UINT16_MAX;
     error_ = "invalid NBIF v2 header";
     if (encodedRow_ == nullptr || encodedCapacity_ < NBIF_V2_ROW_BUFFER_BYTES ||
         (outputRow_ == nullptr ? outputCapacity_ != 0 :
@@ -89,21 +94,20 @@ bool AnimationDecoder::open(AnimationV2Metadata& metadata) {
     const auto frameCount = read16(header.data() + 10);
     const auto durationMs = read32(header.data() + 12);
     const auto fileBytes = read32(header.data() + 16);
-    if (width != WIDTH || height != HEIGHT || frameCount == 0 || frameCount > MAX_FRAMES ||
+    if (width != WIDTH || height != HEIGHT || frameCount == 0 || frameCount > NBIF_V2_MAX_FRAMES ||
         fileBytes != source_.size() || fileBytes > NBIF_V2_MAX_FILE_BYTES ||
         fileBytes < NBIF_V2_HEADER_BYTES + frameCount * NBIF_V2_DIRECTORY_ENTRY_BYTES) return false;
 
-    const auto directoryBytes = static_cast<std::size_t>(frameCount) * NBIF_V2_DIRECTORY_ENTRY_BYTES;
-    // The row is not visible until decoding starts, so it can hold the wire directory here.
-    auto* directoryScratch = outputRow_ ? outputRow_ : encodedRow_;
-    if (!source_.readAt(NBIF_V2_HEADER_BYTES, directoryScratch, directoryBytes)) return false;
+    std::array<std::uint8_t, NBIF_V2_DIRECTORY_ENTRY_BYTES> raw{};
+    const auto directoryBytes = static_cast<std::uint32_t>(frameCount) * NBIF_V2_DIRECTORY_ENTRY_BYTES;
     std::uint32_t expectedOffset = NBIF_V2_HEADER_BYTES + static_cast<std::uint32_t>(directoryBytes);
     std::uint32_t summedDuration = 0;
     for (std::uint16_t index = 0; index < frameCount; ++index) {
-        const auto* raw = directoryScratch + static_cast<std::size_t>(index) * NBIF_V2_DIRECTORY_ENTRY_BYTES;
-        const DirectoryEntry entry{read32(raw), read32(raw + 4), read16(raw + 8),
-            static_cast<AnimationFrameKind>(raw[10]), raw[11], read16(raw + 12), read16(raw + 14)};
-        if (read32(raw + 16) != 0 || entry.recordOffset != expectedOffset ||
+        if (!source_.readAt(NBIF_V2_HEADER_BYTES + static_cast<std::uint32_t>(index) * NBIF_V2_DIRECTORY_ENTRY_BYTES,
+                            raw.data(), raw.size())) return false;
+        const DirectoryEntry entry{read32(raw.data()), read32(raw.data() + 4), read16(raw.data() + 8),
+            static_cast<AnimationFrameKind>(raw[10]), raw[11], read16(raw.data() + 12), read16(raw.data() + 14)};
+        if (read32(raw.data() + 16) != 0 || entry.recordOffset != expectedOffset ||
             entry.recordOffset > fileBytes || entry.recordBytes > fileBytes - entry.recordOffset ||
             entry.delayMs < 20 || static_cast<std::uint8_t>(entry.kind) > 2 ||
             (index == 0 && entry.kind != AnimationFrameKind::Keyframe)) return false;
@@ -119,12 +123,10 @@ bool AnimationDecoder::open(AnimationV2Metadata& metadata) {
         }
         expectedOffset += entry.recordBytes;
         summedDuration += entry.delayMs;
-        auto* compact = directory_.data() + static_cast<std::size_t>(index) * NBIF_V2_COMPACT_DIRECTORY_ENTRY_BYTES;
-        std::memcpy(compact, raw, 4);
-        std::memcpy(compact + 4, raw + 8, 2);
-        std::memcpy(compact + 6, raw + 12, 2);
-        compact[8] = static_cast<std::uint8_t>(entry.rowCount);
-        compact[9] = raw[10];
+        if (index == 0) {
+            directoryEntryWire_ = raw;
+            directoryEntryIndex_ = 0;
+        }
     }
     if (expectedOffset != fileBytes || summedDuration != durationMs || durationMs > NBIF_V2_MAX_DURATION_MS) return false;
 
@@ -146,7 +148,7 @@ bool AnimationDecoder::decodeRow(std::uint8_t codec, const std::uint8_t* input,
     }
     if (codec == CODEC_PACKED_INDEX) {
         if (paletteCount_ == 0) return false;
-        const auto bits = directoryEntry(frameIndex_).indexBits;
+        const auto bits = directoryEntry().indexBits;
         const auto expectedBytes = (static_cast<std::size_t>(width) * bits + 7) / 8;
         if (inputLength != expectedBytes) return false;
         std::size_t bitOffset = 0;
@@ -214,7 +216,7 @@ bool AnimationDecoder::validateRow(std::uint8_t codec, const std::uint8_t* input
         if (inputLength != static_cast<std::size_t>(width) * 2) return false;
     } else if (codec == CODEC_PACKED_INDEX) {
         if (paletteCount_ == 0) return false;
-        const auto bits = directoryEntry(frameIndex_).indexBits;
+        const auto bits = directoryEntry().indexBits;
         const auto expectedBytes = (static_cast<std::size_t>(width) * bits + 7) / 8;
         if (inputLength != expectedBytes) return false;
         std::size_t bitOffset = 0;
@@ -258,7 +260,8 @@ bool AnimationDecoder::validateRow(std::uint8_t codec, const std::uint8_t* input
 }
 
 AnimationDecodeStatus AnimationDecoder::finishFrame() {
-    frameInfo_ = {frameIndex_, directoryEntry(frameIndex_).delayMs, directoryEntry(frameIndex_).kind};
+    const auto entry = directoryEntry();
+    frameInfo_ = {frameIndex_, entry.delayMs, entry.kind};
     frameCompletionPending_ = true;
     frameStarted_ = false;
     return AnimationDecodeStatus::FrameComplete;
@@ -274,7 +277,11 @@ AnimationDecodeStatus AnimationDecoder::step() {
         return AnimationDecodeStatus::Progress;
     }
     if (frameIndex_ >= metadata_.frameCount) return AnimationDecodeStatus::AnimationComplete;
-    const auto entry = directoryEntry(frameIndex_);
+    if (directoryEntryIndex_ != frameIndex_ && !loadDirectoryEntry(frameIndex_)) {
+        fail("directory entry read failed");
+        return AnimationDecodeStatus::Error;
+    }
+    const auto entry = directoryEntry();
     if (!frameStarted_) {
         rowCursor_ = entry.recordOffset;
         rowCountRead_ = 0;
@@ -377,6 +384,7 @@ void AnimationDecoder::restart() {
     frameStarted_ = false;
     frameCompletionPending_ = false;
     rowReady_ = false;
+    directoryEntryIndex_ = UINT16_MAX;
     error_ = nullptr;
 }
 

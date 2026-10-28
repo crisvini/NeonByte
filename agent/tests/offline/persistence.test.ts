@@ -7,15 +7,15 @@ import { DeviceClient } from "../../src/device/client.js";
 import { convertGifToAnimation } from "../../src/media/animation.js";
 import { startHarness } from "./harness.js";
 
-const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64");
 const twoFrameGif = Buffer.concat([
   gif.subarray(0, -1), Buffer.from([0x21, 0xf9, 4, 0, 7, 0, 0, 0]),
-  Buffer.from([0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0]), Buffer.from([2, 1, 0x44, 0, 0x3b]),
+  Buffer.from([0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0]), Buffer.from([2, 2, 0x44, 0x01, 0, 0x3b]),
 ]);
 twoFrameGif[23] = 5;
 // Make the second frame a different color using disposal to an opaque red background.
 twoFrameGif[11] = 1; twoFrameGif[16] = 255; twoFrameGif[17] = 0; twoFrameGif[18] = 0;
-twoFrameGif[22] = 8; twoFrameGif[44] = 1; twoFrameGif[47] = 0;
+twoFrameGif[22] = 8; twoFrameGif[45] = 0x81;
 const animation = convertGifToAnimation(twoFrameGif);
 const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 

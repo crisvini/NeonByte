@@ -1,0 +1,11 @@
+{
+  "formats": ["nbif-v1", "nbif-v2"],
+  "width": 240,
+  "height": 240,
+  "maxFrames": 60,
+  "maxDurationMs": 30000,
+  "maxEncodedBytes": 2359296,
+  "maxChunkBytes": 1024,
+  "reserveBytes": 32768,
+  "freeStorageBytes": 1048576
+}
