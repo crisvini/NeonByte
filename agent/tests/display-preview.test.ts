@@ -92,9 +92,9 @@ test("Spotify preview scrolls a long title after a pause without redrawing the c
   display.run(`status = { snapshot: { status: "playing", nowPlaying: {
     trackId: "track", title: "T".repeat(50), artist: "Artist"
   } } }; coverImage = { naturalWidth: 240, naturalHeight: 240 }; drawSpotify(1000);`);
-  display.run("drawSpotify(2499); drawSpotify(2500);");
+  display.run("drawSpotify(2499);");
   assert.equal(display.texts.length, 2);
-  display.run("drawSpotify(2625);");
+  display.run("drawSpotify(2500);");
   assert.equal(display.texts.length, 3);
   assert.deepEqual(display.texts.slice(2).map(({ value, x, y, clip }) => ({ value, x, y, clip })), [
     { value: "T".repeat(50), x: 5, y: 190, clip: [0, 190, 240, 20] },
@@ -108,7 +108,7 @@ test("Spotify preview scrolls a long artist independently from a static title", 
   display.run(`status = { snapshot: { status: "playing", nowPlaying: {
     trackId: "track", title: "Title", artist: "A".repeat(40)
   } } }; coverImage = { naturalWidth: 240, naturalHeight: 240 }; drawSpotify(0);
-  drawSpotify(1500); drawSpotify(1625);`);
+  drawSpotify(1500);`);
   assert.equal(display.texts.length, 3);
   assert.deepEqual(display.texts.slice(2).map(({ value, x, y }) => ({ value, x, y })), [
     { value: "A".repeat(40), x: 5, y: 211 },
@@ -123,25 +123,41 @@ test("Spotify preview resets both marquee positions and delay when the track cha
   display.run(`status = { snapshot: { status: "playing", nowPlaying: {
     trackId: "first", title: "T".repeat(50), artist: "A".repeat(40)
   } } }; coverImage = { naturalWidth: 240, naturalHeight: 240 }; drawSpotify(0);
-  drawSpotify(1500); drawSpotify(1625); status.snapshot.nowPlaying.trackId = "second"; drawSpotify(2000);
-  drawSpotify(3499); drawSpotify(3500);`);
+  drawSpotify(1500); drawSpotify(1501); status.snapshot.nowPlaying.trackId = "second"; drawSpotify(2000);
+  drawSpotify(3499);`);
   const resetLines = display.texts.slice(-2);
   assert.deepEqual(resetLines.map(({ x, y }) => [x, y]), [[8, 190], [8, 211]]);
   const resetCount = display.texts.length;
-  display.run("drawSpotify(3625);");
+  display.run("drawSpotify(3500); drawSpotify(3501);");
   assert.deepEqual(display.texts.slice(resetCount).map(({ x, y }) => [x, y]), [[5, 190], [5, 211]]);
 });
 
-test("Spotify preview pauses at the loop boundary before smoothly starting the next pass", async () => {
+test("Spotify preview pauses at the far edge before reversing", async () => {
   const display = await preview();
   display.run(`status = { snapshot: { status: "playing", nowPlaying: {
     trackId: "track", title: "T".repeat(40), artist: "Short"
   } } }; coverImage = { naturalWidth: 240, naturalHeight: 240 }; drawSpotify(0); drawSpotify(1500);
-  for (let step = 1; step <= 115; step += 1) drawSpotify(1500 + step * 125);`);
-  assert.equal(display.texts.at(-1)?.x, 8);
+  for (let step = 1; step < 86; step += 1) drawSpotify(1500 + step * 125);`);
+  assert.equal(display.texts.at(-1)?.x, -248);
   const loopCount = display.texts.length;
-  display.run("drawSpotify(17374); drawSpotify(17375);");
+  display.run("drawSpotify(13624);");
   assert.equal(display.texts.length, loopCount);
-  display.run("drawSpotify(17500);");
-  assert.equal(display.texts.at(-1)?.x, 5);
+  display.run("drawSpotify(13625);");
+  assert.equal(display.texts.at(-1)?.x, -245);
+});
+
+test("Spotify preview restarts timing when delayed artwork appears and on scene reentry", async () => {
+  const display = await preview();
+  display.run(`status = { snapshot: { status: "playing", nowPlaying: {
+    trackId: "track", title: "T".repeat(19), artist: "Short"
+  } } }; drawSpotify(0); drawSpotify(1500);`);
+  const beforeCover = display.texts.length;
+  display.run(`coverImage = { naturalWidth: 240, naturalHeight: 240 }; coverLoadId += 1;
+    drawSpotify(1550); drawSpotify(1674);`);
+  assert.equal(display.texts.length, beforeCover);
+  assert.deepEqual(display.covers, [[32, 4, 176, 176]]);
+  display.run("drawSpotify(1675);");
+  assert.equal(display.texts.at(-1)?.x, 4);
+  display.run("spotifySceneActive = false; drawSpotify(2000);");
+  assert.deepEqual(display.texts.slice(-2).map(({ x, y }) => [x, y]), [[8, 190], [8, 211]]);
 });

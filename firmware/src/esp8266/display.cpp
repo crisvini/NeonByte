@@ -4,18 +4,23 @@
 #include <algorithm>
 namespace neonbyte {
 namespace {
-void metadataText(std::string_view text, SpotifyText& result) {
-    result.text.length = 0;
-    result.truncated = false;
+bool metadataMatches(std::string_view text, const SpotifyMarquee& result) {
+    unsigned index = 0;
     for (unsigned char character : text) {
         if ((character & 0xc0) == 0x80) continue;
-        if (result.text.length == result.text.bytes.size()) {
-            result.truncated = true;
-            result.text.length = (SPOTIFY_TEXT_VIEWPORT_WIDTH - 18) / (6 * SPOTIFY_TEXT_SIZE);
-            break;
-        }
+        if (index >= result.text.length || result.text.bytes[index++] !=
+            (character >= 32 && character < 127 ? character : '?')) return false;
+    }
+    return index == result.text.length;
+}
+void metadataText(std::string_view text, SpotifyMarquee& result, std::uint64_t now) {
+    result.text.length = 0;
+    for (unsigned char character : text) {
+        if ((character & 0xc0) == 0x80) continue;
+        if (result.text.length == result.text.bytes.size()) break;
         result.text.bytes[result.text.length++] = character >= 32 && character < 127 ? character : '?';
     }
+    result.offset = 0; result.reverse = false; result.lastStepMs = now;
 }
 } // namespace
 
@@ -74,12 +79,28 @@ void DeviceDisplay::showSpotifyWaiting() {
         panel_.fillScreen(ST77XX_BLACK); textLine("Waiting for playback",20,116,32,ST77XX_WHITE); scene_ = 1;
     }
 }
-void DeviceDisplay::drawSpotifyText(const SpotifyText& text, int y, std::uint16_t color, bool clear) {
+void DeviceDisplay::drawSpotifyText(const SpotifyMarquee& text, int y, std::uint16_t color, bool clear) {
     if (clear) panel_.fillRect(0,y,240,SPOTIFY_TEXT_LINE_HEIGHT,ST77XX_BLACK);
-    textLine(text.text.view(),SPOTIFY_TEXT_X,y,text.text.length,color,SPOTIFY_TEXT_SIZE);
-    if (text.truncated) {
-        textLine("...",SPOTIFY_TEXT_X + text.text.length * 6 * SPOTIFY_TEXT_SIZE,y + 7,3,color,1);
-    }
+    constexpr int cellWidth = 6 * SPOTIFY_TEXT_SIZE;
+    const int x = static_cast<int>(SPOTIFY_TEXT_X) - text.offset;
+    const unsigned first = x < 0 ? static_cast<unsigned>(-x / cellWidth) : 0;
+    const unsigned end = std::min<unsigned>(text.text.length,static_cast<unsigned>((240 - x + cellWidth - 1) / cellWidth));
+    if (first < end) textLine(text.text.view().substr(first,end-first),x + static_cast<int>(first) * cellWidth,y,end-first,color,SPOTIFY_TEXT_SIZE);
+}
+bool DeviceDisplay::updateMarquee(SpotifyMarquee& text, int y, std::uint16_t color, std::uint64_t now) {
+    const unsigned width = text.text.length * 6 * SPOTIFY_TEXT_SIZE;
+    if (width <= SPOTIFY_TEXT_VIEWPORT_WIDTH) return false;
+    const unsigned end = width - SPOTIFY_TEXT_VIEWPORT_WIDTH;
+    const bool atEnd = text.offset == 0 || text.offset == end;
+    const auto interval = atEnd ? SPOTIFY_MARQUEE_PAUSE_MS : SPOTIFY_MARQUEE_INTERVAL_MS;
+    if (now - text.lastStepMs < interval) return false;
+    if (text.reverse) text.offset = text.offset > SPOTIFY_MARQUEE_STEP_PIXELS ? text.offset - SPOTIFY_MARQUEE_STEP_PIXELS : 0;
+    else text.offset = std::min<unsigned>(end,text.offset + SPOTIFY_MARQUEE_STEP_PIXELS);
+    if (text.offset == end) text.reverse = true;
+    else if (text.offset == 0) text.reverse = false;
+    text.lastStepMs = now;
+    drawSpotifyText(text,y,color,true);
+    return true;
 }
 void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t) {
     if (!initialized_) return;
@@ -92,17 +113,17 @@ void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t) {
         coverRow_ = 0; coverRevision_ = storage_.assetRevision;
     }
     scene_ = 2;
-    SpotifyText title, artist;
-    metadataText(track.title.view(),title);
-    metadataText(track.artist.view(),artist);
-    if (entering || (title.text.view() != titleText_.text.view() || title.truncated != titleText_.truncated)) {
-        titleText_ = title;
+    const bool titleChanged = !metadataMatches(track.title.view(),titleText_);
+    const bool artistChanged = !metadataMatches(track.artist.view(),artistText_);
+    if (entering || titleChanged || (trackChanged && titleText_.offset)) {
+        metadataText(track.title.view(),titleText_,displayNowMs_);
         drawSpotifyText(titleText_,SPOTIFY_TITLE_Y,ST77XX_WHITE,!entering);
     }
-    if (entering || (artist.text.view() != artistText_.text.view() || artist.truncated != artistText_.truncated)) {
-        artistText_ = artist;
+    if (entering || artistChanged || (trackChanged && artistText_.offset)) {
+        metadataText(track.artist.view(),artistText_,displayNowMs_);
         drawSpotifyText(artistText_,SPOTIFY_ARTIST_Y,0x9cf3,!entering);
     }
+    if (trackChanged) { titleText_.lastStepMs = displayNowMs_; artistText_.lastStepMs = displayNowMs_; }
 }
 void DeviceDisplay::beginAnimationFrame(std::uint16_t, std::uint16_t) {}
 void DeviceDisplay::writeAnimationPixels(std::uint32_t offset, const std::uint8_t* pixels, std::size_t length) {
@@ -119,6 +140,7 @@ void DeviceDisplay::writeAnimationPixels(std::uint32_t offset, const std::uint8_
 void DeviceDisplay::endAnimationFrame(std::uint16_t) {}
 void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
     if (!initialized_) return;
+    displayNowMs_ = now;
     const auto state = scenes.currentState();
     if (state.activeScene == ActiveScene::spotify) {
         storage_.promoteAnimationCandidateAtBoundary();
@@ -136,6 +158,11 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
                     panel_.SPI_WRITE16(pixels_[source] | (std::uint16_t(pixels_[source+1])<<8));
                 }
                 panel_.endWrite(); ++coverRow_;
+                if (coverRow_ == SPOTIFY_COVER_SIZE) {
+                    titleText_.lastStepMs = now; artistText_.lastStepMs = now;
+                }
+            } else if (!updateMarquee(titleText_,SPOTIFY_TITLE_Y,ST77XX_WHITE,now)) {
+                updateMarquee(artistText_,SPOTIFY_ARTIST_Y,0x9cf3,now);
             }
         }
         return;

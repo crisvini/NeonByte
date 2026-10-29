@@ -10,22 +10,40 @@ still needs visual confirmation.
 
 ## Current Firmware Text Behavior (2026-10-28)
 
-The firmware now keeps title and artist fixed at x=8, y=190 and y=211,
-using the existing 2x font and colors. Each 224-pixel field fits 18 font
-cells; longer text displays the first 17 cells followed by smaller, baseline-aligned
-`...` glyphs. Unsupported
-Unicode code points still occupy one replacement cell. Only the visible text is
-cached and redrawn when it changes or the scene is entered. The full metadata
-and track ID remain in the scene state, and cover reads still require the full
-matching track ID. The browser preview retains its earlier marquee behavior.
+Title and artist retain their original positions, colors and 2x font. Fields
+of at most 18 cells remain still. Longer fields move independently by three
+pixels per 125 ms, reversing after a 1.5-second pause at either end. The first
+pause starts after all 176 cover rows have been drawn. A later cover revision
+suspends movement until its rows have been drawn; changes to one metadata field
+restart that field, and track or scene changes restart both. Unsupported Unicode
+code points use one replacement cell. Each field has a bounded 256-cell cache.
 
-Native display tests cover short and long text, boundary lengths, unchanged
-visible prefixes, late artwork, rapid track changes and mismatched cover IDs.
-The integration-check profile is compilation-only and is not an installation
-artifact. Actual LCD rendering, runtime memory and cover transfers remain pending
-physical verification. A missing or mismatched cover, storage read failure, or
-failed artwork preparation or transfer can independently leave the cover black;
-no physical failure was diagnosed in this offline run.
+Each animation step clears only its own 240 by 20 text strip and draws visible
+glyphs, with at most one animated field per loop. It does not allocate a
+framebuffer or perform a per-frame allocation. The preview uses the same cell
+width, timing and direction; browser glyph shapes and artwork timing may differ
+from the device. Browser artwork is drawn as one operation, while the firmware
+streams one cover row per cooperative loop iteration.
+
+The earlier marquee updated both text strips before drawing the next cover row.
+Each strip clear transmits 4,800 pixels, at least 3.84 ms of pixel data at the
+configured 20 MHz SPI rate, before commands and glyph drawing. Each cover row
+also opens and checks its track-bound LittleFS file. These operations share the
+loop with HTTP and Wi-Fi service, so their combined latency is a plausible source
+of contention; a physical failure was not reproduced or diagnosed. A missing or
+mismatched cover, storage read failure, or failed artwork transfer can also leave
+the cover black. GIF decoding, cover storage and network processing are unchanged.
+
+Display tests exercise delayed and updated artwork, independent fields and
+unchanged cover pixels. Actual LCD flicker, runtime heap and stack margin, Wi-Fi
+responsiveness, cover transfers and GIF timing remain pending physical validation.
+
+Offline PlatformIO builds compared the same two existing compilation profiles
+before and after this change. The provisional profile changed from 46,160 to
+46,692 bytes of static RAM and from 384,643 to 385,247 bytes of reported flash.
+The integration-check profile changed from 46,160 to 46,692 bytes of static RAM
+and from 385,667 to 386,287 bytes of reported flash. These measurements do not
+establish installed hardware compatibility or runtime memory availability.
 
 The following sections describe earlier revisions and their historical results.
 
@@ -65,7 +83,7 @@ Browser fonts and Unicode glyph support already differed from the physical
 Progress bars and playback times are removed from both views. Protocol v1 retains
 duration/progress/timestamps and existing correction logic for compatibility.
 
-## Current Spotify Marquee Layout
+## Historical Spotify Marquee Layout
 
 The later marquee revision supersedes the earlier font-size, two-line truncation,
 and preview-font details above. The cover remains 176 by 176 at (32, 4). The

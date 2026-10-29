@@ -323,43 +323,108 @@ void testSpotifyMetadataChangesInvalidateOnlyTheirOwnField() {
     TEST_ASSERT_EQUAL_UINT32(clears, panel.screenClears);
 }
 
-void testSpotifyFixedTextTruncatesAtViewportAndDoesNotRedraw() {
+void testSpotifyMarqueeWaitsForCoverAndMovesFieldsIndependently() {
     display_test::panelState = {};
     PersistentStorage storage; TestClock clock; SceneManager scenes(clock, storage);
+    for (unsigned y = 0; y < 240; ++y) for (unsigned x = 0; x < 240; ++x)
+        appendLittleEndian16(storage.coverBytes, static_cast<std::uint16_t>(y * 240 + x));
     auto value = track();
-    setText(value.title, std::string(18, 'T'));
-    setText(value.artist, "Artist \xc3\xa9\xf0\x9f\x8e\xb5 " + std::string(30, 'A'));
+    setText(value.title, std::string(30, 'T'));
+    setText(value.artist, "Short artist");
+    scenes.heartbeat(); scenes.updateNowPlaying(value);
+    DeviceDisplay display(storage); display.begin();
+    for (unsigned row = 0; row < 176; ++row) display.tick(scenes, row * 20);
+    auto& panel = display_test::panelState;
+    TEST_ASSERT_EQUAL_UINT32(2, panel.texts.size());
+    const auto initialRows = panel.rows.size();
+    std::vector<std::uint16_t> coverPixels;
+    for (unsigned y = 4; y < 180; ++y) for (unsigned x = 32; x < 208; ++x)
+        coverPixels.push_back(panel.pixels[y * 240 + x]);
+    display.tick(scenes, 4999);
+    TEST_ASSERT_EQUAL_UINT32(2, panel.texts.size());
+    display.tick(scenes, 5000);
+    TEST_ASSERT_GREATER_THAN_UINT32(2, panel.texts.size());
+    TEST_ASSERT_EQUAL_INT(190, panel.rectangles.back().y);
+    TEST_ASSERT_EQUAL_UINT32(initialRows, panel.rows.size());
+    for (const auto& rect : panel.rectangles) TEST_ASSERT_TRUE(rect.y >= 190);
+    for (unsigned y = 4; y < 180; ++y) for (unsigned x = 32; x < 208; ++x)
+        TEST_ASSERT_EQUAL_HEX16(coverPixels[(y - 4) * 176 + x - 32], panel.pixels[y * 240 + x]);
+}
+
+void testMarqueePausesAtBothEndsAndRestartsOnMetadataAndCoverChanges() {
+    display_test::panelState = {};
+    PersistentStorage storage; TestClock clock; SceneManager scenes(clock, storage);
+    auto value = track(); setText(value.title, std::string(20, 'T')); setText(value.artist, std::string(21, 'A'));
     scenes.heartbeat(); scenes.updateNowPlaying(value);
     DeviceDisplay display(storage); display.begin();
     for (unsigned row = 0; row < 176; ++row) display.tick(scenes, row);
     auto& panel = display_test::panelState;
-    TEST_ASSERT_EQUAL_UINT32(3, panel.texts.size());
-    TEST_ASSERT_EQUAL_STRING(std::string(18, 'T').c_str(), panel.texts[0].text.c_str());
-    TEST_ASSERT_EQUAL_STRING("Artist ?? AAAAAAA", panel.texts[1].text.c_str());
-    TEST_ASSERT_EQUAL_STRING("...", panel.texts[2].text.c_str());
-    TEST_ASSERT_EQUAL_INT(8, panel.texts[0].x); TEST_ASSERT_EQUAL_INT(190, panel.texts[0].y);
-    TEST_ASSERT_EQUAL_INT(8, panel.texts[1].x); TEST_ASSERT_EQUAL_INT(211, panel.texts[1].y);
-    TEST_ASSERT_EQUAL_UINT8(2, panel.texts[0].size); TEST_ASSERT_EQUAL_UINT8(2, panel.texts[1].size);
-    TEST_ASSERT_EQUAL_UINT8(1, panel.texts[2].size);
-    TEST_ASSERT_EQUAL_INT(212, panel.texts[2].x); TEST_ASSERT_EQUAL_INT(218, panel.texts[2].y);
-    TEST_ASSERT_TRUE(panel.texts[2].x + 18 <= 232);
-    const auto rectangles = panel.rectangles.size();
-    for (unsigned now = 1000; now < 30000; now += 125) display.tick(scenes, now);
-    TEST_ASSERT_EQUAL_UINT32(3, panel.texts.size());
-    TEST_ASSERT_EQUAL_UINT32(rectangles, panel.rectangles.size());
-    setText(value.title, std::string(19, 'T')); scenes.updateNowPlaying(value); display.tick(scenes, 30000);
-    TEST_ASSERT_EQUAL_STRING(std::string(17, 'T').c_str(), panel.texts[3].text.c_str());
-    TEST_ASSERT_EQUAL_STRING("...", panel.texts[4].text.c_str());
-    TEST_ASSERT_EQUAL_INT(212, panel.texts[4].x); TEST_ASSERT_EQUAL_INT(197, panel.texts[4].y);
-    TEST_ASSERT_EQUAL_UINT8(1, panel.texts[4].size);
-    const auto count = panel.texts.size();
-    setText(value.title, std::string(19, 'T') + " changed tail");
-    scenes.updateNowPlaying(value); display.tick(scenes, 30125);
-    TEST_ASSERT_EQUAL_UINT32(count, panel.texts.size());
-    setText(value.title, std::string(17, 'T')); scenes.updateNowPlaying(value); display.tick(scenes, 30250);
-    TEST_ASSERT_EQUAL_UINT32(count + 1, panel.texts.size());
-    TEST_ASSERT_EQUAL_STRING(std::string(17, 'T').c_str(), panel.texts.back().text.c_str());
+    const auto coverRows = panel.rows.size();
+    panel.texts.clear(); panel.rectangles.clear();
+    display.tick(scenes, 1675); // Title moves first; artist remains independent.
     TEST_ASSERT_EQUAL_INT(190, panel.rectangles.back().y);
+    display.tick(scenes, 1676);
+    TEST_ASSERT_EQUAL_INT(211, panel.rectangles.back().y);
+    for (unsigned step = 1; step < 6; ++step) {
+        display.tick(scenes, 1675 + step * 125);
+        display.tick(scenes, 1676 + step * 125);
+    }
+    const auto beforePause = panel.texts.size();
+    display.tick(scenes, 2425); // Title reached its 16-pixel end at 2300.
+    TEST_ASSERT_EQUAL_UINT32(beforePause, panel.texts.size());
+    ++storage.assetRevision;
+    const auto beforeCover = panel.texts.size();
+    for (unsigned row = 0; row < 176; ++row) display.tick(scenes, 4000 + row * 20);
+    TEST_ASSERT_EQUAL_UINT32(beforeCover, panel.texts.size());
+    TEST_ASSERT_EQUAL_UINT32(coverRows + 176, panel.rows.size());
+    display.tick(scenes, 9000);
+    TEST_ASSERT_EQUAL_UINT32(beforeCover + 1, panel.texts.size());
+    const auto rectCount = panel.rectangles.size(), textCount = panel.texts.size();
+    setText(value.title, std::string(19, 'Z')); scenes.updateNowPlaying(value); display.tick(scenes, 9001);
+    TEST_ASSERT_EQUAL_INT(190, panel.rectangles[rectCount].y);
+    TEST_ASSERT_EQUAL_INT(8, panel.texts[textCount].x);
+    for (const auto& rect : panel.rectangles) TEST_ASSERT_TRUE(rect.y >= 190);
+    display.showGif();
+    const auto reentryText = panel.texts.size();
+    display.tick(scenes, 9002);
+    TEST_ASSERT_EQUAL_INT(8, panel.texts[reentryText].x);
+    TEST_ASSERT_EQUAL_INT(190, panel.texts[reentryText].y);
+    TEST_ASSERT_EQUAL_INT(4, panel.rows.back().y);
+}
+
+void testMarqueeBoundaryAndUnicodeReplacement() {
+    display_test::panelState = {};
+    PersistentStorage storage; TestClock clock; SceneManager scenes(clock, storage);
+    auto value = track(); setText(value.title, std::string(18, 'T'));
+    setText(value.artist, std::string(18, 'A') + "\xc3\xa9");
+    scenes.heartbeat(); scenes.updateNowPlaying(value);
+    DeviceDisplay display(storage); display.begin();
+    for (unsigned row = 0; row < 176; ++row) display.tick(scenes, row);
+    auto& panel = display_test::panelState;
+    TEST_ASSERT_EQUAL_STRING((std::string(18, 'A') + "?").c_str(), panel.texts[1].text.c_str());
+    const auto textCount = panel.texts.size();
+    display.tick(scenes, 1675);
+    TEST_ASSERT_EQUAL_UINT32(textCount + 1, panel.texts.size());
+    TEST_ASSERT_EQUAL_INT(211, panel.rectangles.back().y);
+}
+
+void testMarqueePausesAfterReturningToStart() {
+    display_test::panelState = {};
+    PersistentStorage storage; TestClock clock; SceneManager scenes(clock, storage);
+    auto value = track(); setText(value.title, std::string(19, 'T'));
+    scenes.heartbeat(); scenes.updateNowPlaying(value);
+    DeviceDisplay display(storage); display.begin();
+    for (unsigned row = 0; row < 176; ++row) display.tick(scenes, row);
+    auto& panel = display_test::panelState;
+    display.tick(scenes, 1675); display.tick(scenes, 1800);
+    TEST_ASSERT_EQUAL_INT(4, panel.texts.back().x);
+    const auto farEnd = panel.texts.size();
+    display.tick(scenes, 3299); TEST_ASSERT_EQUAL_UINT32(farEnd, panel.texts.size());
+    display.tick(scenes, 3300); display.tick(scenes, 3425);
+    TEST_ASSERT_EQUAL_INT(8, panel.texts.back().x);
+    const auto start = panel.texts.size();
+    display.tick(scenes, 4924); TEST_ASSERT_EQUAL_UINT32(start, panel.texts.size());
+    display.tick(scenes, 4925); TEST_ASSERT_EQUAL_INT(5, panel.texts.back().x);
 }
 
 void testLongMetadataAndRapidTrackChangesKeepArtworkBound() {
@@ -474,7 +539,10 @@ int main() {
     RUN_TEST(testDisplayHalfTurnUsesRgbWithoutOverridingRotation);
     RUN_TEST(testSpotifyStreamsLargerCoverAndDoesNotRedrawOnProgress);
     RUN_TEST(testSpotifyMetadataChangesInvalidateOnlyTheirOwnField);
-    RUN_TEST(testSpotifyFixedTextTruncatesAtViewportAndDoesNotRedraw);
+    RUN_TEST(testSpotifyMarqueeWaitsForCoverAndMovesFieldsIndependently);
+    RUN_TEST(testMarqueePausesAtBothEndsAndRestartsOnMetadataAndCoverChanges);
+    RUN_TEST(testMarqueeBoundaryAndUnicodeReplacement);
+    RUN_TEST(testMarqueePausesAfterReturningToStart);
     RUN_TEST(testLongMetadataAndRapidTrackChangesKeepArtworkBound);
     RUN_TEST(testAutoPauseAndExpiryReturnToPreviouslyInstalledGif);
     RUN_TEST(testCoverArrivingAfterMetadataAndNewTrackKeepTextStable);

@@ -517,7 +517,6 @@ const SPOTIFY_ARTIST_Y = 211;
 const SPOTIFY_LINE_HEIGHT = 20;
 const SPOTIFY_TEXT_X = 8;
 const SPOTIFY_TEXT_VIEWPORT_WIDTH = 224;
-const SPOTIFY_TEXT_GAP = 24;
 const SPOTIFY_MARQUEE_START_DELAY_MS = 1500;
 const SPOTIFY_MARQUEE_INTERVAL_MS = 125;
 const SPOTIFY_MARQUEE_STEP_PIXELS = 3;
@@ -525,7 +524,7 @@ const SPOTIFY_TITLE_FONT = "600 16px system-ui, sans-serif";
 const SPOTIFY_ARTIST_FONT = "16px system-ui, sans-serif";
 
 function createSpotifyMarquee() {
-  return { text: "", width: 0, offset: 0, phaseStartedAt: 0, lastStepAt: 0, scrolls: false, scrolling: false };
+  return { text: "", width: 0, letterSpacing: 0, offset: 0, lastStepAt: 0, reverse: false };
 }
 
 let spotifyTitleMarquee = createSpotifyMarquee();
@@ -540,12 +539,13 @@ let previousSpotifyCoverPresent = false;
 function resetSpotifyMarquee(marquee, value, font, now) {
   marquee.text = String(value ?? "");
   context.font = font;
-  marquee.width = context.measureText(marquee.text).width;
+  context.letterSpacing = "0px";
+  const cells = [...marquee.text].length;
+  marquee.width = cells * 12;
+  marquee.letterSpacing = cells ? (marquee.width - context.measureText(marquee.text).width) / cells : 0;
   marquee.offset = 0;
-  marquee.phaseStartedAt = now;
   marquee.lastStepAt = now;
-  marquee.scrolls = marquee.width > SPOTIFY_TEXT_VIEWPORT_WIDTH;
-  marquee.scrolling = false;
+  marquee.reverse = false;
 }
 
 function drawSpotifyMarquee(marquee, y, color, font, clear) {
@@ -561,36 +561,26 @@ function drawSpotifyMarquee(marquee, y, color, font, clear) {
   context.textBaseline = "top";
   context.fillStyle = color;
   context.font = font;
+  context.letterSpacing = `${marquee.letterSpacing}px`;
   const x = SPOTIFY_TEXT_X - marquee.offset;
   if (marquee.text && x < 240 && x + marquee.width > 0) context.fillText(marquee.text, x, y);
-  const repeatedX = x + marquee.width + SPOTIFY_TEXT_GAP;
-  if (marquee.scrolls && repeatedX < 240 && repeatedX + marquee.width > 0) {
-    context.fillText(marquee.text, repeatedX, y);
-  }
   context.restore();
 }
 
 function advanceSpotifyMarquee(marquee, y, color, font, now) {
-  if (!marquee.scrolls) return;
-  if (!marquee.scrolling) {
-    if (now - marquee.phaseStartedAt < SPOTIFY_MARQUEE_START_DELAY_MS) return;
-    marquee.scrolling = true;
-    marquee.lastStepAt = now;
-    return;
-  }
-  const elapsed = now - marquee.lastStepAt;
-  if (elapsed < SPOTIFY_MARQUEE_INTERVAL_MS) return;
-  const steps = Math.floor(elapsed / SPOTIFY_MARQUEE_INTERVAL_MS);
-  marquee.lastStepAt += steps * SPOTIFY_MARQUEE_INTERVAL_MS;
-  const nextOffset = marquee.offset + steps * SPOTIFY_MARQUEE_STEP_PIXELS;
-  if (nextOffset >= marquee.width + SPOTIFY_TEXT_GAP) {
-    marquee.offset = 0;
-    marquee.scrolling = false;
-    marquee.phaseStartedAt = now;
-  } else {
-    marquee.offset = nextOffset;
-  }
+  const end = Math.max(0, marquee.width - SPOTIFY_TEXT_VIEWPORT_WIDTH);
+  if (!end) return false;
+  const atEnd = marquee.offset === 0 || marquee.offset === end;
+  const interval = atEnd ? SPOTIFY_MARQUEE_START_DELAY_MS : SPOTIFY_MARQUEE_INTERVAL_MS;
+  if (now - marquee.lastStepAt < interval) return false;
+  marquee.offset = marquee.reverse
+    ? Math.max(0, marquee.offset - SPOTIFY_MARQUEE_STEP_PIXELS)
+    : Math.min(end, marquee.offset + SPOTIFY_MARQUEE_STEP_PIXELS);
+  if (marquee.offset === end) marquee.reverse = true;
+  else if (marquee.offset === 0) marquee.reverse = false;
+  marquee.lastStepAt = now;
   drawSpotifyMarquee(marquee, y, color, font, true);
+  return true;
 }
 
 function drawSpotify(now) {
@@ -627,6 +617,10 @@ function drawSpotify(now) {
     resetSpotifyMarquee(spotifyArtistMarquee, artist, SPOTIFY_ARTIST_FONT, now);
     drawSpotifyMarquee(spotifyArtistMarquee, SPOTIFY_ARTIST_Y, "#9c9e9c", SPOTIFY_ARTIST_FONT, !trackChanged);
   }
+  if (coverChanged) {
+    spotifyTitleMarquee.lastStepAt = now;
+    spotifyArtistMarquee.lastStepAt = now;
+  }
   previousSpotifyTrackId = trackId;
   previousSpotifyTitle = title;
   previousSpotifyArtist = artist;
@@ -634,8 +628,9 @@ function drawSpotify(now) {
   previousSpotifyCoverPresent = Boolean(coverImage);
   spotifySceneActive = true;
 
-  advanceSpotifyMarquee(spotifyTitleMarquee, SPOTIFY_TITLE_Y, "#ffffff", SPOTIFY_TITLE_FONT, now);
-  advanceSpotifyMarquee(spotifyArtistMarquee, SPOTIFY_ARTIST_Y, "#9c9e9c", SPOTIFY_ARTIST_FONT, now);
+  if (!advanceSpotifyMarquee(spotifyTitleMarquee, SPOTIFY_TITLE_Y, "#ffffff", SPOTIFY_TITLE_FONT, now)) {
+    advanceSpotifyMarquee(spotifyArtistMarquee, SPOTIFY_ARTIST_Y, "#9c9e9c", SPOTIFY_ARTIST_FONT, now);
+  }
 }
 
 function drawGif(now) {
