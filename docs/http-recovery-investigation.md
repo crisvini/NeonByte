@@ -62,6 +62,19 @@ counters can wrap. Diagnostics contain no tokens, passwords, SSIDs, addresses,
 request bodies or filenames. They are available only when the same recovery HTTP
 service can run and cannot report an operation that never returns.
 
+The [safe memory and loop review](safe-memory-and-loop-review.md) adds four
+allocation-free, inclusive maxima in milliseconds on the separate authenticated
+`GET /maintenance/v1/loop-diagnostics` route: `maxHttpTickMs`,
+`maxStartupTickMs`, `maxDisplayTickMs`, and `maxBackgroundMs` (the final `delay(0)`
+and its background work). They include cooperative yields within each measured
+stage, accumulate from boot, and reset on restart. The original `maxLoopGapMs`
+still measures entry-to-entry HTTP service time, including application startup.
+Separate maxima do not associate the longest gap with a particular frame or
+prove that it occurred during steady playback. Sampling the diagnostics does
+not reset the maxima; a response reports completed previous iterations.
+The original diagnostics route retains its exact field set for compatibility
+with the deployed client's strict response validation.
+
 The display currently renders one animation row per loop and LittleFS reopens
 the animation for each row. SDK `yield()` allows background processing but does
 not reenter the application HTTP loop during a synchronous call. Full-screen SPI

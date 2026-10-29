@@ -354,6 +354,19 @@ void DeviceHttpServer::dispatchJson() {
         }
         prepareResponse(); return;
     }
+    if (maintenance_ && request.path.size() == sizeof("/maintenance/v1/loop-diagnostics") - 1 &&
+        memcmp_P(request.path.data(),PSTR("/maintenance/v1/loop-diagnostics"),request.path.size()) == 0) {
+        if (!startup_.authorized(request.authorization)) { error(401,"unauthorized",PSTR("A valid recovery bearer token is required.")); return; }
+        if (request.method != HttpMethod::get || !request.body.empty()) { error(400,"invalid_request",PSTR("Use GET with an empty body.")); return; }
+        response_ = {}; response_.statusCode = 200; response_.contentType = "application/json";
+        const int written = snprintf_P(response_.body.data(),response_.body.size(),PSTR("{\"maxLoopGapMs\":%lu,"
+            "\"maxHttpTickMs\":%lu,\"maxStartupTickMs\":%lu,\"maxDisplayTickMs\":%lu,\"maxBackgroundMs\":%lu}"),
+            static_cast<unsigned long>(diagnostics_.maxLoopGapMs),static_cast<unsigned long>(diagnostics_.maxHttpTickMs),
+            static_cast<unsigned long>(diagnostics_.maxStartupTickMs),static_cast<unsigned long>(diagnostics_.maxDisplayTickMs),
+            static_cast<unsigned long>(diagnostics_.maxBackgroundMs));
+        if (written < 0 || static_cast<std::size_t>(written) >= response_.body.size()) { error(500,"internal_error",PSTR("Diagnostics are unavailable.")); return; }
+        response_.bodySize = static_cast<std::size_t>(written); prepareResponse(); return;
+    }
     if (maintenance_ && request.path == "/maintenance/v1/diagnostics") {
         if (!startup_.authorized(request.authorization)) { error(401,"unauthorized",PSTR("A valid recovery bearer token is required.")); return; }
         if (request.method != HttpMethod::get || !request.body.empty()) { error(400,"invalid_request",PSTR("Use GET with an empty body.")); return; }

@@ -219,11 +219,20 @@ void setup() {
 void loop() {
     using namespace neonbyte;
     const auto now = deviceClock.monotonicMillis();
+    const std::uint32_t started = millis();
+    std::uint32_t afterHttp = started, afterStartup = started, afterDisplay = started;
     if (startup.identityValid()) {
         http.tick(now);
+        afterHttp = millis();
         startup.tick(now);
+        afterStartup = millis();
         if (startup.applicationRunning() && scenes) display.tick(*scenes,now);
+        afterDisplay = millis();
     }
     delay(0);
+    // Inclusive elapsed time also captures cooperative radio/filesystem yields.
+    // Unsigned differences remain valid across millis() rollover.
+    http.recordLoopTimings(afterHttp-started,afterStartup-afterHttp,
+                           afterDisplay-afterStartup,millis()-afterDisplay);
 }
 #endif

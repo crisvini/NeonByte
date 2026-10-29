@@ -61,6 +61,8 @@ jobs:
         run: python firmware/scripts/probe_http_lifecycle.py
       - name: Probe authenticated HTTP diagnostics offline
         run: python firmware/scripts/probe_http_diagnostics.py
+      - name: Probe main-loop stage timing offline
+        run: python firmware/scripts/probe_loop_timing.py
       - name: Probe NBIF v2 upload, validation, and replacement offline
         run: python firmware/scripts/probe_animation_v2_http.py
       - name: Validate local images and deployment guard

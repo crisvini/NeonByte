@@ -207,7 +207,10 @@ void testV2PlayerReopensFromKeyframeAfterAStorageReadFailure() {
     display.tick(scenes, 50); // Start its palette.
     display.tick(scenes, 50); // Encounter the injected read failure.
     storage.failAnimationReads = false;
-    for (unsigned tick = 0; tick < 320 && panel.rows.size() < 480; ++tick) display.tick(scenes, 51);
+    // A reopen also failed while storage was unavailable, so its retry is due at 1050.
+    display.tick(scenes, 51); display.tick(scenes, 1049);
+    TEST_ASSERT_EQUAL_UINT32(240, panel.rows.size());
+    for (unsigned tick = 0; tick < 320 && panel.rows.size() < 480; ++tick) display.tick(scenes, 1050);
     TEST_ASSERT_EQUAL_UINT32(480, panel.rows.size());
     TEST_ASSERT_EQUAL_INT(0, panel.rows[240].x);
     TEST_ASSERT_EQUAL_INT(0, panel.rows[240].y);
@@ -439,6 +442,138 @@ void testMarqueeBoundaryAndUnicodeReplacement() {
     TEST_ASSERT_EQUAL_INT(211, panel.rectangles.back().y);
 }
 
+void testMarqueeStateFitsMetadataOnlyBudget() {
+    // Text belongs in the inactive decoder workspace, not in each motion state.
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(24, sizeof(SpotifyMarquee));
+}
+
+void testGifSceneEntryRetriesTransientOpenFailuresOncePerTick() {
+    for (bool fromSpotify : {false, true}) for (unsigned failedRead = 1; failedRead <= 5; ++failedRead) {
+        display_test::panelState = {};
+        PersistentStorage storage; installV2Animation(storage);
+        TestClock clock; SceneManager scenes(clock, storage);
+        auto value = track(); scenes.heartbeat(); scenes.updateNowPlaying(value);
+        DeviceDisplay display(storage); display.begin();
+        if (fromSpotify) display.tick(scenes, 0);
+        TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
+        storage.failAnimationReadCall = storage.animationReadCalls + failedRead;
+        const auto previousRows = display_test::panelState.rows.size();
+        display.tick(scenes, 0);
+        TEST_ASSERT_EQUAL_UINT32(storage.failAnimationReadCall, storage.animationReadCalls);
+        TEST_ASSERT_EQUAL_UINT32(previousRows, display_test::panelState.rows.size());
+        display.tick(scenes, 1); display.tick(scenes, 999);
+        TEST_ASSERT_EQUAL_UINT32(storage.failAnimationReadCall, storage.animationReadCalls);
+        for (unsigned tick = 0; tick < 300 && display_test::panelState.rows.size() < previousRows + 240; ++tick)
+            display.tick(scenes, 1000);
+        TEST_ASSERT_EQUAL_UINT32(previousRows + 240, display_test::panelState.rows.size());
+        for (unsigned row = 0; row < 240; ++row) {
+            const auto& written = display_test::panelState.rows[previousRows + row];
+            TEST_ASSERT_EQUAL_INT(row, written.y);
+            TEST_ASSERT_EQUAL_HEX16(0xf800, written.firstPixel);
+        }
+    }
+}
+
+void testPersistentGifOpenFailureBacksOffAndNewRevisionBypassesWait() {
+    display_test::panelState = {};
+    PersistentStorage storage; installV2Animation(storage); storage.failAnimationReads = true;
+    TestClock clock; SceneManager scenes(clock, storage);
+    TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
+    DeviceDisplay display(storage); display.begin();
+    display.tick(scenes, 0);
+    TEST_ASSERT_EQUAL_UINT32(1, storage.animationReadCalls);
+    for (unsigned now = 1; now < 1000; ++now) display.tick(scenes, now);
+    TEST_ASSERT_EQUAL_UINT32(1, storage.animationReadCalls);
+    display.tick(scenes, 1000);
+    TEST_ASSERT_EQUAL_UINT32(2, storage.animationReadCalls);
+    display.tick(scenes, 1001);
+    TEST_ASSERT_EQUAL_UINT32(2, storage.animationReadCalls);
+    storage.failAnimationReads = false; ++storage.animationRevision;
+    for (unsigned tick = 0; tick < 300 && display_test::panelState.rows.size() < 240; ++tick)
+        display.tick(scenes, 1002);
+    TEST_ASSERT_EQUAL_UINT32(240, display_test::panelState.rows.size());
+    TEST_ASSERT_EQUAL_HEX16(0xf800, display_test::panelState.rows.front().firstPixel);
+}
+
+void testRapidSceneChangesKeepPartialCoversAndDecodedRowsIsolated() {
+    display_test::panelState = {};
+    PersistentStorage storage; installV2Animation(storage);
+    for (unsigned y = 0; y < 240; ++y) for (unsigned x = 0; x < 240; ++x)
+        appendLittleEndian16(storage.coverBytes, static_cast<std::uint16_t>(y * 240 + x));
+    TestClock clock; SceneManager scenes(clock, storage);
+    auto value = track(); setText(value.title, std::string(256, 'T')); setText(value.artist, std::string(256, 'A'));
+    scenes.heartbeat(); scenes.updateNowPlaying(value);
+    DeviceDisplay display(storage); display.begin();
+    auto& panel = display_test::panelState;
+    std::uint64_t now = 0;
+    for (unsigned gifTicks : {0U, 1U, 2U, 120U, 240U, 241U, 242U, 243U, 244U, 245U, 246U}) {
+        TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::spotify));
+        for (unsigned row = 0; row < 3; ++row) display.tick(scenes, now++);
+        TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
+        display.showGif();
+        for (unsigned tick = 0; tick < gifTicks; ++tick) display.tick(scenes, now++);
+        TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::spotify));
+        const auto textStart = panel.texts.size();
+        for (unsigned row = 0; row < 176; ++row) display.tick(scenes, now++);
+        TEST_ASSERT_EQUAL_UINT32(textStart + 2, panel.texts.size());
+        TEST_ASSERT_EQUAL_INT(8, panel.texts[textStart].x);
+        TEST_ASSERT_EQUAL_STRING(std::string(20, 'T').c_str(), panel.texts[textStart].text.c_str());
+        TEST_ASSERT_EQUAL_STRING(std::string(20, 'A').c_str(), panel.texts[textStart + 1].text.c_str());
+        for (unsigned y = 4; y < 180; ++y) for (unsigned x = 32; x < 208; ++x) {
+            const auto sourceY = (y - 4) * 240 / 176;
+            const auto sourceX = (x - 32) * 240 / 176;
+            TEST_ASSERT_EQUAL_HEX16(sourceY * 240 + sourceX, panel.pixels[y * 240 + x]);
+        }
+    }
+}
+
+void testFullLengthMarqueesSurviveCoverLoadingAndRepeatedGifReentry() {
+    display_test::panelState = {};
+    PersistentStorage storage; installV2Animation(storage);
+    storage.coverBytes.assign(115200, 0xa5);
+    TestClock clock; SceneManager scenes(clock, storage);
+    auto value = track();
+    const std::string title = std::string(240, 'T') + "TITLE-END-123456";
+    const std::string artist = std::string(240, 'A') + "ARTIST-END-12345";
+    TEST_ASSERT_EQUAL_UINT32(256, title.size());
+    TEST_ASSERT_EQUAL_UINT32(256, artist.size());
+    setText(value.title, title); setText(value.artist, artist);
+    scenes.heartbeat(); scenes.updateNowPlaying(value);
+    DeviceDisplay display(storage); display.begin();
+    auto& panel = display_test::panelState;
+    std::uint64_t now = 0;
+    for (unsigned pass = 0; pass < 3; ++pass) {
+        TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
+        const auto rowsBeforeGif = panel.rows.size();
+        // Interrupt frame zero while its encoded workspace retains a row header.
+        for (unsigned tick = 0; tick < 20 && panel.rows.size() == rowsBeforeGif; ++tick)
+            display.tick(scenes, now++);
+        TEST_ASSERT_EQUAL_UINT32(rowsBeforeGif + 1, panel.rows.size());
+        TEST_ASSERT_EQUAL_INT(0, panel.rows.back().y);
+        TEST_ASSERT_EQUAL_HEX16(0xf800, panel.rows.back().firstPixel);
+
+        TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::spotify));
+        panel.texts.clear();
+        for (unsigned row = 0; row < 176; ++row) display.tick(scenes, now++);
+        TEST_ASSERT_EQUAL_UINT32(2, panel.texts.size());
+        TEST_ASSERT_EQUAL_INT(8, panel.texts[0].x);
+        TEST_ASSERT_EQUAL_INT(8, panel.texts[1].x);
+        TEST_ASSERT_EQUAL_STRING(std::string(20, 'T').c_str(), panel.texts[0].text.c_str());
+        TEST_ASSERT_EQUAL_STRING(std::string(20, 'A').c_str(), panel.texts[1].text.c_str());
+        const auto coverRows = panel.rows.size();
+        now += SPOTIFY_MARQUEE_PAUSE_MS;
+        for (unsigned step = 0; step < 950; ++step) {
+            display.tick(scenes, now); display.tick(scenes, now + 1);
+            now += SPOTIFY_MARQUEE_INTERVAL_MS;
+        }
+        TEST_ASSERT_EQUAL_UINT32(coverRows, panel.rows.size());
+        TEST_ASSERT_EQUAL_INT(190, panel.texts[panel.texts.size() - 2].y);
+        TEST_ASSERT_EQUAL_INT(211, panel.texts.back().y);
+        TEST_ASSERT_TRUE(panel.texts[panel.texts.size() - 2].text.find("TITLE-END-123456") != std::string::npos);
+        TEST_ASSERT_TRUE(panel.texts.back().text.find("ARTIST-END-12345") != std::string::npos);
+    }
+}
+
 void testMarqueePausesAfterReturningToStart() {
     display_test::panelState = {};
     PersistentStorage storage; TestClock clock; SceneManager scenes(clock, storage);
@@ -574,6 +709,11 @@ int main() {
     RUN_TEST(testSpotifyMarqueeWaitsForCoverAndMovesFieldsIndependently);
     RUN_TEST(testMarqueePausesAtBothEndsAndRestartsOnMetadataAndCoverChanges);
     RUN_TEST(testMarqueeBoundaryAndUnicodeReplacement);
+    RUN_TEST(testMarqueeStateFitsMetadataOnlyBudget);
+    RUN_TEST(testGifSceneEntryRetriesTransientOpenFailuresOncePerTick);
+    RUN_TEST(testPersistentGifOpenFailureBacksOffAndNewRevisionBypassesWait);
+    RUN_TEST(testRapidSceneChangesKeepPartialCoversAndDecodedRowsIsolated);
+    RUN_TEST(testFullLengthMarqueesSurviveCoverLoadingAndRepeatedGifReentry);
     RUN_TEST(testMarqueePausesAfterReturningToStart);
     RUN_TEST(testLongMetadataAndRapidTrackChangesKeepArtworkBound);
     RUN_TEST(testAutoPauseAndExpiryReturnToPreviouslyInstalledGif);

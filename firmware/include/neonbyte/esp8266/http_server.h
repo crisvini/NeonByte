@@ -34,6 +34,7 @@ struct HttpDiagnostics {
     std::uint32_t connectionsAccepted = 0, connectionsDisconnected = 0, idleTimeouts = 0, totalTimeouts = 0;
     std::uint32_t uploadsStarted = 0, uploadsAborted = 0, uploadsCompleted = 0, uploadFailures = 0;
     std::uint32_t uploadBytes = 0, maxLoopGapMs = 0;
+    std::uint32_t maxHttpTickMs = 0, maxStartupTickMs = 0, maxDisplayTickMs = 0, maxBackgroundMs = 0;
 };
 class DeviceHttpServer {
 public:
@@ -55,6 +56,13 @@ public:
             !maintenanceOtaBlocksBackgroundWork(stockRestoreOta_.state());
     }
     void tick(std::uint64_t now);
+    void recordLoopTimings(std::uint32_t httpMs, std::uint32_t startupMs,
+                           std::uint32_t displayMs, std::uint32_t backgroundMs) {
+        if (httpMs > diagnostics_.maxHttpTickMs) diagnostics_.maxHttpTickMs = httpMs;
+        if (startupMs > diagnostics_.maxStartupTickMs) diagnostics_.maxStartupTickMs = startupMs;
+        if (displayMs > diagnostics_.maxDisplayTickMs) diagnostics_.maxDisplayTickMs = displayMs;
+        if (backgroundMs > diagnostics_.maxBackgroundMs) diagnostics_.maxBackgroundMs = backgroundMs;
+    }
 
 private:
     enum class AnimationV2Request : std::uint8_t { none, capabilities, begin, chunk, complete, status, cancel, invalid };

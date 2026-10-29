@@ -20,9 +20,8 @@ constexpr unsigned SPOTIFY_MARQUEE_PAUSE_MS = 1500;
 constexpr unsigned SPOTIFY_MARQUEE_INTERVAL_MS = 125;
 constexpr unsigned SPOTIFY_MARQUEE_STEP_PIXELS = 3;
 struct SpotifyMarquee {
-    BoundedText<MAX_TEXT_CODE_POINTS> text{};
     std::uint64_t lastStepMs = 0;
-    std::uint16_t offset = 0;
+    std::uint16_t offset = 0, length = 0;
     bool reverse = false;
 };
 
@@ -36,7 +35,7 @@ class DeviceDisplay final : public DisplayRenderer {
 public:
     explicit DeviceDisplay(PersistentStorage& storage)
         : storage_(storage), animation_(storage), animationV2_(storage,pixels_.data(),pixels_.size(),
-          encodedRow_.data(),encodedRow_.size()),
+          encodedWorkspace_.data(),NBIF_V2_ROW_BUFFER_BYTES),
           panel_(-1,DISPLAY_DC,DISPLAY_RESET) {}
     void begin();
     void setupCredentials(const DeviceConfiguration& configuration);
@@ -51,11 +50,17 @@ private:
     bool openAnimation();
     void textLine(std::string_view text, int x, int y, unsigned limit, std::uint16_t color,
                   unsigned size = 1);
-    void drawSpotifyText(const SpotifyMarquee& text, int y, std::uint16_t color, bool clear);
-    bool updateMarquee(SpotifyMarquee& text, int y, std::uint16_t color, std::uint64_t now);
+    void drawSpotifyText(const SpotifyMarquee& text, const std::uint8_t* cachedText,
+                         int y, std::uint16_t color, bool clear);
+    bool updateMarquee(SpotifyMarquee& text, const std::uint8_t* cachedText,
+                       int y, std::uint16_t color, std::uint64_t now);
     PersistentStorage& storage_;
     std::array<std::uint8_t,480> pixels_{};
-    std::array<std::uint8_t,480> encodedRow_{};
+    // GIF: dedicated encoded row (including its prefetched header). Spotify:
+    // two ASCII text caches. Each scene entry rebuilds its workspace contents.
+    // Cover output stays separate in pixels_; the decoder sees only 480 bytes.
+    static_assert(2 * MAX_TEXT_CODE_POINTS >= NBIF_V2_ROW_BUFFER_BYTES);
+    std::array<std::uint8_t,2 * MAX_TEXT_CODE_POINTS> encodedWorkspace_{};
     AnimationReader animation_;
     AnimationDecoder animationV2_;
     BoundedDisplayPanel panel_;
