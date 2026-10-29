@@ -16,10 +16,21 @@ class DeviceHttpStatusError extends Error {
 
 export class AnimationStorageError extends Error {
   constructor() {
-    super("The converted animation does not fit in device storage with space for safe replacement. Choose a GIF with fewer frames; the previously installed GIF is preserved.");
+    super("The converted animation does not fit in device storage with the required reserve. Choose a GIF with fewer frames.");
     this.name = "AnimationStorageError";
   }
 }
+
+export class AnimationReplacementCancelledError extends Error {
+  constructor() { super("The animation replacement was cancelled."); this.name = "AnimationReplacementCancelledError"; }
+}
+
+export interface AnimationRemovalReceipt {
+  removed: true;
+  freeStorageBytes: number;
+}
+
+export type AnimationUploadStage = "uploading" | "validating";
 
 export interface DeviceStatus {
   protocolVersion: "v1";
@@ -68,6 +79,13 @@ function validMediaCapabilities(value: unknown): value is MediaCapabilities {
     Number.isSafeInteger(capabilities["maxChunkBytes"]) && Number(capabilities["maxChunkBytes"]) >= 1 && Number(capabilities["maxChunkBytes"]) <= 1024 &&
     Number.isSafeInteger(capabilities["reserveBytes"]) && Number(capabilities["reserveBytes"]) >= MEDIA_STORAGE_RESERVE_BYTES &&
     Number.isSafeInteger(capabilities["freeStorageBytes"]) && Number(capabilities["freeStorageBytes"]) >= 0;
+}
+
+function validAnimationRemovalReceipt(value: unknown): value is AnimationRemovalReceipt {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const receipt = value as Record<string, unknown>;
+  return Object.keys(receipt).length === 2 && receipt["removed"] === true &&
+    Number.isSafeInteger(receipt["freeStorageBytes"]) && Number(receipt["freeStorageBytes"]) >= 0;
 }
 
 function createLegacyFallback(asset: AnimationAsset): MediaAsset {
@@ -145,11 +163,12 @@ export class DeviceClient {
   }
 
   private async request(path: string, method: string, body?: string | Buffer, headers: Record<string, string> = {},
-                        timeoutMs = this.timeoutMs, acceptedStatuses?: readonly number[], preserveStatusError = false): Promise<Response> {
+                        timeoutMs = this.timeoutMs, acceptedStatuses?: readonly number[], preserveStatusError = false,
+                        signal?: AbortSignal): Promise<Response> {
     try {
       const publicStatus = method === "GET" && path === "/api/v1/status";
       const response = await this.fetchDevice(new URL(path, this.baseUrl), {
-        method, redirect: "error", signal: AbortSignal.timeout(timeoutMs),
+        method, redirect: "error", signal: signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs),
         headers: { ...headers, ...(publicStatus ? {} : { Authorization: `Bearer ${this.token}` }),
           ...(method === "GET" ? {} : { "Content-Length": String(body === undefined ? 0 : Buffer.byteLength(body)) }) },
         ...(body === undefined ? {} : { body }),
@@ -162,15 +181,16 @@ export class DeviceClient {
       }
       return response;
     } catch (error) {
+      if (signal?.aborted) throw new AnimationReplacementCancelledError();
       if (error instanceof AnimationStorageError || (preserveStatusError && error instanceof DeviceHttpStatusError)) throw error;
       // Never echo remote bodies, addresses, pairing tokens, or fetch exception details.
       throw new Error("Device communication failed; check pairing, compatibility, and connectivity.");
     }
   }
 
-  async status(): Promise<DeviceStatus> {
+  async status(signal?: AbortSignal): Promise<DeviceStatus> {
     try {
-      const response = await this.request("/api/v1/status", "GET");
+      const response = await this.request("/api/v1/status", "GET", undefined, {}, this.timeoutMs, undefined, false, signal);
       const value: unknown = await response.json();
       if (validStatus(value)) return value;
     } catch { /* Report one safe compatibility error. */ }
@@ -234,45 +254,99 @@ export class DeviceClient {
     }, this.uploadTimeout(asset.bytes.length));
   }
 
-  private async animationUploadStatus(uploadId: string): Promise<AnimationUploadStatus> {
-    const response = await this.request(`/api/v2/animation/uploads/${uploadId}`, "GET");
+  private async animationUploadStatus(uploadId: string, signal?: AbortSignal): Promise<AnimationUploadStatus> {
+    const response = await this.request(`/api/v2/animation/uploads/${uploadId}`, "GET", undefined, {}, this.timeoutMs, undefined, false, signal);
     const value = await safeResponseJson(response);
     if (!validAnimationUploadStatus(value, uploadId)) throw new Error("The device returned an invalid animation upload status.");
     return value;
   }
 
   async uploadAnimation(asset: MediaAsset | AnimationAsset, betweenChunks: () => Promise<void> = async () => {}): Promise<void> {
-    const status = await this.status();
+    return this.uploadAnimationWithOptions(asset, betweenChunks);
+  }
+
+  async replaceAnimation(asset: MediaAsset | AnimationAsset, options: {
+    betweenChunks?: () => Promise<void>;
+    signal?: AbortSignal;
+    onRemoved?: (receipt: AnimationRemovalReceipt) => void;
+    onStage?: (stage: "removing" | AnimationUploadStage) => void;
+  } = {}): Promise<AnimationRemovalReceipt> {
+    if (asset.bytes[4] !== 2) throw new Error("Only a locally validated NBIF v2 animation can replace the installed animation.");
+    validateAnimationV2(asset.bytes, asset.sha256);
+    await this.status(options.signal);
+    let capabilities: MediaCapabilities | null;
+    try { capabilities = await this.animationCapabilities(options.signal, false); }
+    catch (error) {
+      if (error instanceof DeviceHttpStatusError && error.status === 404) {
+        throw new Error("This device firmware does not support the authenticated NBIF v2 replacement workflow.");
+      }
+      throw error;
+    }
+    if (!capabilities) throw new Error("This device firmware does not support the authenticated NBIF v2 replacement workflow.");
+    this.validateAnimationCapacity(asset as AnimationAsset, capabilities);
+
+    options.onStage?.("removing");
+    const response = await this.request("/api/v2/animation", "DELETE", undefined, {}, this.timeoutMs, [200], true, options.signal);
+    const value = await safeResponseJson(response);
+    if (!validAnimationRemovalReceipt(value)) throw new Error("The device did not confirm animation removal or report available storage.");
+    options.onRemoved?.(value);
+    if (value.freeStorageBytes < asset.bytes.length + capabilities.reserveBytes) throw new AnimationStorageError();
+    if (options.signal?.aborted) throw new AnimationReplacementCancelledError();
+    await this.uploadAnimationWithOptions(asset, options.betweenChunks ?? (async () => {}), options.signal,
+      options.onStage);
+    return value;
+  }
+
+  private async animationCapabilities(signal?: AbortSignal, allowMissing = true): Promise<MediaCapabilities | null> {
+    let response: Response;
+    try {
+      response = await this.request("/api/v2/media-capabilities", "GET", undefined, {}, this.timeoutMs, [200], true, signal);
+    } catch (error) {
+      if (allowMissing && error instanceof DeviceHttpStatusError && error.status === 404) return null;
+      throw error;
+    }
+    const value = await safeResponseJson(response);
+    if (!validMediaCapabilities(value)) throw new Error("The device returned invalid media capabilities.");
+    return value;
+  }
+
+  private validateAnimationCapacity(asset: AnimationAsset, capabilities: MediaCapabilities): void {
+    if (!capabilities.formats.includes("nbif-v2")) throw new Error("The device does not support NBIF v2.");
+    if (asset.frameCount > capabilities.maxFrames) {
+      throw new Error(`Device firmware supports at most ${capabilities.maxFrames} animation frames; this animation has ${asset.frameCount}.`);
+    }
+    if (asset.durationMs > capabilities.maxDurationMs) {
+      throw new Error(`Device firmware supports animations up to ${capabilities.maxDurationMs} ms; this animation is ${asset.durationMs} ms.`);
+    }
+    if (asset.bytes.length > capabilities.maxEncodedBytes) throw new Error("The converted animation exceeds the device's NBIF v2 file limit.");
+  }
+
+  private async uploadAnimationWithOptions(asset: MediaAsset | AnimationAsset, betweenChunks: () => Promise<void>,
+                                            signal?: AbortSignal,
+                                            onStage?: (stage: AnimationUploadStage) => void): Promise<void> {
+    if (signal?.aborted) throw new AnimationReplacementCancelledError();
+    const status = await this.status(signal);
     if (asset.bytes[4] !== 2) {
       await this.uploadLegacyAnimation(asset, status.freeStorageBytes);
       return;
     }
     validateAnimationV2(asset.bytes, asset.sha256);
     const animationAsset = asset as AnimationAsset;
-    let capabilitiesResponse: Response;
-    try {
-      capabilitiesResponse = await this.request("/api/v2/media-capabilities", "GET", undefined, {}, this.timeoutMs, [200], true);
-    } catch (error) {
-      if (error instanceof DeviceHttpStatusError && error.status === 404) {
-        if (animationAsset.frameCount > 20) {
-          throw new Error(`This device supports at most 20 animation frames; this animation has ${animationAsset.frameCount}.`);
-        }
-        const legacy = animationAsset.legacy ?? createLegacyFallback(animationAsset);
-        await this.uploadLegacyAnimation(legacy, status.freeStorageBytes);
-        return;
-      }
+    let capabilities: MediaCapabilities | null;
+    try { capabilities = await this.animationCapabilities(signal); }
+    catch (error) {
+      if (error instanceof Error && /invalid media capabilities/i.test(error.message)) throw error;
       throw new Error("Device communication failed; the media capability response was unavailable.");
     }
-    const capabilitiesValue = await safeResponseJson(capabilitiesResponse);
-    if (!validMediaCapabilities(capabilitiesValue)) throw new Error("The device returned invalid media capabilities.");
-    const capabilities = capabilitiesValue;
-    if (!capabilities.formats.includes("nbif-v2")) throw new Error("The device does not support NBIF v2.");
-    if (animationAsset.frameCount > capabilities.maxFrames) {
-      throw new Error(`Device firmware supports at most ${capabilities.maxFrames} animation frames; this animation has ${animationAsset.frameCount}.`);
+    if (!capabilities) {
+      if (animationAsset.frameCount > 20) {
+        throw new Error(`This device supports at most 20 animation frames; this animation has ${animationAsset.frameCount}.`);
+      }
+      const legacy = animationAsset.legacy ?? createLegacyFallback(animationAsset);
+      await this.uploadLegacyAnimation(legacy, status.freeStorageBytes);
+      return;
     }
-    if (animationAsset.durationMs > capabilities.maxDurationMs) {
-      throw new Error(`Device firmware supports animations up to ${capabilities.maxDurationMs} ms; this animation is ${animationAsset.durationMs} ms.`);
-    }
+    this.validateAnimationCapacity(animationAsset, capabilities);
     const freeStorageBytes = Math.min(status.freeStorageBytes, capabilities.freeStorageBytes);
     if (asset.bytes.length > capabilities.maxEncodedBytes || asset.bytes.length + capabilities.reserveBytes > freeStorageBytes) {
       throw new AnimationStorageError();
@@ -280,7 +354,7 @@ export class DeviceClient {
 
     const startResponse = await this.request("/api/v2/animation/uploads", "POST",
       JSON.stringify({ sizeBytes: asset.bytes.length, sha256: asset.sha256 }),
-      { "Content-Type": "application/json" }, this.timeoutMs, [201, 507]);
+      { "Content-Type": "application/json" }, this.timeoutMs, [201, 507], false, signal);
     const startValue = await safeResponseJson(startResponse);
     if (startResponse.status === 507) {
       const error = startValue && typeof startValue === "object" ? (startValue as Record<string, unknown>)["code"] : null;
@@ -295,30 +369,35 @@ export class DeviceClient {
     const chunkSize = Math.min(ANIMATION_CHUNK_BYTES, capabilities.maxChunkBytes);
     let installed = false;
     try {
+      onStage?.("uploading");
       let offset = 0;
       while (offset < asset.bytes.length) {
+        if (signal?.aborted) throw new AnimationReplacementCancelledError();
         const end = Math.min(asset.bytes.length, offset + chunkSize);
         const chunk = Buffer.from(asset.bytes.subarray(offset, end));
         try {
           await this.request(`/api/v2/animation/uploads/${uploadId}/chunks?offset=${offset}`, "PUT", chunk,
-            { "Content-Type": "application/octet-stream" }, this.hasTimeoutOverride ? this.timeoutMs : 15_000);
+            { "Content-Type": "application/octet-stream" }, this.hasTimeoutOverride ? this.timeoutMs : 15_000, undefined, false, signal);
           offset = end;
         } catch {
-          const current = await this.animationUploadStatus(uploadId);
+          if (signal?.aborted) throw new AnimationReplacementCancelledError();
+          const current = await this.animationUploadStatus(uploadId, signal);
           if (current.state !== "receiving") throw new Error("The animation upload session stopped receiving data.");
           if (current.nextOffset === end) offset = end;
           else if (current.nextOffset === offset) {
             await this.request(`/api/v2/animation/uploads/${uploadId}/chunks?offset=${offset}`, "PUT", chunk,
-              { "Content-Type": "application/octet-stream" }, this.hasTimeoutOverride ? this.timeoutMs : 15_000);
+              { "Content-Type": "application/octet-stream" }, this.hasTimeoutOverride ? this.timeoutMs : 15_000, undefined, false, signal);
             offset = end;
           } else throw new Error("The device animation upload offset is inconsistent.");
         }
         await betweenChunks();
       }
-      await this.request(`/api/v2/animation/uploads/${uploadId}/complete`, "POST", undefined, {}, this.timeoutMs, [202]);
+      onStage?.("validating");
+      await this.request(`/api/v2/animation/uploads/${uploadId}/complete`, "POST", undefined, {}, this.timeoutMs, [202], false, signal);
       for (let poll = 0; poll < 6000; poll += 1) {
+        if (signal?.aborted) throw new AnimationReplacementCancelledError();
         await betweenChunks();
-        const current = await this.animationUploadStatus(uploadId);
+        const current = await this.animationUploadStatus(uploadId, signal);
         if (current.state === "installed") { installed = true; return; }
         if (current.state === "failed") {
           if (current.error === "insufficient_storage") throw new AnimationStorageError();

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { validateCover } from "../src/media/animation.js";
 import { validateAnimationV2 } from "../src/media/animation-decoder.js";
+import type { DeviceIntegration } from "../src/device/integration.js";
 import { MockSpotifyProvider } from "../src/spotify/mock.js";
 import { PlaybackPoller } from "../src/spotify/poller.js";
 import { startLocalWebApp, type FirmwareUpdateControl } from "../src/web/server.js";
@@ -20,7 +21,7 @@ const track = (isPlaying = true, index = 0) => ({
   },
 });
 
-async function makeApp(firmwareUpdate?: FirmwareUpdateControl) {
+async function makeApp(firmwareUpdate?: FirmwareUpdateControl, device?: DeviceIntegration) {
   const provider = new MockSpotifyProvider(track());
   const poller = new PlaybackPoller({ provider, pollIntervalMs: 15_000 });
   await poller.pollOnce();
@@ -31,6 +32,7 @@ async function makeApp(firmwareUpdate?: FirmwareUpdateControl) {
   const app = await startLocalWebApp({
     poller,
     ...(firmwareUpdate ? { firmwareUpdate } : {}),
+    ...(device ? { device } : {}),
     oauth: {
       createAuthorizationRequest: () => ({
         url: "https://accounts.spotify.com/authorize?state=mock-state",
@@ -99,20 +101,66 @@ test("serves the local panel and protects mode changes with a loopback origin ch
   }
 });
 
+test("GIF selection only prepares NBIF v2 and the panel starts replacement after explicit confirmation", async () => {
+  let prepared = 0;
+  let replacements = 0;
+  let cancellations = 0;
+  const fakeDevice = {
+    get status() { return { address: "127.0.0.1", enabled: true, paired: true, connection: "connected",
+      animation: { state: "prepared", attempts: 0, previousAnimation: "present" } }; },
+    setAnimation(asset: unknown) { prepared += 1; assert.ok(asset && typeof asset === "object"); },
+    replaceAnimation() { replacements += 1; },
+    cancelAnimationReplacement() { cancellations += 1; return true; },
+  } as unknown as DeviceIntegration;
+  const { app, origin } = await makeApp(undefined, fakeDevice);
+  const post = (path: string) => fetch(`${origin}${path}`, { method: "POST", headers: { Origin: origin } });
+  try {
+    const page = await fetch(origin).then((response) => response.text());
+    assert.match(page, /id="replace-animation"/);
+    assert.match(page, /id="cancel-animation"/);
+    assert.match(page, /existing animation will be removed/i);
+    const conversion = await fetch(`${origin}/api/animation`, { method: "POST",
+      headers: { Origin: origin, "Content-Type": "image/gif" }, body: gif });
+    assert.equal(conversion.status, 201);
+    const preparedAsset = await conversion.json() as { width: number; height: number; frameCount: number; durationMs: number; sizeBytes: number; sha256: string };
+    assert.deepEqual({ width: preparedAsset.width, height: preparedAsset.height, frameCount: preparedAsset.frameCount, durationMs: preparedAsset.durationMs },
+      { width: 240, height: 240, frameCount: 1, durationMs: 100 });
+    assert.ok(preparedAsset.sizeBytes > 0);
+    assert.match(preparedAsset.sha256, /^[0-9a-f]{64}$/);
+    assert.equal(prepared, 1);
+    assert.equal(replacements, 0, "conversion must not remove or upload the installed animation");
+
+    const rejected = await fetch(`${origin}/api/animation/replace`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    assert.equal(rejected.status, 403);
+    const started = await post("/api/animation/replace");
+    assert.equal(started.status, 202);
+    assert.equal(replacements, 1);
+    assert.equal((await post("/api/animation/cancel")).status, 204);
+    assert.equal(cancellations, 1);
+  } finally { await app.close(); }
+});
+
 test("dashboard OTA accepts only loopback-origin metadata actions and never receives firmware paths or bytes", async () => {
   const candidateId = "11111111-2222-4333-8444-555555555555";
   let prepareCalls = 0;
   let confirmCalls = 0;
   let state: "idle" | "ready" | "rejected" | "transferFailed" | "started" | "manuallyReconciled" = "idle";
   let putAttempted = false;
+  const confirmationAcknowledgements: boolean[] = [];
   const candidate = { id: candidateId, fileName: "firmware.bin" as const, byteLength: 4096, sha256: "a".repeat(64),
-    expectedBuildId: "build-20261027-a1b2", deviceId: "esp8266-a1b2c3" };
+    expectedBuildId: "build-20261027-a1b2", deviceId: "esp8266-a1b2c3", profile: "esp8266-dio40-4mb",
+    purpose: "production" as const, sourceRevision: "1".repeat(40),
+    target: { family: "esp8266" as const, flashMode: "dio" as const, flashFrequencyMHz: 40 as const, flashBytes: 4_194_304 as const },
+    linkedRegions: { bootloaderStart: 0 as const, applicationStart: 4096 as const, filesystemStart: 1_048_576, filesystemEnd: 4_169_728, eepromStart: 4_173_824 } };
   const update: FirmwareUpdateControl = {
-    get view() { return { state, candidate: state === "ready" ? candidate : null, bytesSent: 0, totalBytes: 4096,
+    get view() { return { state, purpose: state === "ready" ? "production" as const : null, sourceRevision: state === "ready" ? candidate.sourceRevision : null,
+      candidate: state === "ready" ? candidate : null, bytesSent: 0, totalBytes: 4096,
       message: "Safe update state.", putAttempted, effectiveAddress: "http://192.168.1.20" }; },
     async getStatus() { return this.view; },
     async prepare() { prepareCalls++; state = "ready"; return this.view; },
-    async confirm(value) { confirmCalls++; assert.equal(value, candidateId); return this.view; },
+    async confirm(value, experimentalTestConfirmed = false) {
+      confirmCalls++; assert.equal(value, candidateId); confirmationAcknowledgements.push(experimentalTestConfirmed); return this.view;
+    },
     async verify() { return this.view; }, async correctAddress() { return this.view; }, async runApplication() { return this.view; },
     async reconcileRunning() { return this.view; },
   };
@@ -131,7 +179,13 @@ test("dashboard OTA accepts only loopback-origin metadata actions and never rece
     assert.equal(JSON.stringify(visible).includes("token"), false);
     assert.equal(JSON.stringify(visible).includes("C:\\private"), false);
     assert.equal((await post("/api/ota/confirm", JSON.stringify({ candidateId: "../../firmware.bin" }))).status, 409);
+    assert.equal((await post("/api/ota/confirm", JSON.stringify({ candidateId, experimentalTestConfirmed: false }))).status, 409);
+    assert.equal((await post("/api/ota/confirm", JSON.stringify({ candidateId, experimentalTestConfirmed: true, extra: "ignored" }))).status, 409);
     assert.equal(confirmCalls, 0);
+    assert.equal((await post("/api/ota/confirm", JSON.stringify({ candidateId, experimentalTestConfirmed: true }))).status, 200);
+    assert.deepEqual(confirmationAcknowledgements, [true]);
+    assert.equal((await post("/api/ota/confirm", JSON.stringify({ candidateId }))).status, 200);
+    assert.deepEqual(confirmationAcknowledgements, [true, false]);
     const blocked = await post("/api/mode", JSON.stringify({ mode: "spotify" }));
     assert.equal(blocked.status, 423);
     for (const terminalState of ["rejected", "transferFailed"] as const) {
@@ -149,7 +203,7 @@ test("dashboard OTA accepts only loopback-origin metadata actions and never rece
 
 test("dashboard reconciliation requires an explicit confirmed expected build and returns safe OTA errors", async () => {
   let reconciliations = 0;
-  const view = { state: "verificationFailed" as const, candidate: null, bytesSent: 0, totalBytes: 4096,
+  const view = { state: "verificationFailed" as const, purpose: "production" as const, sourceRevision: null, candidate: null, bytesSent: 0, totalBytes: 4096,
     message: "Previous update needs review.", putAttempted: true, effectiveAddress: "http://192.168.1.20" };
   const update: FirmwareUpdateControl = {
     view, async getStatus() { return view; },
@@ -276,6 +330,17 @@ test("validates GIF uploads and serves the converted fullscreen animation with i
   } finally {
     await app.close();
   }
+});
+
+test("a device that rejects GIF preparation does not replace the panel's current preview", async () => {
+  const rejectingDevice = { setAnimation() { throw new Error("Finish or cancel the current animation replacement before choosing another GIF."); } } as unknown as DeviceIntegration;
+  const { app, origin } = await makeApp(undefined, rejectingDevice);
+  try {
+    const rejected = await fetch(`${origin}/api/animation`, { method: "POST",
+      headers: { Origin: origin, "Content-Type": "image/gif" }, body: gif });
+    assert.equal(rejected.status, 422);
+    assert.equal((await fetch(`${origin}/api/animation`)).status, 404);
+  } finally { await app.close(); }
 });
 
 test("converts browser-decoded cover pixels into a checksummed 240 by 240 asset", async () => {

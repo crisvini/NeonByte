@@ -216,6 +216,9 @@ void DeviceHttpServer::headersComplete() {
         if (headers_.path == "/api/v2/media-capabilities" && headers_.method == HttpMethod::get &&
             headers_.contentLength == 0 && headers_.query.empty()) {
             animationV2Request_ = AnimationV2Request::capabilities;
+        } else if (headers_.path == "/api/v2/animation" && headers_.method == HttpMethod::deleteMethod &&
+                   headers_.contentLength == 0 && headers_.query.empty()) {
+            animationV2Request_ = AnimationV2Request::removeInstalled;
         } else if (headers_.path == "/api/v2/animation/uploads" && headers_.method == HttpMethod::post &&
                    headers_.contentType == "application/json" && headers_.query.empty() && headers_.contentLength > 0 &&
                    headers_.contentLength < controlBody_.size()) {
@@ -449,6 +452,30 @@ void DeviceHttpServer::finishAnimationChunkRequest(std::uint64_t now) {
 
 void DeviceHttpServer::dispatchAnimationV2() {
     const auto now = lastActivity_;
+    if (animationV2Request_ == AnimationV2Request::removeInstalled) {
+        if (animationUpload_.blocksOtherUploads()) {
+            const auto cancelled = animationUpload_.cancel(animationUpload_.uploadId(),now);
+            if (cancelled != AnimationChunkResult::Accepted) {
+                error(409,"conflict",PSTR("The active animation transfer could not be cancelled.")); return;
+            }
+            hashJob_.reset();
+            animationValidationHashDone_ = animationValidationOpened_ = false;
+            animationChunkBody_.reset();
+            animationChunkWriting_ = animationChunkDetached_ = false;
+        }
+        legacyAnimationPromotionPending_ = false;
+        if (!storage_.removeAnimation()) {
+            error(500,"internal_error",PSTR("The installed animation could not be removed.")); return;
+        }
+        response_ = {}; response_.statusCode = 200; response_.contentType = "application/json";
+        const int written = snprintf_P(response_.body.data(),response_.body.size(),
+            PSTR("{\"removed\":true,\"freeStorageBytes\":%llu}"),
+            static_cast<unsigned long long>(storage_.freeBytes()));
+        if (written < 0 || static_cast<std::size_t>(written) >= response_.body.size()) {
+            error(500,"internal_error",PSTR("Available animation storage is unavailable.")); return;
+        }
+        response_.bodySize = static_cast<std::size_t>(written); prepareResponse(); return;
+    }
     if (animationV2Request_ == AnimationV2Request::capabilities) {
         response_ = {}; response_.statusCode = 200; response_.contentType = "application/json";
         const int written = snprintf_P(response_.body.data(),response_.body.size(),PSTR("{\"formats\":[\"nbif-v1\",\"nbif-v2\"],\"width\":240,\"height\":240,"

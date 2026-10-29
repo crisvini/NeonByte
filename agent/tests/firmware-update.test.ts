@@ -11,7 +11,11 @@ import type { RecoveryCredential, RecoveryCredentialStore } from "../src/device/
 
 const credential: RecoveryCredential = { version: 1, token: "a".repeat(64), deviceId: "esp8266-a1b2c3",
   profile: "esp8266-dio40-4mb", recoveryIdentityFingerprint: "b".repeat(64), lastVerifiedAddress: "http://192.168.1.20" };
-const manifest = { buildId: "build-new", target: { family: "esp8266", flashMode: "dio", flashFrequencyMHz: 40, flashBytes: 4_194_304 },
+const manifest = { buildId: "build-new", deviceId: credential.deviceId, profile: credential.profile,
+  recoveryIdentityFingerprint: credential.recoveryIdentityFingerprint,
+  target: { family: "esp8266", flashMode: "dio", flashFrequencyMHz: 40, flashBytes: 4_194_304 },
+  sourceRevision: "1".repeat(40),
+  linkedRegions: { bootloaderStart: 0, applicationStart: 4096, filesystemStart: 1_048_576, filesystemEnd: 4_169_728, eepromStart: 4_173_824 },
   featureGates: { maintenanceOnBoot: true, otaEnabled: true }, minimumResources: { minimumFreeHeapBytes: 1000, minimumLargestBlockBytes: 500 } } as PreparedFirmwareCandidate["manifest"];
 const candidate: PreparedFirmwareCandidate = { id: "candidate-1", fileName: "firmware.bin", byteLength: 4096,
   sha256: "c".repeat(64), bytes: Buffer.from("firmware"), manifest };
@@ -22,7 +26,7 @@ class MemoryJournal implements FirmwareUpdateJournal {
   async save(value: FirmwareUpdateRecord) { this.value = structuredClone(value); }
 }
 
-function fixture(options: { lostPut?: boolean; bootId?: string; buildId?: string; candidateTtlMs?: number; bootSequence?: string[]; automaticStartup?: boolean;
+function fixture(options: { lostPut?: boolean; bootId?: string; buildId?: string; candidateTtlMs?: number; bootSequence?: string[]; automaticStartup?: boolean; experimental?: boolean;
   offlineAfterPut?: boolean; reconnectWindowMs?: number; initiallyPaused?: boolean; recoveryApLostAfterDrain?: boolean; candidateBuildId?: string } = {}) {
   const journal = new MemoryJournal();
   const calls: string[] = [];
@@ -67,6 +71,7 @@ function fixture(options: { lostPut?: boolean; bootId?: string; buildId?: string
   let preflightAbortResumed = false;
   const service = new FirmwareUpdateService({
     recoveryStore, inbox: { prepare: async () => ({ ...candidate, manifest: { ...manifest,
+      ...(options.experimental ? { purpose: "experimental-test", minimumResources: null } : {}),
       ...(options.candidateBuildId ? { buildId: options.candidateBuildId } : {}),
       ...(options.automaticStartup ? { featureGates: { maintenanceOnBoot: false, otaEnabled: true, maintenanceAfterSoftwareRestart: true } } : {}) } }) }, journal,
     createClient: () => client,
@@ -121,6 +126,50 @@ test("an already paused application can be updated without a pause or startup re
   await f.service.verify();
   assert.equal(f.service.view.state, "verified");
   assert.equal(f.resumed, false);
+});
+
+test("experimental OTA requires separate confirmation and is never reported as production verified", async () => {
+  const f = fixture({ experimental: true });
+  await f.service.prepare();
+  assert.equal(f.service.view.candidate?.purpose, "experimental-test");
+  assert.equal(f.service.view.candidate?.sourceRevision, "1".repeat(40));
+  await assert.rejects(f.service.confirm("candidate-1"), /explicit experimental authorization/i);
+  assert.equal(f.calls.includes("put"), false);
+  assert.equal(f.calls.includes("pause"), false);
+
+  await f.service.confirm("candidate-1", true);
+  assert.equal(f.calls.filter((call) => call === "put").length, 1);
+  await f.service.verify();
+  assert.equal(f.service.view.state, "experimentallyVerified");
+  assert.match(f.service.view.message, /production.*pending/i);
+  assert.equal(f.journal.value?.minimumFreeHeapBytes, null);
+  assert.equal(f.journal.value?.minimumLargestBlockBytes, null);
+  assert.equal(f.resumed, false);
+  await f.service.runApplication();
+  assert.equal(f.resumed, true);
+  assert.equal(f.calls.includes("run"), true);
+  assert.match(f.service.view.message, /experimental.*production/i);
+});
+
+test("experimental post-boot observations still require healthy recovery network and loaded storage", async () => {
+  for (const unsafeStatus of [
+    { stationConnected: false },
+    { recoveryApRunning: false },
+    { configurationLoaded: false },
+    { storageAvailable: false },
+    { pendingWifi: true },
+    { volatileWifi: true },
+  ]) {
+    const f = fixture({ experimental: true, reconnectWindowMs: 5_000 });
+    await f.service.prepare();
+    await f.service.confirm("candidate-1", true);
+    f.setStatus(unsafeStatus);
+    await f.service.verify();
+    assert.equal(f.service.view.state, "verificationFailed");
+    assert.notEqual(f.service.view.state, "experimentallyVerified");
+    assert.equal(f.resumed, false);
+    assert.equal(f.calls.includes("run"), false);
+  }
 });
 
 test("an automatically running post-update app is not verified and cannot release synchronization", async () => {

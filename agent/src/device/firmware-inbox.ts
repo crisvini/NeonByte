@@ -24,10 +24,11 @@ export interface FirmwareManifest {
   profile: string;
   recoveryIdentityFingerprint: string;
   sourceRevision: string;
+  purpose?: "experimental-test";
   target: { family: "esp8266"; flashMode: "dio"; flashFrequencyMHz: 40; flashBytes: 4_194_304 };
   linkedRegions: { bootloaderStart: 0; applicationStart: 4096; filesystemStart: number; filesystemEnd: number; eepromStart: number };
   featureGates: { maintenanceOnBoot: boolean; otaEnabled: boolean; maintenanceAfterSoftwareRestart?: true };
-  minimumResources: { minimumFreeHeapBytes: number; minimumLargestBlockBytes: number };
+  minimumResources: { minimumFreeHeapBytes: number; minimumLargestBlockBytes: number } | null;
   validation: { combinedImage: true; modernCrc: true; runtimeBounds: true; recoveryIdentity: true };
 }
 
@@ -72,7 +73,10 @@ function validManifest(value: unknown): value is FirmwareManifest {
   const validation = item["validation"] as Record<string, unknown> | undefined;
   const exactKeys = ["schemaVersion", "fileName", "byteLength", "sha256", "imageFormat", "firmwareVersion", "buildId", "deviceId", "profile",
     "recoveryIdentityFingerprint", "sourceRevision", "target", "linkedRegions", "featureGates", "minimumResources", "validation"];
-  if (Object.keys(item).length !== exactKeys.length || !exactKeys.every((key) => Object.hasOwn(item, key)) ||
+  const experimental = item["purpose"] === "experimental-test";
+  const manifestKeys = experimental ? [...exactKeys, "purpose"] : exactKeys;
+  if (Object.keys(item).length !== manifestKeys.length || !manifestKeys.every((key) => Object.hasOwn(item, key)) ||
+      (Object.hasOwn(item, "purpose") && !experimental) ||
       item["schemaVersion"] !== 1 || item["fileName"] !== "firmware.bin" ||
       !Number.isSafeInteger(item["byteLength"]) || Number(item["byteLength"]) < 0x1021 || Number(item["byteLength"]) > MAX_PREPARATION_FIRMWARE_BYTES ||
       !/^[a-f0-9]{64}$/.test(String(item["sha256"])) || item["imageFormat"] !== "esp8266-combined-e9" ||
@@ -82,29 +86,65 @@ function validManifest(value: unknown): value is FirmwareManifest {
   if (!target || Object.keys(target).length !== 4 || target["family"] !== "esp8266" || target["flashMode"] !== "dio" ||
       target["flashFrequencyMHz"] !== 40 || target["flashBytes"] !== 4_194_304) return false;
   if (!regions || Object.keys(regions).length !== 5 || regions["bootloaderStart"] !== 0 || regions["applicationStart"] !== 4096 ||
-      !Number.isSafeInteger(regions["filesystemStart"]) || Number(regions["filesystemStart"]) <= 4096 ||
-      !Number.isSafeInteger(regions["filesystemEnd"]) || Number(regions["filesystemEnd"]) <= Number(regions["filesystemStart"]) ||
-      !Number.isSafeInteger(regions["eepromStart"]) || Number(regions["eepromStart"]) < Number(regions["filesystemEnd"]) || Number(regions["eepromStart"]) > 4_194_304) return false;
+      regions["filesystemStart"] !== 1_048_576 || regions["filesystemEnd"] !== 4_169_728 || regions["eepromStart"] !== 4_173_824) return false;
   if (!gates || !Object.keys(gates).every((key) => ["maintenanceOnBoot", "otaEnabled", "maintenanceAfterSoftwareRestart"].includes(key)) ||
       typeof gates["maintenanceOnBoot"] !== "boolean" || typeof gates["otaEnabled"] !== "boolean" ||
       (Object.hasOwn(gates, "maintenanceAfterSoftwareRestart") && gates["maintenanceAfterSoftwareRestart"] !== true)) return false;
-  if (!resources || Object.keys(resources).length !== 2 || !Number.isSafeInteger(resources["minimumFreeHeapBytes"]) ||
+  if (experimental) {
+    if (resources !== null) return false;
+  } else if (!resources || Object.keys(resources).length !== 2 || !Number.isSafeInteger(resources["minimumFreeHeapBytes"]) ||
       Number(resources["minimumFreeHeapBytes"]) <= 0 || !Number.isSafeInteger(resources["minimumLargestBlockBytes"]) ||
       Number(resources["minimumLargestBlockBytes"]) <= 0) return false;
   return Boolean(validation && Object.keys(validation).length === 4 && validation["combinedImage"] === true &&
       validation["modernCrc"] === true && validation["runtimeBounds"] === true && validation["recoveryIdentity"] === true);
 }
 
-function validateImageHeader(bytes: Buffer): boolean {
-  if (bytes.length <= 0x1020) return false;
-  for (const offset of [0, 0x1000]) {
-    const magic = bytes[offset];
-    const segments = bytes[offset + 1];
-    const mode = bytes[offset + 2];
-    const frequencyAndSize = bytes[offset + 3];
-    if (magic !== 0xe9 || segments === undefined || segments < 1 || segments > 16 || mode !== 2 || frequencyAndSize !== 0x40) return false;
+function readLittleEndian32(bytes: Buffer, offset: number): number {
+  return bytes.readUInt32LE(offset);
+}
+
+function validateEsp8266ImageAt(bytes: Buffer, offset: number, boundary: number, exact: boolean): boolean {
+  if (offset > boundary || boundary - offset < 8) return false;
+  const segments = bytes[offset + 1];
+  const entry = readLittleEndian32(bytes, offset + 4);
+  if (bytes[offset] !== 0xe9 || segments === undefined || segments < 1 || segments > 16 ||
+      bytes[offset + 2] !== 2 || bytes[offset + 3] !== 0x40 || entry < 0x40100000 || entry >= 0x40110000) return false;
+
+  let position = offset + 8;
+  let checksum = 0xef;
+  for (let segment = 0; segment < segments; segment++) {
+    if (position > boundary || boundary - position < 8) return false;
+    const address = readLittleEndian32(bytes, position);
+    const length = readLittleEndian32(bytes, position + 4);
+    position += 8;
+    const inSupportedRange = (first: number, end: number) => address >= first && address < end && length <= end - address;
+    if ((!inSupportedRange(0x3ffe8000, 0x40000000) && !inSupportedRange(0x40100000, 0x40110000) &&
+        !inSupportedRange(0x40200000, 0x40300000)) || length === 0 || length > boundary - position) return false;
+    for (let index = 0; index < length; index++) {
+      const absoluteIndex = position + index;
+      const patchedMetadata = address === 0x40201010 && absoluteIndex >= 0x1010 && absoluteIndex < 0x1018;
+      if (!patchedMetadata) checksum ^= bytes[absoluteIndex]!;
+    }
+    position += length;
   }
-  return true;
+
+  const checksumOffset = position | 15;
+  if (checksumOffset >= boundary || (exact && checksumOffset + 1 !== boundary)) return false;
+  for (let index = position; index < checksumOffset; index++) if (bytes[index] !== 0) return false;
+  return bytes[checksumOffset] === checksum;
+}
+
+function validateModernImage(bytes: Buffer): boolean {
+  if (bytes.length <= 0x101f || bytes.length > MAX_PREPARATION_FIRMWARE_BYTES ||
+      !validateEsp8266ImageAt(bytes, 0, 0x1000, false) || !validateEsp8266ImageAt(bytes, 0x1000, bytes.length, true) ||
+      readLittleEndian32(bytes, 0x1010) !== bytes.length) return false;
+  let crc = 0xffffffff;
+  for (let index = 0; index < bytes.length; index++) {
+    const value = index >= 0x1010 && index < 0x1018 ? 0 : bytes[index]!;
+    crc = (crc ^ (value << 24)) >>> 0;
+    for (let bit = 0; bit < 8; bit++) crc = ((crc << 1) ^ ((crc & 0x80000000) ? 0x04c11db7 : 0)) >>> 0;
+  }
+  return readLittleEndian32(bytes, 0x1014) === crc;
 }
 
 function equalFileIdentity(left: BigIntStats, right: BigIntStats): boolean {
@@ -227,7 +267,7 @@ export class FirmwareInbox {
     if (parsed.recoveryIdentityFingerprint !== binding.recoveryIdentityFingerprint) throw new FirmwareInboxError("The manifest recovery identity does not match the enrolled recovery record.");
     if ((!parsed.featureGates.maintenanceOnBoot && !parsed.featureGates.maintenanceAfterSoftwareRestart) ||
         !parsed.featureGates.otaEnabled) throw new FirmwareInboxError("The firmware manifest feature gates do not permit maintenance OTA.");
-    if (!validateImageHeader(bytes)) throw new FirmwareInboxError("The image must use the supported combined DIO 40 MHz ESP8266 format.");
+    if (!validateModernImage(bytes)) throw new FirmwareInboxError("The firmware image structure, segment checksums, or modern CRC are invalid.");
 
     return { id: randomUUID(), fileName: "firmware.bin", byteLength: bytes.length, sha256: digest,
       bytes: Buffer.from(bytes), manifest: structuredClone(parsed) };

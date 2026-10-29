@@ -135,7 +135,7 @@ test("error example has a stable code and bounded non-empty message", async () =
 });
 
 test("v2 animation schemas use the declared draft and unique ids", async () => {
-  const files = ["media-capabilities.schema.json", "upload-session.schema.json", "upload-status.schema.json", "error.schema.json"];
+  const files = ["media-capabilities.schema.json", "upload-session.schema.json", "upload-status.schema.json", "animation-removal.schema.json", "error.schema.json"];
   const schemas = await Promise.all(files.map((file) => readJson(file, contractV2Root)));
   assert.ok(schemas.every((schema) => schema.$schema === "https://json-schema.org/draft/2020-12/schema"));
   assert.equal(new Set(schemas.map((schema) => schema.$id)).size, schemas.length);
@@ -146,6 +146,7 @@ test("v2 media capabilities and upload examples match bounded upload contracts",
   const session = await readJson("upload-session.schema.json", contractV2Root);
   const status = await readJson("upload-status.schema.json", contractV2Root);
   const error = await readJson("error.schema.json", contractV2Root);
+  const removal = await readJson("animation-removal.schema.json", contractV2Root);
   const capabilitiesExample = await readJson("examples/media-capabilities.json", contractV2Root);
   const capabilities60Example = await readJson("examples/media-capabilities-60.json", contractV2Root);
   const statusExample = await readJson("examples/upload-status.json", contractV2Root);
@@ -154,6 +155,7 @@ test("v2 media capabilities and upload examples match bounded upload contracts",
   assert.deepEqual([capabilitiesExample.maxFrames, capabilities60Example.maxFrames], [20, 60]);
   validateContractValue(session, await readJson("examples/upload-session.json", contractV2Root));
   validateContractValue(status, statusExample);
+  validateContractValue(removal, await readJson("examples/animation-removal.json", contractV2Root));
   validateContractValue(error, await readJson("examples/error-insufficient-storage.json", contractV2Root));
   assert.throws(() => validateContractValue(capabilities, { ...capabilitiesExample, maxChunkBytes: 4096 }));
   assert.throws(() => validateContractValue(status, { ...statusExample, unexpected: true }));

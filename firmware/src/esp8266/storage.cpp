@@ -195,6 +195,19 @@ void PersistentStorage::discardAnimationCandidate() {
     animationCandidateReady_ = false;
     if (kind_ == AssetKind::animation) abort();
 }
+bool PersistentStorage::removeAnimation() {
+    if (!ready) return false;
+    const bool installedPresent = LittleFS.exists("/neonbyte/animation.nbif") || static_cast<bool>(animationRead_);
+    animationRead_.close();
+    animationCandidateRead_.close();
+    staged_.close();
+    animationCandidateReady_ = false;
+    animationPromotionFailed_ = false;
+    if (LittleFS.exists("/neonbyte/animation.nbif") && !LittleFS.remove("/neonbyte/animation.nbif")) return false;
+    if (LittleFS.exists("/neonbyte/animation.part") && !LittleFS.remove("/neonbyte/animation.part")) return false;
+    if (installedPresent) ++animationRevision;
+    return true;
+}
 bool PersistentStorage::promoteAnimationCandidateAtBoundary() {
     if (!animationCandidateReady_) return false;
     animationCandidateRead_.close();

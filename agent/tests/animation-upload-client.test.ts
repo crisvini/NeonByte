@@ -192,3 +192,166 @@ test("device frame capacity is enforced before upload for legacy and 60-frame fi
   assert.ok(polls > 0);
 });
 
+test("explicit replacement confirms NBIF v2 compatibility, deletes the installed asset, then reuses chunk upload", async () => {
+  const animation = makeAnimation();
+  const events: string[] = [];
+  const progress: string[] = [];
+  let nextOffset = 0;
+  let statusPolls = 0;
+  const client = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret", fetchDevice: async (input, init) => {
+    const url = new URL(String(input));
+    const method = init?.method ?? "GET";
+    events.push(`${method} ${url.pathname}`);
+    if (url.pathname === "/api/v1/status") return new Response(JSON.stringify(status));
+    if (url.pathname === "/api/v2/media-capabilities") return new Response(JSON.stringify(capabilities));
+    if (url.pathname === "/api/v2/animation" && method === "DELETE") {
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer test-secret");
+      return new Response(JSON.stringify({ removed: true, freeStorageBytes: capabilities.freeStorageBytes }));
+    }
+    if (url.pathname === "/api/v2/animation/uploads" && method === "POST") {
+      assert.ok(events.indexOf("DELETE /api/v2/animation") < events.indexOf("POST /api/v2/animation/uploads"));
+      return new Response(JSON.stringify({ uploadId: "cafefeed", nextOffset: 0, state: "receiving" }), { status: 201 });
+    }
+    if (url.pathname.endsWith("/chunks")) {
+      const offset = Number(url.searchParams.get("offset"));
+      assert.equal(offset, nextOffset);
+      nextOffset += Buffer.from(init?.body as Uint8Array).length;
+      return new Response(null, { status: 204 });
+    }
+    if (url.pathname.endsWith("/complete")) return new Response(null, { status: 202 });
+    if (url.pathname === "/api/v2/animation/uploads/cafefeed") {
+      statusPolls += 1;
+      return new Response(JSON.stringify({ uploadId: "cafefeed", state: "installed", nextOffset,
+        expectedBytes: animation.bytes.length, receivedBytes: nextOffset, error: "" }));
+    }
+    return new Response(null, { status: 204 });
+  } });
+  let receipt: unknown;
+  await client.replaceAnimation(animation, {
+    onRemoved(value) { receipt = value; progress.push("removed"); },
+    onStage(stage) { progress.push(stage); },
+  });
+  assert.deepEqual(receipt, { removed: true, freeStorageBytes: capabilities.freeStorageBytes });
+  assert.equal(events[0], "GET /api/v1/status");
+  assert.ok(events.indexOf("GET /api/v2/media-capabilities") < events.indexOf("DELETE /api/v2/animation"));
+  assert.ok(events.indexOf("DELETE /api/v2/animation") < events.indexOf("POST /api/v2/animation/uploads"));
+  assert.ok(events.some((event) => event.startsWith("PUT /api/v2/animation/uploads/cafefeed/chunks")));
+  assert.equal(events.some((event) => event === "PUT /api/v1/animation"), false);
+  assert.deepEqual(progress.slice(0, 2), ["removing", "removed"]);
+  assert.ok(progress.includes("uploading"));
+  assert.ok(progress.includes("validating"));
+  assert.ok(statusPolls > 0);
+});
+
+test("invalid or incompatible converted media is rejected before explicit removal", async () => {
+  const animation = makeAnimation();
+  const requests: string[] = [];
+  const client = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret", fetchDevice: async (input) => {
+    const path = new URL(String(input)).pathname;
+    requests.push(path);
+    if (path === "/api/v1/status") return new Response(JSON.stringify(status));
+    if (path === "/api/v2/media-capabilities") return new Response(JSON.stringify({ ...capabilities, maxFrames: 0 }));
+    return new Response(JSON.stringify({ removed: true, freeStorageBytes: capabilities.freeStorageBytes }));
+  } });
+  await assert.rejects(client.replaceAnimation(animation), /invalid media capabilities/i);
+  assert.equal(requests.includes("/api/v2/animation"), false);
+
+  requests.length = 0;
+  await assert.rejects(client.replaceAnimation({ ...animation, sha256: "0".repeat(64) }), /checksum/i);
+  assert.deepEqual(requests, []);
+});
+
+test("cancellation after removal cancels the existing v2 upload session", async () => {
+  const animation = makeAnimation();
+  const controller = new AbortController();
+  const requests: Array<{ path: string; method: string }> = [];
+  const client = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret", fetchDevice: async (input, init) => {
+    const url = new URL(String(input));
+    const method = init?.method ?? "GET";
+    requests.push({ path: url.pathname, method });
+    if (url.pathname === "/api/v1/status") return new Response(JSON.stringify(status));
+    if (url.pathname === "/api/v2/media-capabilities") return new Response(JSON.stringify(capabilities));
+    if (url.pathname === "/api/v2/animation" && method === "DELETE") {
+      return new Response(JSON.stringify({ removed: true, freeStorageBytes: capabilities.freeStorageBytes }));
+    }
+    if (url.pathname === "/api/v2/animation/uploads" && method === "POST") {
+      return new Response(JSON.stringify({ uploadId: "badc0ffe", nextOffset: 0, state: "receiving" }), { status: 201 });
+    }
+    if (url.pathname.endsWith("/chunks")) {
+      controller.abort();
+      throw new Error("simulated client cancellation");
+    }
+    if (url.pathname === "/api/v2/animation/uploads/badc0ffe" && method === "DELETE") return new Response(null, { status: 204 });
+    return new Response(null, { status: 404 });
+  } });
+  await assert.rejects(client.replaceAnimation(animation, { signal: controller.signal }), /cancelled/i);
+  assert.ok(requests.some(({ path, method }) => path === "/api/v2/animation" && method === "DELETE"));
+  assert.ok(requests.some(({ path, method }) => path === "/api/v2/animation/uploads/badc0ffe" && method === "DELETE"),
+    "the agent should cancel the staged candidate while the old installed animation remains removed");
+});
+
+test("a lost device connection after removal is reported as failure and cleans up or expires the candidate", async () => {
+  const animation = makeAnimation();
+  const requests: Array<{ path: string; method: string }> = [];
+  let removalConfirmed = false;
+  const client = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret", fetchDevice: async (input, init) => {
+    const url = new URL(String(input));
+    const method = init?.method ?? "GET";
+    requests.push({ path: url.pathname, method });
+    if (url.pathname === "/api/v1/status") return new Response(JSON.stringify(status));
+    if (url.pathname === "/api/v2/media-capabilities") return new Response(JSON.stringify(capabilities));
+    if (url.pathname === "/api/v2/animation" && method === "DELETE") {
+      removalConfirmed = true;
+      return new Response(JSON.stringify({ removed: true, freeStorageBytes: capabilities.freeStorageBytes }));
+    }
+    if (url.pathname === "/api/v2/animation/uploads" && method === "POST") {
+      return new Response(JSON.stringify({ uploadId: "decafbad", nextOffset: 0, state: "receiving" }), { status: 201 });
+    }
+    if (url.pathname.endsWith("/chunks")) throw new Error("simulated device disconnect during transfer");
+    if (url.pathname === "/api/v2/animation/uploads/decafbad" && method === "GET") return new Response(null, { status: 404 });
+    if (url.pathname === "/api/v2/animation/uploads/decafbad" && method === "DELETE") return new Response(null, { status: 404 });
+    return new Response(null, { status: 404 });
+  } });
+  await assert.rejects(client.replaceAnimation(animation), /communication failed/i);
+  assert.equal(removalConfirmed, true);
+  assert.ok(requests.some(({ path, method }) => path.endsWith("/chunks") && method === "PUT"));
+  assert.ok(requests.some(({ path, method }) => path === "/api/v2/animation/uploads/decafbad" && method === "DELETE"),
+    "the agent should cancel the incomplete session, or let device expiry clean it up if it restarted");
+  assert.equal(requests.some(({ path }) => path === "/api/v1/animation"), false);
+});
+
+test("a chunk timeout retries only the current v2 chunk and cancels the staged session", async () => {
+  const animation = makeAnimation();
+  const requests: Array<{ path: string; method: string }> = [];
+  let chunks = 0;
+  const client = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret", timeoutMs: 5,
+    fetchDevice: async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      requests.push({ path: url.pathname, method });
+      if (url.pathname === "/api/v1/status") return new Response(JSON.stringify(status));
+      if (url.pathname === "/api/v2/media-capabilities") return new Response(JSON.stringify(capabilities));
+      if (url.pathname === "/api/v2/animation" && method === "DELETE") {
+        return new Response(JSON.stringify({ removed: true, freeStorageBytes: capabilities.freeStorageBytes }));
+      }
+      if (url.pathname === "/api/v2/animation/uploads" && method === "POST") {
+        return new Response(JSON.stringify({ uploadId: "feedcafe", nextOffset: 0, state: "receiving" }), { status: 201 });
+      }
+      if (url.pathname.endsWith("/chunks")) {
+        chunks++;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        if (init?.signal?.aborted) throw new Error("simulated request timeout");
+        return new Response(null, { status: 204 });
+      }
+      if (url.pathname === "/api/v2/animation/uploads/feedcafe" && method === "GET") {
+        return new Response(JSON.stringify({ uploadId: "feedcafe", state: "receiving", nextOffset: 0,
+          expectedBytes: animation.bytes.length, receivedBytes: 0, error: "" }));
+      }
+      if (url.pathname === "/api/v2/animation/uploads/feedcafe" && method === "DELETE") return new Response(null, { status: 204 });
+      return new Response(null, { status: 404 });
+    } });
+  await assert.rejects(client.replaceAnimation(animation), /communication failed/i);
+  assert.equal(chunks, 2, "only the ambiguous chunk is retried once");
+  assert.ok(requests.some(({ path, method }) => path === "/api/v2/animation/uploads/feedcafe" && method === "DELETE"));
+});
+

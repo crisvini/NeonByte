@@ -71,19 +71,24 @@ test("Spotify preview keeps one larger-font line per field and omits progress an
   assert.equal(display.covers.length, 1);
 });
 
-test("dashboard retains the converted storage warning across status refreshes", async () => {
+test("dashboard reports that the old animation was removed after an insufficient-space failure", async () => {
   const display = await preview();
   display.run(`status = {
     snapshot: { status: "playing" }, demoEnabled: false, activeScene: "gif",
-    device: { connection: "connected", address: "", enabled: true, paired: true, animation: { state: "blocked", attempts: 0 } },
-    animation: { available: true, frameCount: 20, sizeBytes: 2304051, sha256: "0".repeat(64) }
+    device: { connection: "connected", address: "", enabled: true, paired: true,
+      animation: { state: "failed", attempts: 1, previousAnimation: "removed", freeStorageBytes: 0,
+        message: "The converted animation and required storage reserve do not fit after removal. The previous animation was removed and was not preserved; you can send this converted animation again." } },
+    animation: { available: true, width: 240, height: 240, frameCount: 20, durationMs: 2000,
+      sizeBytes: 2304051, originalSizeBytes: 2000000, compressionPercent: -15.2, sha256: "0".repeat(64) }
   }; updateStatusText(); updateStatusText();`);
   const label = display.element("#upload-status");
-  assert.match(label.textContent, /Converted animation does not fit in device storage/);
-  assert.match(label.textContent, /installed GIF is preserved/);
+  assert.match(label.textContent, /240 × 240 px · 20 frames · 2000 ms/);
+  assert.match(label.textContent, /previous animation was removed and was not preserved/i);
+  assert.match(label.textContent, /Device reported 0 KB free after removal/);
   assert.equal(label.classes.get("error"), true);
-  display.run('status.device.animation.state = "complete"; updateStatusText();');
-  assert.match(label.textContent, /Installed on device/);
+  display.run(`status.device.animation.state = "complete";
+    status.device.animation.message = "The device validated and installed the new animation."; updateStatusText();`);
+  assert.match(label.textContent, /device validated and installed the new animation/i);
   assert.equal(label.classes.get("error"), false);
 });
 

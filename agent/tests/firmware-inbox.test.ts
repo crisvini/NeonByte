@@ -13,10 +13,39 @@ const binding: Pick<RecoveryCredential, "deviceId" | "profile" | "recoveryIdenti
 };
 
 function imageBytes(): Buffer {
-  const bytes = Buffer.alloc(0x1030, 0);
-  for (const offset of [0, 0x1000]) {
-    bytes[offset] = 0xe9; bytes[offset + 1] = 1; bytes[offset + 2] = 2; bytes[offset + 3] = 0x40;
+  const bytes = Buffer.alloc(0x1060, 0);
+  const write32 = (offset: number, value: number) => bytes.writeUInt32LE(value >>> 0, offset);
+  bytes.set([0xe9, 1, 2, 0x40], 0);
+  write32(4, 0x40100000);
+  write32(8, 0x40100000);
+  write32(12, 16);
+  for (let index = 0; index < 16; index++) bytes[16 + index] = index + 1;
+  let bootChecksum = 0xef;
+  for (let index = 16; index < 32; index++) bootChecksum ^= bytes[index]!;
+  bytes[47] = bootChecksum;
+
+  bytes.set([0xe9, 1, 2, 0x40], 0x1000);
+  write32(0x1004, 0x40100000);
+  write32(0x1008, 0x40201010);
+  write32(0x100c, 0x40);
+  write32(0x1010, bytes.length);
+  bytes[0x105f] = 0xef;
+  let crc = 0xffffffff;
+  for (let index = 0; index < bytes.length; index++) {
+    crc ^= (index >= 0x1010 && index < 0x1018 ? 0 : bytes[index]!) << 24;
+    for (let bit = 0; bit < 8; bit++) crc = ((crc << 1) ^ ((crc & 0x80000000) ? 0x04c11db7 : 0)) >>> 0;
   }
+  write32(0x1014, crc);
+  return bytes;
+}
+
+function recomputeModernCrc(bytes: Buffer): Buffer {
+  let crc = 0xffffffff;
+  for (let index = 0; index < bytes.length; index++) {
+    crc ^= (index >= 0x1010 && index < 0x1018 ? 0 : bytes[index]!) << 24;
+    for (let bit = 0; bit < 8; bit++) crc = ((crc << 1) ^ ((crc & 0x80000000) ? 0x04c11db7 : 0)) >>> 0;
+  }
+  bytes.writeUInt32LE(crc, 0x1014);
   return bytes;
 }
 
@@ -28,7 +57,7 @@ function manifest(bytes: Buffer, overrides: Partial<FirmwareManifest> = {}): Fir
     profile: binding.profile, recoveryIdentityFingerprint: binding.recoveryIdentityFingerprint,
     sourceRevision: "1".repeat(40), target: { family: "esp8266", flashMode: "dio", flashFrequencyMHz: 40, flashBytes: 4_194_304 },
     linkedRegions: { bootloaderStart: 0, applicationStart: 4096, filesystemStart: 1_048_576,
-      filesystemEnd: 4_177_920, eepromStart: 4_177_920 },
+      filesystemEnd: 4_169_728, eepromStart: 4_173_824 },
     featureGates: { maintenanceOnBoot: true, otaEnabled: true },
     minimumResources: { minimumFreeHeapBytes: 20_000, minimumLargestBlockBytes: 8_192 },
     validation: { combinedImage: true, modernCrc: true, runtimeBounds: true, recoveryIdentity: true },
@@ -93,10 +122,46 @@ test("inbox binds manifest identity and rejects public, wrong-profile, or unsupp
     [{ profile: "public-compile-only" }, imageBytes(), /profile/],
     [{ featureGates: { maintenanceOnBoot: true, otaEnabled: false } }, imageBytes(), /feature gates/],
     [{ recoveryIdentityFingerprint: "b".repeat(64) }, imageBytes(), /recovery identity/],
-    [{}, Buffer.alloc(0x1030, 0xff), /combined DIO 40 MHz/],
+    [{}, Buffer.alloc(0x1030, 0xff), /image/],
   ] as const) {
     const { directory } = await makeInbox(t, overrides, fileBytes);
     await assert.rejects(new FirmwareInbox({ directory, accessControl: { protectAndVerify: async () => {} } }).prepare(binding), message);
+  }
+});
+
+test("experimental inbox candidates retain image and identity checks while leaving resource floors pending", async (t) => {
+  const bytes = imageBytes();
+  const { directory } = await makeInbox(t, {
+    purpose: "experimental-test",
+    minimumResources: null,
+  }, bytes);
+  const candidate = await new FirmwareInbox({ directory, accessControl: { protectAndVerify: async () => {} } }).prepare(binding);
+  assert.equal(candidate.manifest.purpose, "experimental-test");
+  assert.equal(candidate.manifest.minimumResources, null);
+  assert.equal(candidate.manifest.sourceRevision, "1".repeat(40));
+  assert.equal(candidate.manifest.linkedRegions.filesystemStart, 1_048_576);
+  assert.equal(candidate.manifest.linkedRegions.filesystemEnd, 4_169_728);
+  assert.equal(candidate.manifest.linkedRegions.eepromStart, 4_173_824);
+
+  const production = await makeInbox(t, { minimumResources: null }, bytes);
+  await assert.rejects(new FirmwareInbox({ directory: production.directory, accessControl: { protectAndVerify: async () => {} } }).prepare(binding), /manifest/);
+});
+
+test("inbox validates complete image checksums and the exact linked 4m3m layout", async (t) => {
+  for (const [name, mutate, overrides] of [
+    ["boot segment checksum", (bytes: Buffer) => { bytes[16] = bytes[16]! ^ 1; return bytes; }, {}],
+    ["application segment checksum with valid modern CRC", (bytes: Buffer) => {
+      bytes[0x1018] = bytes[0x1018]! ^ 1;
+      return recomputeModernCrc(bytes);
+    }, {}],
+    ["modern CRC", (bytes: Buffer) => { bytes[0x1014] = bytes[0x1014]! ^ 1; return bytes; }, {}],
+    ["trailing byte", (bytes: Buffer) => Buffer.concat([bytes, Buffer.from([0])]), {}],
+    ["linked layout", (bytes: Buffer) => bytes, { linkedRegions: { bootloaderStart: 0, applicationStart: 4096,
+      filesystemStart: 2_097_152, filesystemEnd: 4_169_728, eepromStart: 4_173_824 } }],
+  ] as const) {
+    const bytes = mutate(imageBytes());
+    const { directory } = await makeInbox(t, overrides, bytes);
+    await assert.rejects(new FirmwareInbox({ directory, accessControl: { protectAndVerify: async () => {} } }).prepare(binding), /image|CRC|layout|manifest/i, name);
   }
 });
 

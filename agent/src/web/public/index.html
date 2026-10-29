@@ -55,7 +55,7 @@
 
           <article class="card ota-card">
             <div class="card-heading compact"><div><p class="eyebrow">MAINTENANCE</p><h2>Firmware update</h2></div></div>
-            <p class="card-copy">Copy the approved <code>firmware.bin</code> and matching <code>manifest.json</code> into <code>%LOCALAPPDATA%\NeonByte\firmware-inbox</code>. Preparation reads only this fixed folder.</p>
+            <p class="card-copy">Copy the reviewed <code>firmware.bin</code> and matching <code>manifest.json</code> into <code>%LOCALAPPDATA%\NeonByte\firmware-inbox</code>. Preparation reads only this fixed folder. Experimental test candidates require a separate confirmation and do not grant production approval.</p>
             <button class="button" id="ota-prepare" type="button">Prepare local firmware</button>
             <div class="ota-candidate" id="ota-candidate" hidden></div>
             <button class="button" id="ota-confirm" type="button" hidden>Confirm firmware update</button>
@@ -109,8 +109,10 @@
             </label>
             <input id="gif-file" type="file" accept="image/gif,.gif" hidden>
             <p class="card-copy">The Windows agent composes the GIF at 240 × 240 and encodes exact RGB565 colors with palettes, row compression, and frame differences. NBIF v2 supports up to 60 frames; legacy NBIF v1 remains limited to 20.</p>
-            <p class="card-copy">Animations are limited to 30 seconds, 2,359,296 encoded bytes, and bounded GIF decoding work. Older firmware reports its own 20-frame capacity, and files that exceed it are rejected before upload. The converted animation must fit in device storage alongside the installed GIF and a 32 KiB reserve for safe replacement.</p>
+            <p class="card-copy">Animations are limited to 30 seconds, 2,359,296 encoded bytes, and bounded GIF decoding work; older firmware may report a 20-frame capacity. The panel validates converted dimensions, frame count, duration, size, and SHA-256 before asking you to replace the current animation. After confirmation, the existing animation will be removed to free space. The converted file must fit with a 32 KiB reserve. If sending or validation fails, the old animation will not be preserved.</p>
             <p class="upload-status" id="upload-status" aria-live="polite">No GIF uploaded in this session.</p>
+            <button class="button" id="replace-animation" type="button" hidden>Replace current animation</button>
+            <button class="button" id="cancel-animation" type="button" hidden>Cancel animation transfer</button>
           </article>
         </div>
       </section>

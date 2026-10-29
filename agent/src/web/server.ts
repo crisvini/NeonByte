@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFile } from "node:fs/promises";
 import { parseOAuthCallback } from "../spotify/oauth-callback.js";
 import { convertGifToAnimationV2InWorker, createCoverAsset, type AnimationAsset } from "../media/animation.js";
+import { validateAnimationV2 } from "../media/animation-decoder.js";
 import type { SpotifyOAuthClient } from "../spotify/oauth.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 import type { PlaybackSnapshot } from "../spotify/types.js";
@@ -282,6 +283,8 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           spotifyConnected: snapshotIsConnected(snapshot, options.spotifyConfigured, options.getDemoEnabled()),
           animation: animation ? {
             available: true,
+            width: 240,
+            height: 240,
             frameCount: animation.frameCount,
             durationMs: animation.durationMs,
             sizeBytes: animation.bytes.length,
@@ -292,7 +295,8 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           } : { available: false },
           cover: cover ? { available: true, sizeBytes: cover.bytes.length, sha256: cover.sha256 } : { available: false },
           protocolVersion: "v1",
-          device: options.device?.status ?? { address: "", enabled: false, paired: false, connection: "disabled", animation: { state: "none", attempts: 0 } },
+          device: options.device?.status ?? { address: "", enabled: false, paired: false, connection: "disabled",
+            animation: { state: "none", attempts: 0, previousAnimation: "unchanged", freeStorageBytes: null, message: "" } },
           deviceConnected: options.device?.status.connection === "connected",
           firmwareUpdate: options.firmwareUpdate?.view ?? null,
         });
@@ -378,8 +382,13 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
             const payload = await readJson(request);
             if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error();
             const item = payload as Record<string, unknown>;
-            if (Object.keys(item).length !== 1 || !/^[0-9a-f-]{36}$/.test(String(item["candidateId"]))) throw new Error();
-            sendJson(response, 200, await options.firmwareUpdate.confirm(item["candidateId"] as string));
+            const keys = Object.keys(item);
+            const experimentalTestConfirmed = item["experimentalTestConfirmed"] === true;
+            if ((!keys.every((key) => ["candidateId", "experimentalTestConfirmed"].includes(key)) ||
+                !(keys.length === 1 || (keys.length === 2 && experimentalTestConfirmed)) ||
+                (Object.hasOwn(item, "experimentalTestConfirmed") && !experimentalTestConfirmed) ||
+                !/^[0-9a-f-]{36}$/.test(String(item["candidateId"])))) throw new Error();
+            sendJson(response, 200, await options.firmwareUpdate.confirm(item["candidateId"] as string, experimentalTestConfirmed));
             return;
           }
           if (url.pathname === "/api/ota/address") {
@@ -410,7 +419,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           request.resume(); sendError(response, 404, "Local route not found.");
         } catch (error) {
           const message = error instanceof MaintenanceRequestError || error instanceof MaintenanceTransportError ||
-            (error instanceof Error && /^(Prepare firmware again|A firmware update operation|A firmware update|There is no attempted firmware|Only verified firmware|Maintenance credentials required|Maintenance credentials could|Verify, explicitly start|Confirm the expected build|The device cannot be reconciled|The previous firmware transfer|The protected firmware update journal|The protected update history|The reconciled device|The enrolled recovery identity|The responding device|The device identity|The device does not|The device is not|The firmware target|This device build|The application did not|Running-firmware reconciliation failed)/.test(error.message))
+            (error instanceof Error && /^(Prepare firmware again|A firmware update operation|A firmware update|Explicit experimental authorization|There is no attempted firmware|Only verified firmware|Maintenance credentials required|Maintenance credentials could|Verify, explicitly start|Confirm the expected build|The device cannot be reconciled|The previous firmware transfer|The protected firmware update journal|The protected update history|The reconciled device|The enrolled recovery identity|The responding device|The device identity|The device does not|The device is not|The firmware target|This device build|The application did not|Running-firmware reconciliation failed)/.test(error.message))
             ? error.message : "The maintenance operation was not completed. Check update status before taking another action.";
           sendError(response, 409, message);
         }
@@ -418,6 +427,32 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
       }
 
       if (rejectOtaMutation(response, request, options.firmwareUpdate)) return;
+
+      if (url.pathname === "/api/animation/replace") {
+        if (Number(request.headers["content-length"] ?? 0) !== 0 || request.headers["transfer-encoding"]) {
+          request.resume(); sendError(response, 400, "Animation replacement accepts no request body."); return;
+        }
+        if (!animation) { sendError(response, 409, "Choose and convert a GIF before replacing the device animation."); return; }
+        if (!options.device) { sendError(response, 503, "Device animation replacement is unavailable."); return; }
+        try {
+          options.device.replaceAnimation();
+          sendJson(response, 202, { state: options.device.status.animation.state });
+        } catch (error) {
+          sendError(response, 409, error instanceof Error ? error.message : "The animation replacement could not be started.");
+        }
+        return;
+      }
+
+      if (url.pathname === "/api/animation/cancel") {
+        if (Number(request.headers["content-length"] ?? 0) !== 0 || request.headers["transfer-encoding"]) {
+          request.resume(); sendError(response, 400, "Animation cancellation accepts no request body."); return;
+        }
+        if (!options.device?.cancelAnimationReplacement()) {
+          sendError(response, 409, "There is no animation replacement to cancel."); return;
+        }
+        response.writeHead(204, securityHeaders()); response.end();
+        return;
+      }
 
       if (url.pathname === "/api/device") {
         if (!options.device) { sendError(response, 503, "Device configuration is unavailable."); return; }
@@ -524,12 +559,16 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
         try {
           const input = await readBody(request, GIF_LIMIT_BYTES);
           const converted = await convertGifToAnimationV2InWorker(input);
+          const metadata = validateAnimationV2(converted.bytes, converted.sha256);
+          if (metadata.width !== 240 || metadata.height !== 240 || metadata.frameCount !== converted.frameCount || metadata.durationMs !== converted.durationMs) {
+            throw new Error("The converted NBIF v2 animation failed its local metadata validation.");
+          }
+          options.device?.setAnimation(converted);
           animation = converted;
           animationOriginalSizeBytes = input.byteLength;
-          options.device?.setAnimation(converted);
           sendJson(response, 201, {
-            width: 240,
-            height: 240,
+            width: metadata.width,
+            height: metadata.height,
             frameCount: converted.frameCount,
             durationMs: converted.durationMs,
             sizeBytes: converted.bytes.length,

@@ -60,9 +60,13 @@ place; a delta only opens windows for rows containing a changed span.
 
 The firmware verifies the complete SHA-256 and independently decodes every row
 before marking a candidate ready. Playback promotes candidates only at a completed
-frame boundary, or while Spotify is active/animation playback is idle. Failed
-verification or rename leaves the installed animation intact. The same boundary
-promotion applies to legacy v1 uploads; the server acknowledges v1 after promotion.
+frame boundary, or while Spotify is active/animation playback is idle. A direct
+upload preserves the installed animation when verification fails. The dashboard's
+explicit replacement flow may remove the installed animation first to free its
+storage; if that later upload fails, the old file is gone. In either flow, partial
+or invalid candidate bytes stay in `animation.part` and are never opened for
+playback. The same boundary promotion applies to legacy v1 uploads; the server
+acknowledges v1 after promotion.
 
 ## Compatibility
 

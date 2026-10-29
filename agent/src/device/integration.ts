@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createCoverAsset, type AnimationAsset, type MediaAsset } from "../media/animation.js";
 import { downloadSpotifyCover } from "../web/server.js";
 import type { DisplayMode } from "../web/scene.js";
-import { AnimationStorageError, DeviceClient, DeviceSynchronizer } from "./client.js";
+import { AnimationReplacementCancelledError, AnimationStorageError, DeviceClient, DeviceSynchronizer } from "./client.js";
 import { DeviceScheduler, type DeviceConnectionStatus } from "./scheduler.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 import { MaintenanceClient } from "./maintenance-client.js";
@@ -15,8 +15,16 @@ export interface DeviceConfigStore {
   set(config: DeviceConfig): Promise<void>;
 }
 export interface DeviceSettings { address: string; token?: string; enabled: boolean }
-export interface DeviceView { address: string; enabled: boolean; paired: boolean; connection: DeviceConnectionStatus;
-  animation: { state: "none" | "queued" | "uploading" | "retrying" | "blocked" | "complete"; attempts: number } }
+export type AnimationTransferState = "none" | "prepared" | "removing" | "uploading" | "validating" | "complete" | "failed" | "cancelled";
+export type PreviousAnimationState = "unchanged" | "removed" | "unknown";
+export interface DeviceAnimationView {
+  state: AnimationTransferState;
+  attempts: number;
+  previousAnimation: PreviousAnimationState;
+  freeStorageBytes: number | null;
+  message: string;
+}
+export interface DeviceView { address: string; enabled: boolean; paired: boolean; connection: DeviceConnectionStatus; animation: DeviceAnimationView }
 
 
 /** The address and pairing token share one credential-manager entry. */
@@ -53,8 +61,8 @@ export class DeviceIntegration {
   private maintenanceHeld = false;
   private desiredMode: DisplayMode | null = null;
   private animation: MediaAsset | AnimationAsset | null = null;
-  private animationState: DeviceView["animation"] = { state: "none", attempts: 0 };
-  private animationSent: string | null = null;
+  private animationState: DeviceAnimationView = { state: "none", attempts: 0, previousAnimation: "unchanged", freeStorageBytes: null, message: "" };
+  private animationReplacementController: AbortController | null = null;
   private coverJob: { url: string; promise: Promise<MediaAsset> } | null = null;
 
   constructor(private readonly options: { store: DeviceConfigStore; poller: PlaybackPoller; intervalMs: number; fetchDevice?: typeof fetch;
@@ -69,10 +77,89 @@ export class DeviceIntegration {
   setMode(mode: DisplayMode): void { this.desiredMode = mode; }
 
   setAnimation(asset: MediaAsset | AnimationAsset): void {
-    if (this.animation?.sha256 === asset.sha256) return;
+    if (["removing", "uploading", "validating"].includes(this.animationState.state)) {
+      throw new Error("Finish or cancel the current animation replacement before choosing another GIF.");
+    }
     this.animation = asset;
-    this.animationSent = null;
-    this.animationState = { state: "queued", attempts: 0 };
+    const previousAnimation = ["failed", "cancelled"].includes(this.animationState.state)
+      ? this.animationState.previousAnimation : "unchanged";
+    this.animationState = { state: "prepared", attempts: this.animationState.attempts,
+      previousAnimation, freeStorageBytes: null, message: "The converted animation is ready for confirmation." };
+  }
+
+  replaceAnimation(): void {
+    if (!this.animation) throw new Error("Choose and convert a GIF before replacing the device animation.");
+    if (!this.config?.enabled || !this.config.token || this.maintenanceHeld || this.closed) {
+      throw new Error("Enable the paired device connection before replacing its animation.");
+    }
+    if (["removing", "uploading", "validating"].includes(this.animationState.state)) {
+      throw new Error("An animation replacement is already in progress.");
+    }
+    const asset = this.animation;
+    const controller = new AbortController();
+    const previousState = this.animationState;
+    const priorRemoval = previousState.previousAnimation;
+    this.animationReplacementController = controller;
+    this.animationState = { state: "removing", attempts: previousState.attempts + 1,
+      previousAnimation: priorRemoval, freeStorageBytes: null, message: "Checking device compatibility before animation removal." };
+    void this.serialize(async () => {
+      const config = this.config;
+      const scheduler = this.scheduler;
+      const resumeScheduler = Boolean(scheduler && !this.maintenanceHeld);
+      let previousAnimation: PreviousAnimationState = priorRemoval;
+      let freeStorageBytes: number | null = null;
+      try {
+        if (!config?.enabled || this.closed || this.maintenanceHeld) throw new Error("The device connection is unavailable for animation replacement.");
+        await scheduler?.suspendAndDrain();
+        this.scheduler = null;
+        if (controller.signal.aborted) throw new AnimationReplacementCancelledError();
+        const client = this.createClient(config);
+        const synchronizer = new DeviceSynchronizer({ client, poller: this.options.poller,
+          loadCover: (url) => this.loadCover(url) });
+        await client.replaceAnimation(asset, {
+          signal: controller.signal,
+          betweenChunks: async () => { if (!controller.signal.aborted) await synchronizer.serviceUploadControls(); },
+          onRemoved: (receipt) => {
+            previousAnimation = "removed";
+            freeStorageBytes = receipt.freeStorageBytes;
+            this.animationState = { state: "uploading", attempts: previousState.attempts + 1,
+              previousAnimation, freeStorageBytes, message: "The previous animation was removed. The device confirmed available storage; sending the converted animation." };
+          },
+          onStage: (stage) => {
+            if (stage === "removing") {
+              previousAnimation = "unknown";
+              this.animationState = { state: "removing", attempts: previousState.attempts + 1,
+                previousAnimation, freeStorageBytes, message: "Removing the installed animation to free device storage." };
+            } else {
+              this.animationState = { state: stage, attempts: previousState.attempts + 1,
+                previousAnimation, freeStorageBytes,
+                message: stage === "uploading" ? "Sending the converted NBIF v2 animation." : "The device is checking the complete file before playback." };
+            }
+          },
+        });
+        this.animationState = { state: "complete", attempts: previousState.attempts + 1,
+          previousAnimation: "removed", freeStorageBytes, message: "The device validated and installed the new animation." };
+      } catch (error) {
+        const cancelled = controller.signal.aborted || error instanceof AnimationReplacementCancelledError;
+        let message = cancelled ? "The replacement was cancelled." : "The replacement could not be completed.";
+        if (error instanceof AnimationStorageError) message = "The converted animation and required storage reserve do not fit after removal.";
+        else if (!cancelled && error instanceof Error && /does not support|frame|duration|capabilit|checksum|NBIF/i.test(error.message)) message = error.message;
+        if (previousAnimation === "removed") message += " The previous animation was removed and was not preserved; you can send this converted animation again.";
+        else if (previousAnimation === "unknown") message += " The device may have removed the previous animation; reconnect and send again to retry safely.";
+        else message += " The device animation was not removed.";
+        this.animationState = { state: cancelled ? "cancelled" : "failed", attempts: previousState.attempts + 1,
+          previousAnimation, freeStorageBytes, message };
+      } finally {
+        if (this.animationReplacementController === controller) this.animationReplacementController = null;
+        if (resumeScheduler && !this.closed && !this.maintenanceHeld && this.config?.enabled) this.startScheduler(this.config);
+      }
+    });
+  }
+
+  cancelAnimationReplacement(): boolean {
+    if (!this.animationReplacementController) return false;
+    this.animationReplacementController.abort();
+    return true;
   }
 
   private async loadCover(url: string): Promise<MediaAsset> {
@@ -187,13 +274,16 @@ export class DeviceIntegration {
       try { await this.options.store.set(config); }
       catch { this.config = previous ? { ...previous, enabled: false } : null; throw new Error("Unable to save device configuration in the system credential manager."); }
       this.config = config;
-      this.animationSent = null;
-      if (this.animation) this.animationState = { state: "queued", attempts: 0 };
+      if (this.animation && this.animationState.state !== "complete") {
+        this.animationState = { state: "prepared", attempts: this.animationState.attempts,
+          previousAnimation: "unchanged", freeStorageBytes: null, message: "The converted animation is ready for confirmation." };
+      }
       if (config.enabled && !this.closed && !this.maintenanceHeld) this.startScheduler(config);
     });
   }
 
   stop(): Promise<void> {
+    this.animationReplacementController?.abort();
     this.closed = true;
     return this.serialize(async () => { await this.scheduler?.stop(); this.scheduler = null; });
   }
@@ -213,21 +303,6 @@ export class DeviceIntegration {
         const status = await client.status();
         const mode = this.desiredMode;
         if (mode && status.mode !== mode) await client.setMode(mode);
-        const animation = this.animation;
-        if (animation && animation.sha256 !== this.animationSent) {
-          this.animationState = { state: "uploading", attempts: this.animationState.attempts + 1 };
-          try {
-            await client.uploadAnimation(animation, () => synchronizer.serviceUploadControls());
-            if (this.animation === animation) {
-              this.animationSent = animation.sha256;
-              this.animationState = { state: "complete", attempts: this.animationState.attempts };
-            }
-          } catch (error) {
-            const storageFull = error instanceof AnimationStorageError;
-            if (this.animation === animation) this.animationState = { state: storageFull ? "blocked" : "retrying", attempts: this.animationState.attempts };
-            return storageFull;
-          }
-        }
         return true;
       } catch { return false; }
     } });

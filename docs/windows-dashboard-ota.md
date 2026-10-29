@@ -1,12 +1,12 @@
 # Windows Dashboard Firmware Updates
 
-**Status (2026-10-27): offline implementation and private compile prepared; not installable or physically validated.** The agent supports a protected firmware inbox, manifest/hash checks, recovery-authenticated maintenance, one-use confirmation, read-only reboot verification, and explicit application startup. A private ESP8266 image was compiled with the retained recovery identity, but no inbox-compatible manifest is issued: the real chip-derived device ID and approved runtime heap floors have not been observed. Windows-native tests ran under Node 22 in an isolated temporary checkout. Existing device/Spotify Credential Manager records were read-only checked across processes; no maintenance credential was added. The real firmware inbox does not exist yet, and the installed agent/task were left untouched. No device, clock endpoint, or OTA operation was accessed. Hardware, backup, and independent recovery gates remain **PENDING/BLOCKED** as recorded in [recovery](recovery.md).
+**Status (2026-10-29): offline implementation only; not installable or physically validated.** The panel supports a protected firmware inbox, local image and manifest checks, recovery-authenticated maintenance, one-use confirmation, read-only reboot verification, and explicit application startup. An earlier private ESP8266 image was compiled, but current HEAD has not been compiled or packaged in this phase. The production manifest remains unavailable because approved live-resource floors and hardware acceptance evidence are unresolved. No device, clock endpoint, or OTA operation was accessed. Hardware, backup, and independent recovery gates remain **PENDING/BLOCKED** as recorded in [recovery](recovery.md).
 
 ## Requirements Before Using the Panel
 
-The installed firmware must already implement authenticated `GET /maintenance/v1/info`, Stage 2's maintenance boot and RTC policy, the existing authenticated pause/firmware/run routes, and an OTA-enabled private identity. A legacy image cannot acquire these capabilities from an agent update. The private build record is stored outside the repository under the WSL2 NeonByte private-build directory. Its compiled image is not an approved installation package: device binding and minimum live-resource values remain unresolved, and physical board/flash/recovery gates are still open.
+The installed firmware must already implement authenticated `GET /maintenance/v1/info`, Stage 2's maintenance boot and RTC policy, the existing authenticated pause/firmware/run routes, and an OTA-enabled private identity. A legacy image cannot acquire these capabilities from an agent update. The private build record is stored outside the repository. Its compiled image is not an approved installation package: device binding and minimum live-resource values remain unresolved, and physical board/flash/recovery gates are still open.
 
-Use this flow only after the maintainers have separately approved the exact target, backup, recovery, private artifact, and operation. A successful hash check does not prove the artifact publisher, physical flash geometry, or boot compatibility. The final panel confirmation shows the hash and build for comparison with the independently approved private build record.
+Production installation requires separate approval of the exact target, backup, recovery, private artifact, and operation. A successful hash check does not prove the artifact publisher, physical flash geometry, or boot compatibility. The panel's experimental-test purpose enables a separately authorized experiment only; it does not satisfy or waive any production gate. The final panel confirmation shows the hash, build, source revision, profile, target geometry, and linked layout for comparison with an independently retained private build record.
 
 ## First Manual Installation and Legacy Wi-Fi Bridge
 
@@ -14,7 +14,7 @@ The first update from the old firmware is a separate manual installation using t
 
 After the new image boots, authenticate `GET /maintenance/v1/info` and `/maintenance/v1/status` before relying on the LCD. Confirm the recovery AP is active. The clean maintenance path may keep the app paused while it retries saved Wi-Fi, so verify both `recoveryApRunning=true` and the station state. If a legacy RTC record prevents automatic configuration loading, issue one authenticated `POST /maintenance/v1/storage`, then re-read status. That operation loads configuration only; do not call `/maintenance/v1/run` until the later explicit start action. If storage still cannot load, keep the device in maintenance and use the documented recovery procedure.
 
-The current private image is not accompanied by `firmware.bin` plus an accepted `manifest.json` pair, so it must not be placed in the Windows inbox or treated as ready for installation. The missing device ID and approved live-resource floors must come from the actual device/build acceptance record, never from guessed values.
+The earlier private image is not accompanied by `firmware.bin` plus an accepted `manifest.json` pair, and no current-HEAD image or package was made in this phase. A manifest must use the exact current source revision from the trusted build record. Missing device identity or production live-resource floors must never be guessed. A null resource floor is accepted only for a manifest explicitly marked `experimental-test` and does not grant production approval.
 
 ## Prepare the Windows Agent and Credentials
 
@@ -45,9 +45,9 @@ Use the trusted device ID, firmware profile, and fingerprint from the retained p
 The protected inbox is fixed at `%LOCALAPPDATA%\NeonByte\firmware-inbox`. Copy exactly two files there with File Explorer:
 
 - `firmware.bin`: the complete approved, uncompressed combined ESP8266 eboot/application image, within the 458,752-byte Windows preparation ceiling.
-- `manifest.json`: the matching non-secret manifest produced from the trusted private build record. It binds exact byte length and SHA-256, expected build/device/profile, recovery-identity fingerprint, target, linked flash regions, enabled maintenance/OTA gates, minimum resources, source revision, and validation results.
+- `manifest.json`: the matching non-secret manifest produced from the trusted private build record. It binds exact byte length and SHA-256, expected build/device/profile, recovery-identity fingerprint, target, linked flash regions, enabled maintenance/OTA gates, resource-floor purpose, source revision, and validation results.
 
-The accepted target fields are fixed to ESP8266, DIO, 40 MHz, and 4 MiB. Both E9 headers are checked locally before readiness; the firmware remains responsible for its full segment, CRC, geometry, and flash validation. The manifest is not signed by this implementation. Compare its digest and identity to the separately approved private record; a digest copied only from the same untrusted file is not an independent trust check.
+The accepted target is fixed to ESP8266, DIO, 40 MHz, and 4 MiB with the exact linked 4m3m layout: bootloader at 0, application at 4,096, filesystem from 1,048,576 through 4,169,728, and EEPROM at 4,173,824. Before readiness, the agent checks the complete combined E9 image structure, segment load ranges and XOR checksums, padding, modern length/CRC, exact application boundary, manifest length, and SHA-256. The firmware independently repeats its image, runtime-bound, and actual flash-configuration/capacity checks before activation. These checks do not prove that the physical board matches the declared profile or that its boot path is compatible. The manifest is not signed by this implementation. Compare its digest and identity to the separately approved private record; a digest copied only from the same untrusted file is not an independent trust check.
 
 The closed manifest format uses these exact fields:
 
@@ -57,12 +57,27 @@ The closed manifest format uses these exact fields:
 | `firmwareVersion`, `buildId`, `deviceId`, `profile` | Bounded ASCII identifiers from the approved private build record and expected device |
 | `recoveryIdentityFingerprint`, `sourceRevision` | Lowercase 64-character fingerprint and 40-character Git revision |
 | `target` | Exactly `family: esp8266`, `flashMode: dio`, `flashFrequencyMHz: 40`, `flashBytes: 4194304` |
-| `linkedRegions` | Exactly `bootloaderStart: 0`, `applicationStart: 4096`, and the approved filesystem start/end and EEPROM start within the 4 MiB target |
+| `linkedRegions` | Exactly `bootloaderStart: 0`, `applicationStart: 4096`, `filesystemStart: 1048576`, `filesystemEnd: 4169728`, and `eepromStart: 4173824` (4m3m profile) |
 | `featureGates` | `otaEnabled: true`; either legacy `maintenanceOnBoot: true`, or `maintenanceOnBoot: false` with the additional `maintenanceAfterSoftwareRestart: true` gate |
-| `minimumResources` | Positive integer `minimumFreeHeapBytes` and `minimumLargestBlockBytes` from the approved build validation |
+| `purpose` | Omit for production; set exactly to `experimental-test` for a separately authorized experimental test |
+| `minimumResources` | Production requires positive integer `minimumFreeHeapBytes` and `minimumLargestBlockBytes`; experimental-test requires explicit JSON `null` and records pending resource floors |
 | `validation` | `combinedImage`, `modernCrc`, `runtimeBounds`, and `recoveryIdentity` all `true` in the approved build record |
 
-These fields are requirements, not proof by themselves: the operator compares them with the trusted private build record, and the existing firmware repeats the image checks that it can perform at runtime.
+These fields are requirements, not proof by themselves: the operator compares them with the trusted private build record. Production still requires approved positive resource floors. The experimental-test purpose permits only those floors to remain null; it keeps all manifest identity, image integrity, target, linked-layout, runtime, and recovery checks in force.
+
+The non-secret experimental manifest fields are exactly:
+
+~~~json
+{
+  "purpose": "experimental-test",
+  "minimumResources": null
+}
+~~~
+
+Do not put `0`, guessed values, or omitted resource floors in an experimental
+manifest. The agent still reads authenticated diagnostics during preflight and
+post-boot observation, but it does not treat unmeasured heap floors as passed.
+It stores the floors as null and reports resource approval as pending.
 
 The agent reads the fixed inbox only after **Prepare local firmware** is selected. It rejects missing/extra files, weak local permissions, reparse/path redirection, changing or oversized files, malformed manifests, identity/profile mismatch, unsupported headers, and SHA-256/length mismatch. It holds one bounded in-memory image snapshot. The browser receives only an opaque candidate ID and sanitized non-secret metadata; no firmware upload, path, or download route is provided.
 
@@ -70,11 +85,51 @@ The agent reads the fixed inbox only after **Prepare local firmware** is selecte
 
 1. Open `http://localhost:8787` in the same Windows user session. Confirm the enrolled maintenance credentials and approved device are available.
 2. Copy the reviewed `firmware.bin` and `manifest.json` pair to the fixed inbox. Wait for the copy to finish.
-3. Select **Prepare local firmware**. Review the displayed filename, byte length, SHA-256, expected build ID, and device ID. Compare them with the independent approved build record.
-4. Select **Confirm firmware update** and accept the separate confirmation. This suspends and drains the agent scheduler, rechecks identity/network/diagnostics/capacity, and accepts either an already paused app or an active app that can be paused. It sends `/pause` only for the active case, confirms the paused state, records a credential-free intent journal, and sends at most one raw firmware PUT. It never starts the application as part of OTA. If preflight aborts before pause/upload, the scheduler resumes only when the last maintenance status confirms that the application is still active; an already paused or uncertain state stays held. Progress counts bytes handed to the HTTP transport; it does not mean flash validation is complete.
-5. Select **Verify device** after the reboot begins. The agent uses the last verified private address with bounded read-only attempts for up to 120 seconds. Success requires authenticated info/status/diagnostics, the same device and recovery identity, a changed boot ID, the expected build ID, the application still paused, a running recovery AP, minimum memory thresholds, and two matching observations at least two seconds apart. The two observations must report the same new boot ID.
+3. Select **Prepare local firmware**. Review the displayed purpose, filename, byte length, SHA-256, expected build ID, device ID, profile, source revision, target geometry, and linked layout. Compare them with the independent trusted build record.
+4. For a production manifest, select **Confirm firmware update** and accept the production confirmation. For `experimental-test`, the panel names the action as an experimental test and asks for separate explicit authorization; the request carries a distinct acknowledgement that the service requires before upload. This suspends and drains the agent scheduler, rechecks identity/network/diagnostics/capacity, and accepts either an already paused app or an active app that can be paused. It sends `/pause` only for the active case, confirms the paused state, records a credential-free intent journal, and sends at most one raw firmware PUT. It never starts the application as part of OTA. If preflight aborts before pause/upload, the scheduler resumes only when the last maintenance status confirms that the application is still active; an already paused or uncertain state stays held. Progress counts bytes handed to the HTTP transport; it does not mean flash validation is complete.
+5. Select **Verify device** after the reboot begins. The agent uses the last verified private address with bounded read-only attempts for up to 120 seconds. Both production and experimental verification require authenticated info/status/diagnostics, the same device and recovery identity, a changed boot ID, the expected build ID, the application still paused, active recovery AP and station, loaded configuration and storage, no pending/volatile Wi-Fi, and two matching observations at least two seconds apart on the same new boot. Production additionally requires both approved memory floors. Experimental success is reported as `experimentallyVerified`; its journal retains null floor values and production approval remains pending.
 6. If DHCP changed the address, enter the device's private IPv4 HTTP origin in **Verified maintenance IPv4 address** and select **Verify and save device address**. The agent authenticates and checks the same device identity before persisting the maintenance-only address. After any PUT attempt, changing the address only resumes read-only reconciliation; it never re-sends the image.
-7. Only after the panel reports **verified**, select **Start application** and confirm. This sends the separate maintenance `/run` request. The dashboard scheduler resumes only after the application is confirmed running, and only if its existing `enabled` setting is true.
+7. After the panel reports **verified** for production or **experimentallyVerified** for an experimental test, select the corresponding **Start application** button and confirm. The experimental prompt repeats that the action does not grant production approval. Either action sends the separate maintenance `/run` request only after operator confirmation. The dashboard scheduler resumes only after the application is confirmed running, and only if its existing `enabled` setting is true.
+
+### Experimental Test Boundary
+
+An `experimental-test` manifest and a separate panel acknowledgement permit the
+panel to prepare a candidate whose live resource floors are explicitly
+unmeasured. This path still requires trusted device/profile/recovery identity,
+exact source revision, complete local image integrity checks, the fixed target
+and linked layout, authenticated preflight, capacity, pause safety, a one-use
+PUT, and healthy same-boot maintenance observations. A zero, placeholder, or
+omitted floor is never treated as an experimental null.
+
+`experimentallyVerified` means only that the expected build identity and
+maintenance state were observed twice. It is not the production `verified`
+state and does not approve runtime resource floors, physical flash/boot
+compatibility, the complete backup/restore procedure, independent failed-boot
+Wi-Fi recovery, or installation. Those production gates remain **PENDING** in
+the [installation GO/NO-GO decision](installation-go-no-go.md). Physical
+testing still requires its own explicit operation authorization; no test result
+may be inferred from a prepared candidate.
+
+## History and Blockers
+
+| Commit | OTA change or evidence | Blocker status after the commit |
+|---|---|---|
+| `6f11985` | Added authenticated raw maintenance OTA staging, bounded flash checks, readback validation, delayed activation, and host fault tests. | Software transaction safety is source-supported; no exact-unit flash map, installed verifier, or physical activation evidence was established. |
+| `2003752` | Recorded the explicit installation **NO-GO** and unit-specific evidence gaps. | Installed version/verifier, exact board and flash geometry, complete restorable backup, and independent Wi-Fi recovery remain blockers. |
+| `37291a3` | Added independent compatibility probes and an external first-install failure report; probes also found display initialization and conditional-AP concerns. | Findings identify additional failure modes but do not identify this unit's installed firmware or prove its first-install, display, or recovery behavior. |
+| `7c9ea4a` | Corrected listener startup checks, gated risky startup on recovery service readiness, validated recovery AP configuration, and made OTA hash/read paths cooperative. | Host/source checks improve fail-closed behavior; actual AP availability, flash programming, boot and recovery remain physically unverified. |
+| `bb2bddd` | Added a separate allowlisted raw restore route for one pinned stock image, behind disabled-by-default OTA and stock-restore gates with rechecked geometry. | This is not a full unit backup or independent failed-boot rescue, and it does not weaken modern OTA validation or establish installed-verifier compatibility. |
+| `d3fdff7` | Introduced the protected dashboard inbox and update service. The manifest requires positive `minimumFreeHeapBytes` and `minimumLargestBlockBytes`; preflight, post-boot verification, and manual reconciliation compare live diagnostics against those floors. | This was the concrete software gate that rejected a candidate when no approved live-floor measurements existed. It combined a useful production resource policy with an absolute preparation blocker for an unmeasured test. |
+| `405364e` | Hardened inbox access and update journaling, rechecked identity/readiness after scheduler drain, and changed preflight to accept an already-paused application while pausing only an active one. | It did not introduce the resource-floor gate; it reduced an earlier pause-state restriction. Current identity, network, capacity, and operator-confirmation checks remain required. |
+
+At `e943911`, the dashboard OTA client and ESP8266 OTA/startup implementation
+were already present. Comparing that commit with current `HEAD` shows no changes
+to `agent/src/device/firmware-inbox.ts`, `agent/src/device/firmware-update.ts`,
+or the ESP8266 maintenance OTA/startup sources. Current `HEAD` does change the
+display firmware for Spotify text rendering, so an image from `e943911` cannot
+stand in for a current-HEAD image or source-revision record. This phase does not
+build that image or create an inbox package. The installation **NO-GO** and its
+hardware, verifier, backup and independent-recovery blockers remain unchanged.
 
 ### Reconcile a Previously Running Build
 

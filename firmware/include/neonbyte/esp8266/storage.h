@@ -42,6 +42,7 @@ public:
     bool sealAnimationCandidate() override;
     bool markAnimationCandidateReady() override;
     void discardAnimationCandidate() override;
+    bool removeAnimation();
     bool promoteAnimationCandidateAtBoundary();
     bool animationPromotionFailed() const { return animationPromotionFailed_; }
     bool selectAsset(AssetKind kind, std::string_view trackId);

@@ -65,7 +65,7 @@ public:
     }
 
 private:
-    enum class AnimationV2Request : std::uint8_t { none, capabilities, begin, chunk, complete, status, cancel, invalid };
+    enum class AnimationV2Request : std::uint8_t { none, capabilities, begin, chunk, complete, status, cancel, removeInstalled, invalid };
     void dispatchAnimationV2();
     void advanceAnimationValidation(std::uint64_t now);
     void finishAnimationChunkRequest(std::uint64_t now);

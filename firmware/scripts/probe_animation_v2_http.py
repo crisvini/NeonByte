@@ -148,6 +148,12 @@ public:
     bool sealAnimationCandidate() override { return true; }
     bool markAnimationCandidateReady() override { candidateReady = true; return true; }
     void discardAnimationCandidate() override { candidate.clear(); candidateReady = false; }
+    bool removeAnimation() {
+        const bool hadInstalled = !installed.empty();
+        installed.clear(); candidate.clear(); candidateReady = false;
+        if (hadInstalled) ++animationRevision;
+        return true;
+    }
     bool promoteAnimationCandidateAtBoundary() {
         if (!candidateReady) return false;
         installed = candidate; candidate.clear(); candidateReady = false; ++animationRevision; return true;
@@ -198,7 +204,7 @@ public:
 };
 class DeviceHttpServer {
 public:
-    enum class AnimationV2Request : std::uint8_t { none, capabilities, begin, chunk, complete, status, cancel, invalid };
+    enum class AnimationV2Request : std::uint8_t { none, capabilities, begin, chunk, complete, status, cancel, removeInstalled, invalid };
     struct Diagnostics { std::uint32_t uploadBytes = 0; } diagnostics_;
     UploadStorage storage_;
     CandidateSource candidateSource_{storage_};
@@ -221,6 +227,7 @@ public:
     AnimationV2Request animationV2Request_ = AnimationV2Request::none;
     bool animationV2Route_ = false, animationChunkWriting_ = false, animationChunkDetached_ = false;
     bool animationValidationHashDone_ = false, animationValidationOpened_ = false;
+    bool legacyAnimationPromotionPending_ = false;
     bool readingBody_ = false, finalizing_ = false, clientActive_ = true, firmware_ = false;
     bool maintenance_ = false, maintenanceFirmware_ = false, stockRestore_ = false;
     bool binary_ = false;
@@ -406,11 +413,48 @@ void cancelRouteDiscardsOnlyThePendingCandidate() {
     assert(server.animationUpload_.state()==AnimationUploadState::Cancelled);
     assert(server.storage_.candidate.empty()&&server.storage_.installed==old&&server.storage_.animationRevision==0);
 }
+void explicitRemovalIsAuthenticatedAndIdempotentAndReportsAvailableStorage() {
+    DeviceHttpServer server;
+    server.storage_.installed={'N','B','I','F',2};
+    const auto revision=server.storage_.animationRevision;
+    server.request("DELETE","/api/v2/animation",{},0,{}, {},"Bearer wrong");
+    assert(server.status==401);
+    assert(server.storage_.installed.size()==5&&server.storage_.animationRevision==revision);
+
+    server.request("DELETE","/api/v2/animation");
+    assert(server.status==200);
+    assert(server.storage_.installed.empty()&&server.storage_.candidate.empty());
+    assert(server.storage_.animationRevision==revision+1);
+    const auto first=server.response_.bodyView();
+    assert(first.find("\"removed\":true")!=first.npos);
+    assert(first.find("\"freeStorageBytes\":4194304")!=first.npos);
+
+    server.request("DELETE","/api/v2/animation");
+    assert(server.status==200);
+    assert(server.storage_.installed.empty()&&server.storage_.candidate.empty());
+    assert(server.storage_.animationRevision==revision+1);
+    assert(server.response_.bodyView()==first);
+}
+void explicitRemovalCancelsAnIncompleteCandidateBeforeFreeingSpace() {
+    DeviceHttpServer server;
+    server.storage_.installed={'N','B','I','F',1};
+    const std::string body="{\"sizeBytes\":64,\"sha256\":\""+std::string(64,'0')+"\"}";
+    server.request("POST","/api/v2/animation/uploads","application/json",body.size(),{},body);
+    assert(server.status==201&&server.animationUpload_.state()==AnimationUploadState::Receiving);
+    assert(server.storage_.candidate.empty());
+    server.request("DELETE","/api/v2/animation");
+    assert(server.status==200);
+    assert(server.animationUpload_.state()==AnimationUploadState::Cancelled);
+    assert(server.storage_.installed.empty()&&server.storage_.candidate.empty());
+    assert(server.storage_.animationRevision==1);
+}
 }
 int main(){neonbyte::validRouteUploadValidatesAndPromotesOnlyAtBoundary();
     neonbyte::checksumMismatchAndMalformedV2PreserveCurrentAnimation();
     neonbyte::cancelRouteDiscardsOnlyThePendingCandidate();
-    std::puts("NBIF v2 HTTP route integration: authentication, capabilities, chunk upload, SHA-256, validation, status, cancellation and safe promotion passed.");}
+    neonbyte::explicitRemovalIsAuthenticatedAndIdempotentAndReportsAvailableStorage();
+    neonbyte::explicitRemovalCancelsAnIncompleteCandidateBeforeFreeingSpace();
+    std::puts("NBIF v2 HTTP route integration: authenticated idempotent removal, storage reporting, capabilities, chunk upload, SHA-256, validation, status, cancellation and safe promotion passed.");}
 '''
     sanitizers = (["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie"]
                   if os.environ.get("NEONBYTE_PROBE_SANITIZERS") == "1" else [])

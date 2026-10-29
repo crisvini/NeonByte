@@ -82,6 +82,7 @@ specified in [NBIF animation format](animation-format.md).
 | Method | Route | Body/headers | Success |
 |---|---|---|---|
 | GET | /api/v2/media-capabilities | No body | 200 with supported formats, geometry, file/chunk limits, replacement reserve, and current free bytes. |
+| DELETE | /api/v2/animation | No body | 200 with `{"removed":true,"freeStorageBytes":n}`; removes the installed animation and any incomplete candidate. See [`animation-removal.schema.json`](../contracts/v2/animation-removal.schema.json). |
 | POST | /api/v2/animation/uploads | JSON `{ "sizeBytes": n, "sha256": "64 lowercase hex characters" }` | 201 with an upload ID, offset 0, and `receiving` state. The server reserves a `.part` candidate without closing playback. |
 | PUT | /api/v2/animation/uploads/{id}/chunks?offset=n | Octet stream; 1–1,024 bytes | 204 after bounded writes complete. Exact immediate replays are idempotent; other offset conflicts are rejected. |
 | POST | /api/v2/animation/uploads/{id}/complete | No body | 202 after receiving is complete; whole-file hashing and animation decoding continue cooperatively. |
@@ -96,14 +97,37 @@ boundary (or while Spotify is active or playback is idle). A v1 agent continues 
 upload NBIF v1 through its original route; that route now waits for the same safe
 promotion boundary before returning 204.
 
+The dashboard's explicit replacement flow first converts and validates the GIF
+locally, then asks the operator to confirm the converted size and destructive
+replacement. Only after confirmation does the agent call the authenticated
+`DELETE /api/v2/animation` route. The operation is idempotent: the device closes
+animation handles, cancels and removes any incomplete candidate, removes the
+installed animation if present, and returns `removed: true` with its current
+free-byte count. Repeating the request leaves the animation absent. If removal
+fails, no upload starts.
+
+After the removal receipt, the agent starts the existing NBIF v2 upload session;
+it does not send the original GIF or use another upload protocol. The reported
+free bytes must cover the converted candidate plus the 32 KiB reserve. The device
+keeps received bytes in `animation.part`, which playback never opens. It hashes
+the complete candidate and independently decodes every row before marking it
+ready. Only then can the existing frame-boundary promotion rename it to
+`animation.nbif`. Cancellation, timeout, disconnect, insufficient space,
+verification failure, or reboot after removal leaves the previous animation
+absent; the dashboard reports that loss and keeps the locally converted file
+available for another explicit attempt. A direct upload request that does not
+use the removal operation retains the existing atomic replacement behavior.
+
 The agent services Spotify metadata and heartbeats during uploads without an
 extra status preflight on every control request. Controls are rate-limited to one
 refresh per five seconds during a transfer. A lost chunk response is reconciled
 against the server's next offset, and only an identical immediate chunk replay is
 accepted. A failed transfer or verification preserves the previously installed
-animation. The 32 KiB reserve is in addition to the candidate and installed file;
-HTTP 507 `insufficient_storage` means the candidate cannot be admitted safely and
-uses the error body in [`contracts/v2/error.schema.json`](../contracts/v2/error.schema.json).
+animation for direct uploads. In the dashboard's explicit replacement flow the
+old file has already been removed by operator choice. The 32 KiB reserve is in
+addition to the candidate and any installed file; HTTP 507 `insufficient_storage`
+means the candidate cannot be admitted safely and uses the error body in
+[`contracts/v2/error.schema.json`](../contracts/v2/error.schema.json).
 
 The v2 `maxFrames` capability is between 1 and 60; older firmware may advertise
 20. This limit applies to v2 transfers. NBIF v1 remains capped at 20 frames.
@@ -117,7 +141,7 @@ The ESP8266 profile accepts `application/octet-stream`, an exact nonzero `Conten
 - Cover body: `NBIC`, version `1` (u8), width `240` and height `240` (u16 little-endian), followed by 115,200 little-endian RGB565 bytes. Example header bytes: `4e 42 49 43 01 f0 00 f0 00`.
 - `X-Track-Id` encodes the UTF-8 track ID with percent escapes, as produced by `encodeURIComponent`. For example, `track%2Fexample` identifies `track/example`; `+` is literal. Decoding must produce 1–256 Unicode code points. A 4,096-byte header budget accommodates the maximally percent-encoded 1,024-byte field and ordinary required headers.
 - Animation body: `NBIF`, version `1` (u8), width/height `240` (u16 little-endian), frame count `1–20` (u16 little-endian), then each frame's u16 little-endian delay and 115,200 RGB565 bytes. Example one-frame header: `4e 42 49 46 01 f0 00 f0 00 01 00`. Delays must be at least 20 ms and total duration at most 30,000 ms. File length must exactly match the frame count.
-- Free space must hold the candidate alongside the installed asset, its private metadata, and a 32 KiB reserve. The effective upload limit is therefore often below the format maximum. No format or limit claims a validated FPS or physical flash capacity.
+- Free space must hold the candidate, its private metadata, and a 32 KiB reserve. Direct atomic replacement also needs room for the installed asset during transfer; the dashboard's confirmed remove-first flow frees that asset before transfer. The effective upload limit is often below the format maximum. No format or limit claims a validated FPS or physical flash capacity.
 
 A cover received before metadata may be stored under the `X-Track-Id` key, but it may only be shown with a track whose `trackId` matches. Do not show a previous track's cover as if it belonged to the current track.
 

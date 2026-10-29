@@ -83,3 +83,30 @@ test("duplicate OTA clicks are suppressed and a failure remains visible", async 
   assert.match(status.textContent, /must be reconciled/);
   assert.equal(vm.runInContext("otaActionPending", sandbox), false);
 });
+
+test("experimental OTA confirmation states pending production gates and sends an explicit test acknowledgement", async () => {
+  const source = await readFile(new URL("../src/web/public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf('document.querySelector("#ota-confirm").addEventListener');
+  const end = source.indexOf('document.querySelector("#ota-verify").addEventListener', start);
+  const button = { addEventListener: (_event: string, handler: () => Promise<void>) => { confirmCandidate = handler; } };
+  let confirmCandidate = async () => {};
+  const prompts: string[] = [];
+  const requests: Array<{ path: string; body: unknown }> = [];
+  const candidate = { id: "candidate", fileName: "firmware.bin", byteLength: 4200, sha256: "c".repeat(64),
+    expectedBuildId: "build-current", sourceRevision: "1".repeat(40), purpose: "experimental-test", deviceId: "esp8266-a1b2c3", profile: "esp8266-dio40-4mb",
+    target: { flashMode: "dio", flashFrequencyMHz: 40, flashBytes: 4_194_304 },
+    linkedRegions: { filesystemStart: 1_048_576, filesystemEnd: 4_169_728, eepromStart: 4_173_824 } };
+  const sandbox = vm.createContext({ otaActionPending: false, firmwareUpdate: { candidate },
+    document: { querySelector: (selector: string) => selector === "#ota-confirm" ? button : {} },
+    window: { confirm: (message: string) => { prompts.push(message); return true; } },
+    formatBytes: () => "4.1 KiB", postJson: async (path: string, body: unknown) => { requests.push({ path, body }); },
+    runOtaAction: async (action: () => Promise<unknown>) => { await action(); } });
+  vm.runInContext(source.slice(start, end), sandbox);
+  await confirmCandidate();
+  assert.match(prompts[0]!, /experimental/i);
+  assert.match(prompts[0]!, /production.*pending/i);
+  assert.match(prompts[0]!, /backup.*recovery/i);
+  assert.match(prompts[0]!, /DIO, 40 MHz.*filesystem 1048576–4169728, EEPROM 4173824/);
+  assert.equal(requests[0]?.path, "/api/ota/confirm");
+  assert.deepEqual(JSON.parse(JSON.stringify(requests[0]?.body)), { candidateId: "candidate", experimentalTestConfirmed: true });
+});

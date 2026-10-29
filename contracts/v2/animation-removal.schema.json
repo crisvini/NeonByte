@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neonbyte.local/contracts/v2/animation-removal.schema.json",
+  "title": "NeonByte animation removal receipt v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["removed", "freeStorageBytes"],
+  "properties": {
+    "removed": { "const": true },
+    "freeStorageBytes": { "type": "integer", "minimum": 0 }
+  }
+}

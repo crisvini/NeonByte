@@ -3,7 +3,7 @@ import test from "node:test";
 import { DeviceIntegration, type DeviceConfig, type DeviceConfigStore } from "../src/device/integration.js";
 import { PlaybackPoller } from "../src/spotify/poller.js";
 import { startLocalWebApp } from "../src/web/server.js";
-import { convertGifToAnimation } from "../src/media/animation.js";
+import { convertGifToAnimationV2 } from "../src/media/animation.js";
 
 class MemoryStore implements DeviceConfigStore {
   value: DeviceConfig | null = null;
@@ -13,15 +13,36 @@ class MemoryStore implements DeviceConfigStore {
 const poller = () => new PlaybackPoller({ provider: { getCurrentPlayback: async () => null }, pollIntervalMs: 15000 });
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-test("insufficient converted storage is visible while heartbeats continue and recovers when space is available", async () => {
-  const asset = convertGifToAnimation(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64"));
-  let freeStorageBytes = 0, uploads = 0, heartbeats = 0;
+test("GIF preparation never uploads automatically and an explicit replacement retries after removing the old animation", async () => {
+  const asset = convertGifToAnimationV2(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64"));
+  let freeStorageBytes = 0, uploads = 0, removals = 0, heartbeats = 0, supportsV2 = true;
+  let uploadOffset = 0;
+  const capabilities = { formats: ["nbif-v1", "nbif-v2"], width: 240, height: 240, maxFrames: 20, maxDurationMs: 30000,
+    maxEncodedBytes: 2359296, maxChunkBytes: 1024, reserveBytes: 32768, get freeStorageBytes() { return freeStorageBytes; } };
   const device = new DeviceIntegration({ store: new MemoryStore(), poller: poller(), intervalMs: 10,
     fetchDevice: async (input, init) => {
       const path = new URL(String(input)).pathname;
-      if (init?.method === "GET") return new Response(JSON.stringify({ protocolVersion: "v1", firmwareVersion: "test",
+      const method = init?.method ?? "GET";
+      if (path === "/api/v1/status") return new Response(JSON.stringify({ protocolVersion: "v1", firmwareVersion: "test",
         ip: "127.0.0.1", freeStorageBytes, mode: "auto", activeScene: "gif" }));
-      if (path.endsWith("/animation")) uploads++;
+      if (path === "/api/v2/media-capabilities") return supportsV2
+        ? new Response(JSON.stringify(capabilities)) : new Response(null, { status: 404 });
+      if (path === "/api/v2/animation" && method === "DELETE") {
+        removals++;
+        return new Response(JSON.stringify({ removed: true, freeStorageBytes }));
+      }
+      if (path === "/api/v2/animation/uploads" && method === "POST") {
+        uploads++;
+        uploadOffset = 0;
+        return new Response(JSON.stringify({ uploadId: "aabbccdd", nextOffset: 0, state: "receiving" }), { status: 201 });
+      }
+      if (path.endsWith("/chunks")) {
+        uploadOffset += Buffer.from(init?.body as Uint8Array).length;
+        return new Response(null, { status: 204 });
+      }
+      if (path.endsWith("/complete")) return new Response(null, { status: 202 });
+      if (path === "/api/v2/animation/uploads/aabbccdd") return new Response(JSON.stringify({ uploadId: "aabbccdd",
+        state: "installed", nextOffset: uploadOffset, expectedBytes: asset.bytes.length, receivedBytes: uploadOffset, error: "" }));
       if (path.endsWith("/heartbeat")) heartbeats++;
       return new Response(null, { status: 204 });
     } });
@@ -29,14 +50,35 @@ test("insufficient converted storage is visible while heartbeats continue and re
   await device.configure({ address: "http://127.0.0.1:1", token: "test-secret", enabled: true });
   try {
     await delay(80);
-    assert.equal(device.status.animation.state, "blocked");
+    assert.equal(device.status.animation.state, "prepared");
+    assert.equal(removals, 0);
     assert.equal(uploads, 0);
     assert.ok(heartbeats >= 2);
     assert.equal(device.status.connection, "connected");
+    device.replaceAnimation();
+    await delay(80);
+    assert.equal(device.status.animation.state, "failed");
+    assert.equal(device.status.animation.previousAnimation, "removed");
+    assert.match(device.status.animation.message, /previous animation was removed and was not preserved/i);
+    assert.equal(removals, 1);
+    assert.equal(uploads, 0);
+    device.setAnimation(asset);
+    assert.equal(device.status.animation.state, "prepared");
+    assert.equal(device.status.animation.previousAnimation, "removed");
+    supportsV2 = false;
+    device.replaceAnimation();
+    await delay(80);
+    assert.equal(device.status.animation.state, "failed");
+    assert.equal(device.status.animation.previousAnimation, "removed");
+    assert.match(device.status.animation.message, /previous animation was removed and was not preserved/i);
+    assert.equal(removals, 1, "incompatible firmware must not receive another destructive request");
+    supportsV2 = true;
     freeStorageBytes = asset.bytes.length + 32768;
+    device.replaceAnimation();
     await delay(80);
     assert.equal(device.status.animation.state, "complete");
     assert.equal(uploads, 1);
+    assert.equal(removals, 2);
     assert.equal(JSON.stringify(device.status).includes("test-secret"), false);
   } finally { await device.stop(); }
 });

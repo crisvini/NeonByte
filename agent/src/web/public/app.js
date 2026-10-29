@@ -19,6 +19,7 @@ let agentOfflineNotified = false;
 let otaActionPending = false;
 let otaActionError = null;
 let mode = "auto";
+let previewAnimationSelected = false;
 let animationFrames = [];
 let animationSha256 = "";
 let currentCoverUrl = "";
@@ -74,6 +75,7 @@ function setModeButtons() {
 
 async function chooseMode(nextMode) {
   if (!["auto", "spotify", "gif"].includes(nextMode)) return;
+  previewAnimationSelected = false;
   mode = nextMode;
   localStorage.setItem("neonbyte-mode", mode);
   setModeButtons();
@@ -114,7 +116,8 @@ function updateStatusText() {
   const badge = document.querySelector("#spotify-badge");
   badge.textContent = status.spotifyConnected ? "Connected" : status.spotifyConfigured ? "Waiting for connection" : "Configure .env";
   badge.classList.toggle("connected", status.spotifyConnected);
-  document.querySelector("#scene-label").textContent = status.activeScene === "spotify" ? "SPOTIFY NOW PLAYING" : "GIF FULLSCREEN";
+  const previewScene = previewAnimationSelected && status.animation.available ? "gif" : status.activeScene;
+  document.querySelector("#scene-label").textContent = previewScene === "spotify" ? "SPOTIFY NOW PLAYING" : "GIF FULLSCREEN";
   setDemoControls(status.demoEnabled);
 
   const animation = status.animation;
@@ -122,28 +125,42 @@ function updateStatusText() {
     ? `${animation.compressionPercent.toFixed(1)}% smaller`
     : `${Math.abs(animation.compressionPercent).toFixed(1)}% larger`;
   document.querySelector("#upload-status").textContent = animation.available
-    ? `Original ${formatBytes(animation.originalSizeBytes)} · converted ${formatBytes(animation.sizeBytes)} (${compressionText}) · ${animation.frameCount} frames · ${animation.sha256.slice(0, 12)}…`
+    ? `${animation.width} × ${animation.height} px · ${animation.frameCount} frames · ${animation.durationMs} ms · ${formatBytes(animation.sizeBytes)} converted (${compressionText}) · SHA-256 ${animation.sha256.slice(0, 12)}…`
     : "No GIF uploaded in this session.";
   const transfer = device.animation;
   if (animation.available && transfer && transfer.state !== "none") {
-    const messages = { queued: "Queued for device", uploading: "Uploading to device", retrying: "Device transfer failed; retrying", blocked: "Converted animation does not fit in device storage. Choose fewer frames; the installed GIF is preserved.", complete: "Installed on device" };
-    document.querySelector("#upload-status").textContent += ` · ${messages[transfer.state]}${transfer.attempts ? ` (attempt ${transfer.attempts})` : ""}`;
+    document.querySelector("#upload-status").textContent += ` · ${transfer.message}${transfer.freeStorageBytes === null ? "" : ` Device reported ${formatBytes(transfer.freeStorageBytes)} free after removal.`}`;
   }
-  document.querySelector("#upload-status").classList.toggle("error", transfer?.state === "blocked");
+  const activeTransfer = transfer && ["removing", "uploading", "validating"].includes(transfer.state);
+  const replace = document.querySelector("#replace-animation");
+  replace.hidden = !animation.available || activeTransfer || transfer?.state === "complete";
+  replace.textContent = transfer?.previousAnimation === "removed" || transfer?.previousAnimation === "unknown"
+    ? `Send converted animation again · ${formatBytes(animation.sizeBytes)}` : `Replace current animation · ${formatBytes(animation.sizeBytes)}`;
+  replace.disabled = !device.enabled || !device.paired;
+  const cancel = document.querySelector("#cancel-animation");
+  cancel.hidden = !activeTransfer;
+  document.querySelector("#gif-file").disabled = Boolean(activeTransfer);
+  document.querySelector("#upload-status").classList.toggle("error", transfer?.state === "failed" || transfer?.state === "cancelled");
   setOtaMutationLock();
 }
 
 function otaMutationLocked() {
   if (!firmwareUpdate) return false;
-  return ["ready", "preflight", "pausing", "uploading", "waitingForReboot", "reconnecting", "verifying", "outcomeUnknown", "verificationFailed", "verified"].includes(firmwareUpdate.state) ||
+  return ["ready", "preflight", "pausing", "uploading", "waitingForReboot", "reconnecting", "verifying", "outcomeUnknown", "verificationFailed", "verified", "experimentallyVerified"].includes(firmwareUpdate.state) ||
     (firmwareUpdate.putAttempted && !["started", "manuallyReconciled"].includes(firmwareUpdate.state));
 }
 
 function setOtaMutationLock() {
   const locked = otaMutationLocked();
-  document.querySelectorAll("#device-form input, #device-form button, [data-mode], #demo-toggle, [data-action], #gif-file").forEach((element) => {
+  document.querySelectorAll("#device-form input, #device-form button, [data-mode], #demo-toggle, [data-action], #gif-file, #replace-animation, #cancel-animation").forEach((element) => {
     element.disabled = locked;
   });
+  const device = status?.device;
+  const animation = device?.animation;
+  document.querySelector("#replace-animation").disabled = locked || !device?.enabled || !device?.paired ||
+    Boolean(animation && ["removing", "uploading", "validating"].includes(animation.state));
+  document.querySelector("#cancel-animation").disabled = locked ||
+    !Boolean(animation && ["removing", "uploading", "validating"].includes(animation.state));
 }
 
 function updateOtaControls() {
@@ -156,12 +173,14 @@ function updateOtaControls() {
   confirm.hidden = state !== "ready" || !candidate;
   confirm.disabled = pending;
   const verify = document.querySelector("#ota-verify");
-  verify.hidden = !firmwareUpdate.putAttempted || ["verified", "started", "manuallyReconciled"].includes(state);
+  verify.hidden = !firmwareUpdate.putAttempted || ["verified", "experimentallyVerified", "started", "manuallyReconciled"].includes(state);
   verify.disabled = pending;
   const reconcile = document.querySelector("#ota-reconcile");
   reconcile.hidden = !firmwareUpdate.recoverableAttempt;
   reconcile.disabled = pending;
-  document.querySelector("#ota-run").hidden = state !== "verified";
+  document.querySelector("#ota-run").hidden = !["verified", "experimentallyVerified"].includes(state);
+  document.querySelector("#ota-run").textContent = firmwareUpdate.purpose === "experimental-test"
+    ? "Start experimental application" : "Start application";
   document.querySelector("#ota-run").disabled = pending;
   document.querySelector("#ota-address-save").disabled = pending;
 }
@@ -177,13 +196,13 @@ async function refreshFirmwareStatus() {
     const candidateBox = document.querySelector("#ota-candidate");
     candidateBox.hidden = !candidate;
     candidateBox.textContent = candidate
-      ? `${candidate.fileName} · ${formatBytes(candidate.byteLength)} · SHA-256 ${candidate.sha256} · build ${candidate.expectedBuildId} · device ${candidate.deviceId}`
+      ? `${candidate.purpose === "experimental-test" ? "EXPERIMENTAL TEST · " : ""}${candidate.fileName} · ${formatBytes(candidate.byteLength)} · SHA-256 ${candidate.sha256} · build ${candidate.expectedBuildId} · device ${candidate.deviceId} · profile ${candidate.profile} · source ${candidate.sourceRevision} · ${candidate.target.flashMode.toUpperCase()} ${candidate.target.flashFrequencyMHz} MHz / ${formatBytes(candidate.target.flashBytes)} flash · FS ${candidate.linkedRegions.filesystemStart}–${candidate.linkedRegions.filesystemEnd}, EEPROM ${candidate.linkedRegions.eepromStart}`
       : "";
     document.querySelector("#ota-status").textContent = otaActionError || (state === "uploading"
       ? `${firmwareUpdate.message} ${formatBytes(firmwareUpdate.bytesSent)} of ${formatBytes(firmwareUpdate.totalBytes)} handed to the transport.`
       : firmwareUpdate.message);
     const progress = document.querySelector("#ota-progress");
-    progress.hidden = !firmwareUpdate.putAttempted || !["uploading", "waitingForReboot", "reconnecting", "verifying", "outcomeUnknown", "verificationFailed", "verified", "started"].includes(state);
+    progress.hidden = !firmwareUpdate.putAttempted || !["uploading", "waitingForReboot", "reconnecting", "verifying", "outcomeUnknown", "verificationFailed", "verified", "experimentallyVerified", "started"].includes(state);
     progress.max = 1;
     progress.value = firmwareUpdate.totalBytes ? Math.min(1, firmwareUpdate.bytesSent / firmwareUpdate.totalBytes) : 0;
     updateOtaControls();
@@ -659,7 +678,7 @@ function drawGif(now) {
 }
 
 function render(now) {
-  const scene = status?.activeScene ?? "gif";
+  const scene = previewAnimationSelected && status?.animation?.available ? "gif" : status?.activeScene ?? "gif";
   if (scene !== previousScene) {
     previousScene = scene;
     if (scene !== "spotify") spotifySceneActive = false;
@@ -723,12 +742,40 @@ async function uploadGif(file) {
       timeoutMs: 120_000,
     });
     const result = await response.json();
+    previewAnimationSelected = true;
     await refreshStatus();
-    await chooseMode("gif");
-    notify(`GIF ready: ${result.frameCount} frames at 240 × 240.`);
+    notify(`Converted NBIF v2 is ready: ${formatBytes(result.sizeBytes)}, ${result.frameCount} frames, ${result.durationMs} ms. Review it and confirm replacement when ready.`);
   } catch (error) {
     label.textContent = error.message;
     label.classList.add("error");
+  }
+}
+
+async function replaceAnimation() {
+  if (!status?.animation?.available) return;
+  const { sizeBytes, frameCount, durationMs } = status.animation;
+  const message = `Replace the device animation with the converted NBIF v2 file (${formatBytes(sizeBytes)}, ${frameCount} frames, ${durationMs} ms)?\n\nThe clock will remove its current animation before transfer. If transfer is cancelled or fails, the old animation will not be preserved.`;
+  if (!window.confirm(message)) return;
+  const button = document.querySelector("#replace-animation");
+  button.disabled = true;
+  try {
+    await request("/api/animation/replace", { method: "POST" });
+    await refreshStatus();
+  } catch (error) {
+    notify(error.message);
+    button.disabled = false;
+  }
+}
+
+async function cancelAnimationTransfer() {
+  const button = document.querySelector("#cancel-animation");
+  button.disabled = true;
+  try {
+    await request("/api/animation/cancel", { method: "POST" });
+    await refreshStatus();
+  } catch (error) {
+    notify(error.message);
+    button.disabled = false;
   }
 }
 
@@ -773,9 +820,13 @@ document.querySelector("#ota-confirm").addEventListener("click", async () => {
   if (otaActionPending) return;
   const candidate = firmwareUpdate?.candidate;
   if (!candidate) return;
-  const accepted = window.confirm(`Install build ${candidate.expectedBuildId} (${formatBytes(candidate.byteLength)}, SHA-256 ${candidate.sha256}) on device ${candidate.deviceId}? The application will pause and the image will be sent once.`);
+  const experimental = candidate.purpose === "experimental-test";
+  const prompt = experimental
+    ? `Authorize ONE EXPERIMENTAL TEST upload of build ${candidate.expectedBuildId} (${formatBytes(candidate.byteLength)}, SHA-256 ${candidate.sha256}) from source ${candidate.sourceRevision} to device ${candidate.deviceId}, profile ${candidate.profile}? Declared target: ${candidate.target.flashMode.toUpperCase()}, ${candidate.target.flashFrequencyMHz} MHz, ${formatBytes(candidate.target.flashBytes)} flash; filesystem ${candidate.linkedRegions.filesystemStart}–${candidate.linkedRegions.filesystemEnd}, EEPROM ${candidate.linkedRegions.eepromStart}. This will pause the application if it is running. Locally checked image integrity, identity and declared flash layout passed; live resource floors, physical flash compatibility, full backup and independent Wi-Fi recovery remain unapproved. Production approval remains pending. Continue only with separate explicit authorization for this experiment.`
+    : `Install build ${candidate.expectedBuildId} (${formatBytes(candidate.byteLength)}, SHA-256 ${candidate.sha256}) on device ${candidate.deviceId}? The application will pause and the image will be sent once.`;
+  const accepted = window.confirm(prompt);
   if (!accepted) return;
-  await runOtaAction(() => postJson("/api/ota/confirm", { candidateId: candidate.id }, 150_000));
+  await runOtaAction(() => postJson("/api/ota/confirm", { candidateId: candidate.id, ...(experimental ? { experimentalTestConfirmed: true } : {}) }, 150_000));
 });
 
 document.querySelector("#ota-verify").addEventListener("click", async () => {
@@ -800,7 +851,11 @@ document.querySelector("#ota-address-save").addEventListener("click", async () =
 
 document.querySelector("#ota-run").addEventListener("click", async () => {
   if (otaActionPending) return;
-  if (!window.confirm("Start the verified application now?")) return;
+  const experimental = firmwareUpdate?.purpose === "experimental-test";
+  const prompt = experimental
+    ? "Start this experimentally verified application now? Experimental maintenance observations are not production approval; hardware homologation remains pending."
+    : "Start the verified application now?";
+  if (!window.confirm(prompt)) return;
   await runOtaAction(() => request("/api/ota/run", { method: "POST", timeoutMs: 30_000 }));
 });
 
@@ -812,6 +867,8 @@ document.querySelector("#demo-toggle").addEventListener("click", () => void togg
 document.querySelectorAll("[data-action]").forEach((button) => {
   button.addEventListener("click", () => void mockAction(button.dataset.action));
 });
+document.querySelector("#replace-animation").addEventListener("click", () => void replaceAnimation());
+document.querySelector("#cancel-animation").addEventListener("click", () => void cancelAnimationTransfer());
 document.querySelector("#gif-file").addEventListener("change", (event) => {
   void uploadGif(event.target.files?.[0]);
   event.target.value = "";
