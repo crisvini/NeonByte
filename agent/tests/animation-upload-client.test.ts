@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import test from "node:test";
 import { AnimationStorageError, DeviceClient } from "../src/device/client.js";
 import type { AnimationAsset } from "../src/media/animation.js";
@@ -241,6 +242,107 @@ test("explicit replacement confirms NBIF v2 compatibility, deletes the installed
   assert.ok(progress.includes("uploading"));
   assert.ok(progress.includes("validating"));
   assert.ok(statusPolls > 0);
+});
+
+test("a lost close-delimited removal receipt is diagnosed and the same converted asset can be retried safely", async () => {
+  const animation = makeAnimation();
+  const receipt = Buffer.from(JSON.stringify({ removed: true, freeStorageBytes: capabilities.freeStorageBytes }));
+  let removalRequests = 0;
+  let installedAnimation = true;
+  let receivedBytes = 0;
+  let unauthorized = false;
+  const server = createServer((request, response) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = Buffer.concat(chunks);
+      const method = request.method ?? "GET";
+      const path = request.url ?? "/";
+      if (!(method === "GET" && path === "/api/v1/status") && request.headers.authorization !== "Bearer replacement-test") {
+        unauthorized = true;
+        response.writeHead(401, { Connection: "close", "Content-Length": "0" }).end();
+        return;
+      }
+      if (method === "GET" && path === "/api/v1/status") {
+        response.writeHead(200, { "Content-Type": "application/json", Connection: "close" })
+          .end(JSON.stringify({ ...status, freeStorageBytes: capabilities.freeStorageBytes }));
+        return;
+      }
+      if (method === "GET" && path === "/api/v2/media-capabilities") {
+        response.writeHead(200, { "Content-Type": "application/json", Connection: "close" }).end(JSON.stringify(capabilities));
+        return;
+      }
+      if (method === "DELETE" && path === "/api/v2/animation") {
+        removalRequests += 1;
+        installedAnimation = false;
+        if (removalRequests === 1) {
+          response.writeHead(200, { "Content-Type": "application/json", "Content-Length": String(receipt.length), Connection: "close" });
+          response.flushHeaders();
+          response.destroy();
+          return;
+        }
+        response.writeHead(200, { "Content-Type": "application/json", "Content-Length": String(receipt.length), Connection: "close" })
+          .end(receipt);
+        return;
+      }
+      if (method === "POST" && path === "/api/v2/animation/uploads") {
+        assert.equal(installedAnimation, false, "retry deletion must be idempotent after the first response is lost");
+        assert.deepEqual(JSON.parse(body.toString("utf8")), { sizeBytes: animation.bytes.length, sha256: animation.sha256 });
+        response.writeHead(201, { "Content-Type": "application/json", Connection: "close" })
+          .end(JSON.stringify({ uploadId: "b16b00b5", nextOffset: 0, state: "receiving" }));
+        return;
+      }
+      if (method === "PUT" && path.startsWith("/api/v2/animation/uploads/b16b00b5/chunks?")) {
+        receivedBytes += body.length;
+        response.writeHead(204, { Connection: "close" }).end();
+        return;
+      }
+      if (method === "POST" && path === "/api/v2/animation/uploads/b16b00b5/complete") {
+        response.writeHead(202, { Connection: "close" }).end();
+        return;
+      }
+      if (method === "GET" && path === "/api/v2/animation/uploads/b16b00b5") {
+        response.writeHead(200, { "Content-Type": "application/json", Connection: "close" })
+          .end(JSON.stringify({ uploadId: "b16b00b5", state: "installed", nextOffset: receivedBytes,
+            expectedBytes: animation.bytes.length, receivedBytes, error: "" }));
+        return;
+      }
+      response.writeHead(404, { Connection: "close", "Content-Length": "0" }).end();
+    })().catch((error: unknown) => {
+      response.destroy(error instanceof Error ? error : undefined);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const client = new DeviceClient({ baseUrl: `http://127.0.0.1:${address.port}`, token: "replacement-test" });
+  try {
+    await assert.rejects(client.replaceAnimation(animation), /HTTP 200.*connection closed.*receipt/i);
+    assert.equal(removalRequests, 1);
+    assert.equal(installedAnimation, false, "the simulated ESP completed the delete before losing its receipt");
+    await client.replaceAnimation(animation);
+    assert.equal(removalRequests, 2, "a retry repeats the authenticated idempotent removal");
+    assert.equal(receivedBytes, animation.bytes.length, "the cached NBIF v2 is uploaded without reconversion");
+    assert.equal(unauthorized, false, "all mutating requests carry the configured bearer credential");
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("a firmware HTTP error preserves its status, code, and safe removal diagnostic", async () => {
+  const animation = makeAnimation();
+  const client = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret", fetchDevice: async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/v1/status") return new Response(JSON.stringify(status));
+    if (path === "/api/v2/media-capabilities") return new Response(JSON.stringify(capabilities));
+    if (path === "/api/v2/animation" && init?.method === "DELETE") return new Response(JSON.stringify({
+      code: "internal_error", message: "The installed animation could not be removed.",
+    }), { status: 500, headers: { "Content-Type": "application/json", Connection: "close" } });
+    return new Response(null, { status: 204 });
+  } });
+  await assert.rejects(client.replaceAnimation(animation),
+    /HTTP 500, firmware code internal_error.*The installed animation could not be removed/i);
 });
 
 test("invalid or incompatible converted media is rejected before explicit removal", async () => {

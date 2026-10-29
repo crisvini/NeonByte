@@ -83,6 +83,67 @@ test("GIF preparation never uploads automatically and an explicit replacement re
   } finally { await device.stop(); }
 });
 
+test("the prepared NBIF v2 remains available after a lost DELETE receipt and retries without conversion", async () => {
+  const asset = convertGifToAnimationV2(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64"));
+  let freeStorageBytes = 0;
+  let removals = 0;
+  let uploads = 0;
+  let installed = true;
+  const capabilities = { formats: ["nbif-v1", "nbif-v2"], width: 240, height: 240, maxFrames: 20, maxDurationMs: 30000,
+    maxEncodedBytes: 2359296, maxChunkBytes: 1024, reserveBytes: 32768, get freeStorageBytes() { return freeStorageBytes; } };
+  const device = new DeviceIntegration({ store: new MemoryStore(), poller: poller(), intervalMs: 1000,
+    fetchDevice: async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      const method = init?.method ?? "GET";
+      if (path === "/api/v1/status") return new Response(JSON.stringify({ protocolVersion: "v1", firmwareVersion: "test",
+        ip: "127.0.0.1", freeStorageBytes, mode: "auto", activeScene: "gif" }));
+      if (path === "/api/v2/media-capabilities") return new Response(JSON.stringify(capabilities));
+      if (path === "/api/v2/animation" && method === "DELETE") {
+        removals++;
+        installed = false;
+        freeStorageBytes = asset.bytes.length + capabilities.reserveBytes;
+        if (removals === 1) {
+          return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"removed":true,"freeStorageBytes":'));
+            controller.error(new Error("simulated close after deletion"));
+          } }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        return new Response(JSON.stringify({ removed: true, freeStorageBytes }));
+      }
+      if (path === "/api/v2/animation/uploads" && method === "POST") {
+        assert.equal(installed, false);
+        const begin = JSON.parse(String(init?.body));
+        assert.deepEqual(begin, { sizeBytes: asset.bytes.length, sha256: asset.sha256 });
+        uploads++;
+        return new Response(JSON.stringify({ uploadId: "aabbccdd", nextOffset: 0, state: "receiving" }), { status: 201 });
+      }
+      if (path.endsWith("/chunks")) return new Response(null, { status: 204 });
+      if (path.endsWith("/complete")) return new Response(null, { status: 202 });
+      if (path === "/api/v2/animation/uploads/aabbccdd") return new Response(JSON.stringify({ uploadId: "aabbccdd",
+        state: "installed", nextOffset: asset.bytes.length, expectedBytes: asset.bytes.length,
+        receivedBytes: asset.bytes.length, error: "" }));
+      return new Response(null, { status: 204 });
+    } });
+  device.setAnimation(asset);
+  await device.configure({ address: "http://127.0.0.1:1", token: "test-secret", enabled: true });
+  try {
+    device.replaceAnimation();
+    await delay(50);
+    assert.equal(device.status.animation.state, "failed");
+    assert.equal(device.status.animation.previousAnimation, "unknown");
+    assert.match(device.status.animation.message, /HTTP 200.*connection closed.*receipt/i);
+    assert.equal(removals, 1);
+    assert.equal(uploads, 0);
+
+    device.replaceAnimation();
+    await delay(80);
+    assert.equal(device.status.animation.state, "complete");
+    assert.equal(device.status.animation.previousAnimation, "removed");
+    assert.equal(removals, 2, "retry repeats DELETE safely after the first removal response was lost");
+    assert.equal(uploads, 1, "the prepared NBIF v2 is uploaded without choosing or converting the GIF again");
+  } finally { await device.stop(); }
+});
+
 test("configuration requires explicit enable and safely restores it after restart", async () => {
   const store = new MemoryStore();
   let calls = 0;

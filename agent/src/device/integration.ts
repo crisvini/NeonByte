@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import { createCoverAsset, type AnimationAsset, type MediaAsset } from "../media/animation.js";
 import { downloadSpotifyCover } from "../web/server.js";
 import type { DisplayMode } from "../web/scene.js";
-import { AnimationReplacementCancelledError, AnimationStorageError, DeviceClient, DeviceSynchronizer } from "./client.js";
+import { AnimationRemovalCommunicationError, AnimationRemovalReceiptError, AnimationReplacementCancelledError,
+  AnimationStorageError, DeviceClient, DeviceHttpStatusError, DeviceSynchronizer } from "./client.js";
 import { DeviceScheduler, type DeviceConnectionStatus } from "./scheduler.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 import { MaintenanceClient } from "./maintenance-client.js";
@@ -143,9 +144,11 @@ export class DeviceIntegration {
         const cancelled = controller.signal.aborted || error instanceof AnimationReplacementCancelledError;
         let message = cancelled ? "The replacement was cancelled." : "The replacement could not be completed.";
         if (error instanceof AnimationStorageError) message = "The converted animation and required storage reserve do not fit after removal.";
+        else if (error instanceof DeviceHttpStatusError || error instanceof AnimationRemovalCommunicationError ||
+                 error instanceof AnimationRemovalReceiptError) message = error.message;
         else if (!cancelled && error instanceof Error && /does not support|frame|duration|capabilit|checksum|NBIF/i.test(error.message)) message = error.message;
         if (previousAnimation === "removed") message += " The previous animation was removed and was not preserved; you can send this converted animation again.";
-        else if (previousAnimation === "unknown") message += " The device may have removed the previous animation; reconnect and send again to retry safely.";
+        else if (previousAnimation === "unknown") message += " The previous animation may already be removed. The converted NBIF v2 remains ready; retry safely because removal is idempotent.";
         else message += " The device animation was not removed.";
         this.animationState = { state: cancelled ? "cancelled" : "failed", attempts: previousState.attempts + 1,
           previousAnimation, freeStorageBytes, message };

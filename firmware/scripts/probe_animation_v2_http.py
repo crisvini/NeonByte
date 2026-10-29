@@ -116,6 +116,7 @@ public:
     std::vector<std::uint8_t> installed, candidate;
     std::uint32_t animationRevision = 0;
     bool candidateReady = false;
+    bool removalFails = false;
     std::size_t maxWrite = 0;
     bool animationPromotionFailed() const { return false; }
     bool loadMode(DisplayMode&) const override { return false; }
@@ -149,6 +150,7 @@ public:
     bool markAnimationCandidateReady() override { candidateReady = true; return true; }
     void discardAnimationCandidate() override { candidate.clear(); candidateReady = false; }
     bool removeAnimation() {
+        if (removalFails) return false;
         const bool hadInstalled = !installed.empty();
         installed.clear(); candidate.clear(); candidateReady = false;
         if (hadInstalled) ++animationRevision;
@@ -217,11 +219,12 @@ public:
     std::array<std::uint8_t, 512> chunk_{};
     AnimationDecoder validationDecoder_{candidateSource_, nullptr, 0, chunk_.data(), chunk_.size()};
     std::array<char, 4096> headerBytes_{};
+    std::array<char, 192> responseHeaders_{};
     std::array<char, 513> controlBody_{};
     std::unique_ptr<std::uint8_t[]> animationChunkBody_;
     HttpHeaders headers_;
     HttpResponse response_;
-    std::size_t headerSize_ = 0, received_ = 0;
+    std::size_t headerSize_ = 0, responseHeaderSize_ = 0, received_ = 0;
     std::uint32_t animationUploadId_ = 0, animationChunkOffset_ = 0, animationUploadIdCounter_ = 0;
     std::uint64_t lastActivity_ = 0;
     AnimationV2Request animationV2Request_ = AnimationV2Request::none;
@@ -233,11 +236,27 @@ public:
     bool binary_ = false;
     unsigned status = 0;
     char* bodyData() { return controlBody_.data(); }
-    void error(unsigned code, const char*, const char*) {
+    void error(unsigned code, const char* errorCode, const char* message) {
         response_ = {}; response_.statusCode = static_cast<std::uint16_t>(code); status = code;
-        finalizing_ = false; sending_ = true;
+        response_.contentType = "application/json";
+        const int written = std::snprintf(response_.body.data(), response_.body.size(),
+            "{\"code\":\"%s\",\"message\":\"%s\"}", errorCode, message);
+        assert(written >= 0 && static_cast<std::size_t>(written) < response_.body.size());
+        response_.bodySize = static_cast<std::size_t>(written);
+        finalizing_ = false; prepareResponse();
     }
-    void prepareResponse() { status = response_.statusCode; sending_ = true; }
+    void prepareResponse() {
+        const auto type = response_.contentType.empty() ? std::string_view("application/json") : response_.contentType;
+        responseHeaderSize_ = static_cast<std::size_t>(std::snprintf(responseHeaders_.data(), responseHeaders_.size(),
+            "HTTP/1.1 %u %s\r\nContent-Length: %u\r\nContent-Type: %.*s\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n",
+            response_.statusCode, response_.statusCode < 300 ? "OK" : "Error", unsigned(response_.bodySize),
+            int(type.size()), type.data()));
+        assert(responseHeaderSize_ < responseHeaders_.size());
+        status = response_.statusCode; sending_ = true;
+    }
+    std::string wireResponse() const {
+        return std::string(responseHeaders_.data(), responseHeaderSize_) + std::string(response_.body.data(), response_.bodySize);
+    }
     bool sending_ = false;
     void headersComplete(); void bodyComplete(); void finishAnimationChunkRequest(std::uint64_t now);
     void dispatchAnimationV2(); void advanceAnimationValidation(std::uint64_t now);
@@ -419,6 +438,7 @@ void explicitRemovalIsAuthenticatedAndIdempotentAndReportsAvailableStorage() {
     const auto revision=server.storage_.animationRevision;
     server.request("DELETE","/api/v2/animation",{},0,{}, {},"Bearer wrong");
     assert(server.status==401);
+    assert(server.response_.bodyView()=="{\"code\":\"unauthorized\",\"message\":\"A valid bearer token is required.\"}");
     assert(server.storage_.installed.size()==5&&server.storage_.animationRevision==revision);
 
     server.request("DELETE","/api/v2/animation");
@@ -428,12 +448,31 @@ void explicitRemovalIsAuthenticatedAndIdempotentAndReportsAvailableStorage() {
     const auto first=server.response_.bodyView();
     assert(first.find("\"removed\":true")!=first.npos);
     assert(first.find("\"freeStorageBytes\":4194304")!=first.npos);
+    const auto wire=server.wireResponse();
+    assert(wire.find("HTTP/1.1 200 OK\r\n") == 0);
+    assert(wire.find("Content-Length: "+std::to_string(first.size())+"\r\n") != wire.npos);
+    assert(wire.find("Connection: close\r\n") != wire.npos);
+    assert(wire.substr(wire.find("\r\n\r\n")+4)==first);
 
     server.request("DELETE","/api/v2/animation");
     assert(server.status==200);
     assert(server.storage_.installed.empty()&&server.storage_.candidate.empty());
     assert(server.storage_.animationRevision==revision+1);
     assert(server.response_.bodyView()==first);
+}
+void removalFailureReturnsAnEspErrorReceiptWithoutClaimingSuccess() {
+    DeviceHttpServer server;
+    server.storage_.installed={'N','B','I','F',2};
+    server.storage_.removalFails=true;
+    server.request("DELETE","/api/v2/animation");
+    assert(server.status==500);
+    assert(server.storage_.installed.size()==5);
+    const auto body=server.response_.bodyView();
+    assert(body=="{\"code\":\"internal_error\",\"message\":\"The installed animation could not be removed.\"}");
+    const auto wire=server.wireResponse();
+    assert(wire.find("HTTP/1.1 500 Error\r\n") == 0);
+    assert(wire.find("Content-Length: "+std::to_string(body.size())+"\r\n") != wire.npos);
+    assert(wire.substr(wire.find("\r\n\r\n")+4)==body);
 }
 void explicitRemovalCancelsAnIncompleteCandidateBeforeFreeingSpace() {
     DeviceHttpServer server;
@@ -453,6 +492,7 @@ int main(){neonbyte::validRouteUploadValidatesAndPromotesOnlyAtBoundary();
     neonbyte::checksumMismatchAndMalformedV2PreserveCurrentAnimation();
     neonbyte::cancelRouteDiscardsOnlyThePendingCandidate();
     neonbyte::explicitRemovalIsAuthenticatedAndIdempotentAndReportsAvailableStorage();
+    neonbyte::removalFailureReturnsAnEspErrorReceiptWithoutClaimingSuccess();
     neonbyte::explicitRemovalCancelsAnIncompleteCandidateBeforeFreeingSpace();
     std::puts("NBIF v2 HTTP route integration: authenticated idempotent removal, storage reporting, capabilities, chunk upload, SHA-256, validation, status, cancellation and safe promotion passed.");}
 '''

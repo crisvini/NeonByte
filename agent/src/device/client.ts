@@ -10,8 +10,28 @@ import type { DisplayMode } from "../web/scene.js";
 export const MEDIA_STORAGE_RESERVE_BYTES = 32 * 1024;
 const ANIMATION_CHUNK_BYTES = 1024;
 
-class DeviceHttpStatusError extends Error {
-  constructor(readonly status: number) { super("Device request rejected."); }
+export class DeviceHttpStatusError extends Error {
+  constructor(readonly status: number, readonly firmwareCode?: string, readonly firmwareMessage?: string) {
+    const detail = firmwareCode ? `, firmware code ${firmwareCode}` : "";
+    super(firmwareMessage
+      ? `The device rejected the request (HTTP ${status}${detail}): ${firmwareMessage}`
+      : `The device rejected the request (HTTP ${status}${detail}).`);
+    this.name = "DeviceHttpStatusError";
+  }
+}
+
+export class AnimationRemovalCommunicationError extends Error {
+  constructor() {
+    super("The ESP8266 connection ended before the authenticated animation-removal response arrived. The old animation may already be removed; retry with the prepared NBIF v2. Repeating DELETE is safe.");
+    this.name = "AnimationRemovalCommunicationError";
+  }
+}
+
+export class AnimationRemovalReceiptError extends Error {
+  constructor(status: number, reason: string) {
+    super(`The ESP8266 returned HTTP ${status}, but ${reason}. The old animation may already be removed; retry with the prepared NBIF v2. Repeating DELETE is safe.`);
+    this.name = "AnimationRemovalReceiptError";
+  }
 }
 
 export class AnimationStorageError extends Error {
@@ -133,6 +153,28 @@ function safeResponseJson(response: Response): Promise<unknown> {
   return response.json().catch(() => null);
 }
 
+const SAFE_FIRMWARE_ERROR_MESSAGES = new Set([
+  "A valid bearer token is required.",
+  "The application is paused; use authenticated maintenance.",
+  "The active animation transfer could not be cancelled.",
+  "The installed animation could not be removed.",
+  "Available animation storage is unavailable.",
+  "The animation upload request does not match the supported route.",
+]);
+
+async function safeFirmwareError(response: Response): Promise<{ code: string; message?: string } | null> {
+  let value: unknown;
+  try { value = await response.json(); }
+  catch { return null; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const receipt = value as Record<string, unknown>;
+  if (Object.keys(receipt).length !== 2 || typeof receipt["code"] !== "string" ||
+      !/^[a-z][a-z0-9_]{0,47}$/.test(receipt["code"])) return null;
+  const message = typeof receipt["message"] === "string" && SAFE_FIRMWARE_ERROR_MESSAGES.has(receipt["message"])
+    ? receipt["message"] : undefined;
+  return { code: receipt["code"], ...(message ? { message } : {}) };
+}
+
 function isPrivateDeviceAddress(hostname: string): boolean {
   if (hostname === "[::1]") return true;
   if (isIP(hostname) !== 4) return false;
@@ -175,14 +217,19 @@ export class DeviceClient {
       });
       const expected = acceptedStatuses ?? [method === "GET" ? 200 : 204];
       if (!expected.includes(response.status)) {
-        await response.body?.cancel();
         if (path === "/api/v1/animation" && response.status === 413) throw new AnimationStorageError();
+        if (preserveStatusError) {
+          const firmwareError = await safeFirmwareError(response);
+          throw new DeviceHttpStatusError(response.status, firmwareError?.code, firmwareError?.message);
+        }
+        await response.body?.cancel();
         throw new DeviceHttpStatusError(response.status);
       }
       return response;
     } catch (error) {
       if (signal?.aborted) throw new AnimationReplacementCancelledError();
       if (error instanceof AnimationStorageError || (preserveStatusError && error instanceof DeviceHttpStatusError)) throw error;
+      if (path === "/api/v2/animation" && method === "DELETE") throw new AnimationRemovalCommunicationError();
       // Never echo remote bodies, addresses, pairing tokens, or fetch exception details.
       throw new Error("Device communication failed; check pairing, compatibility, and connectivity.");
     }
@@ -287,8 +334,15 @@ export class DeviceClient {
 
     options.onStage?.("removing");
     const response = await this.request("/api/v2/animation", "DELETE", undefined, {}, this.timeoutMs, [200], true, options.signal);
-    const value = await safeResponseJson(response);
-    if (!validAnimationRemovalReceipt(value)) throw new Error("The device did not confirm animation removal or report available storage.");
+    let value: unknown;
+    let body: string;
+    try { body = await response.text(); }
+    catch { throw new AnimationRemovalReceiptError(response.status, "the connection closed before its JSON receipt was complete"); }
+    try { value = JSON.parse(body) as unknown; }
+    catch { throw new AnimationRemovalReceiptError(response.status, "its removal receipt was not valid JSON"); }
+    if (!validAnimationRemovalReceipt(value)) {
+      throw new AnimationRemovalReceiptError(response.status, "its JSON receipt did not confirm removal and report available storage");
+    }
     options.onRemoved?.(value);
     if (value.freeStorageBytes < asset.bytes.length + capabilities.reserveBytes) throw new AnimationStorageError();
     if (options.signal?.aborted) throw new AnimationReplacementCancelledError();
