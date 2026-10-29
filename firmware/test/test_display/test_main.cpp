@@ -214,6 +214,37 @@ void testV2PlayerReopensFromKeyframeAfterAStorageReadFailure() {
     TEST_ASSERT_EQUAL_HEX16(0xf800, panel.rows[240].firstPixel);
 }
 
+void testV2PlaybackPreservesFrameOrderAcrossLoopsWithSlowReadsAndServiceGaps() {
+    display_test::panelState = {};
+    PersistentStorage storage; installV2Animation(storage);
+    std::uint64_t simulatedTime = 0;
+    storage.simulatedReadClock = &simulatedTime;
+    storage.simulatedReadDelayMs = 1;
+    TestClock clock; SceneManager scenes(clock, storage);
+    TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
+    DeviceDisplay display(storage); display.begin();
+    auto& rows = display_test::panelState.rows;
+    for (unsigned tick = 0; tick < 10000 && rows.size() < 5 * 241; ++tick) {
+        clock.now = simulatedTime;
+        display.tick(scenes, simulatedTime);
+        simulatedTime += tick % 37 == 0 ? 12 : 1;
+    }
+    TEST_ASSERT_EQUAL_UINT32(5 * 241, rows.size());
+    for (unsigned loop = 0; loop < 5; ++loop) {
+        for (unsigned y = 0; y < 240; ++y) {
+            const auto& row = rows[loop * 241 + y];
+            TEST_ASSERT_EQUAL_INT(y, row.y);
+            TEST_ASSERT_EQUAL_UINT32(240, row.pixelCount);
+            TEST_ASSERT_EQUAL_HEX16(0xf800, row.firstPixel);
+        }
+        const auto& delta = rows[loop * 241 + 240];
+        TEST_ASSERT_EQUAL_INT(10, delta.y);
+        TEST_ASSERT_EQUAL_INT(20, delta.x);
+        TEST_ASSERT_EQUAL_UINT32(2, delta.pixelCount);
+        TEST_ASSERT_EQUAL_HEX16(0x07e0, delta.firstPixel);
+    }
+}
+
 void testSlowFrameRenderingDoesNotAddASecondFullDelay() {
     display_test::panelState.rows.clear();
     PersistentStorage storage;
@@ -534,6 +565,7 @@ int main() {
     RUN_TEST(testV2PlayerDrawsChangedSpansWithoutClearingAndRestartsAtKeyframe);
     RUN_TEST(testV2CandidatePromotionWaitsForFrameBoundaryAndRestartsAtKeyframe);
     RUN_TEST(testV2PlayerReopensFromKeyframeAfterAStorageReadFailure);
+    RUN_TEST(testV2PlaybackPreservesFrameOrderAcrossLoopsWithSlowReadsAndServiceGaps);
     RUN_TEST(testSlowFrameRenderingDoesNotAddASecondFullDelay);
     RUN_TEST(testDisplayInitializationUsesBoundedSpiAndRetainsProvisionalProfile);
     RUN_TEST(testDisplayHalfTurnUsesRgbWithoutOverridingRotation);
