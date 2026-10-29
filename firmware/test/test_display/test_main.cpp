@@ -385,6 +385,27 @@ void testSpotifyMarqueeWaitsForCoverAndMovesFieldsIndependently() {
         TEST_ASSERT_EQUAL_HEX16(coverPixels[(y - 4) * 176 + x - 32], panel.pixels[y * 240 + x]);
 }
 
+void testLongArtistMovesWhenEveryDisplayTickIsOverdue() {
+    display_test::panelState = {};
+    PersistentStorage storage; TestClock clock; SceneManager scenes(clock, storage);
+    auto value = track();
+    setText(value.title, std::string(30, 'T'));
+    setText(value.artist, std::string(30, 'A'));
+    scenes.heartbeat(); scenes.updateNowPlaying(value);
+    DeviceDisplay display(storage); display.begin();
+    for (unsigned row = 0; row < 176; ++row) display.tick(scenes, row);
+    auto& panel = display_test::panelState;
+    panel.rectangles.clear();
+    for (unsigned tick = 0; tick < 8; ++tick) display.tick(scenes, 1675 + tick * 200);
+    unsigned titleMoves = 0, artistMoves = 0;
+    for (const auto& rect : panel.rectangles) {
+        if (rect.y == 190) ++titleMoves;
+        if (rect.y == 211) ++artistMoves;
+    }
+    TEST_ASSERT_GREATER_THAN_UINT32(0, titleMoves);
+    TEST_ASSERT_GREATER_THAN_UINT32(0, artistMoves);
+}
+
 void testMarqueePausesAtBothEndsAndRestartsOnMetadataAndCoverChanges() {
     display_test::panelState = {};
     PersistentStorage storage; TestClock clock; SceneManager scenes(clock, storage);
@@ -707,6 +728,7 @@ int main() {
     RUN_TEST(testSpotifyStreamsLargerCoverAndDoesNotRedrawOnProgress);
     RUN_TEST(testSpotifyMetadataChangesInvalidateOnlyTheirOwnField);
     RUN_TEST(testSpotifyMarqueeWaitsForCoverAndMovesFieldsIndependently);
+    RUN_TEST(testLongArtistMovesWhenEveryDisplayTickIsOverdue);
     RUN_TEST(testMarqueePausesAtBothEndsAndRestartsOnMetadataAndCoverChanges);
     RUN_TEST(testMarqueeBoundaryAndUnicodeReplacement);
     RUN_TEST(testMarqueeStateFitsMetadataOnlyBudget);

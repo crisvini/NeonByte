@@ -167,6 +167,9 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
                 if (coverRow_ == SPOTIFY_COVER_SIZE) {
                     titleText_.lastStepMs = now; artistText_.lastStepMs = now;
                 }
+            } else if (artistText_.lastStepMs < titleText_.lastStepMs) {
+                if (!updateMarquee(artistText_,encodedWorkspace_.data()+MAX_TEXT_CODE_POINTS,SPOTIFY_ARTIST_Y,0x9cf3,now))
+                    updateMarquee(titleText_,encodedWorkspace_.data(),SPOTIFY_TITLE_Y,ST77XX_WHITE,now);
             } else if (!updateMarquee(titleText_,encodedWorkspace_.data(),SPOTIFY_TITLE_Y,ST77XX_WHITE,now)) {
                 updateMarquee(artistText_,encodedWorkspace_.data()+MAX_TEXT_CODE_POINTS,SPOTIFY_ARTIST_Y,0x9cf3,now);
             }
