@@ -8,14 +8,13 @@ import { runRecoveryEnrollment } from "./device/recovery-enrollment.js";
 import { createDeviceConfigurationPrompts, createRecoveryEnrollmentPrompts } from "./device/recovery-enrollment-cli.js";
 import { ReauthorizationRequiredError, SpotifyOAuthError } from "./spotify/errors.js";
 import { startOAuthCallbackServer } from "./spotify/oauth-callback.js";
-import { MockSpotifyProvider } from "./spotify/mock.js";
 import { SpotifyOAuthClient } from "./spotify/oauth.js";
 import { PlaybackPoller } from "./spotify/poller.js";
 import { SpotifyWebApiClient } from "./spotify/spotify-client.js";
 import { SystemRefreshTokenStore } from "./spotify/token-store.js";
-import type { CurrentPlaybackProvider, SafeLogger, SpotifyCurrentPlayback } from "./spotify/types.js";
-import { startLocalWebApp, type MockPlaybackAction } from "./web/server.js";
-import type { DisplayMode } from "./web/scene.js";
+import type { CurrentPlaybackProvider, SafeLogger } from "./spotify/types.js";
+import { startLocalWebApp } from "./web/server.js";
+import { DisplayModeController, FileDisplayModeStore } from "./device/mode-controller.js";
 
 const logger: SafeLogger = {
   info: (message) => console.info(`[NeonByte] ${message}`),
@@ -107,28 +106,6 @@ async function configureDeviceCredentials(): Promise<void> {
   }
 }
 
-const demoTracks = [
-  { id: "neon-01", title: "Midnight Signals", artist: "Demo Artist", durationMs: 196_000, progressMs: 38_000 },
-  { id: "neon-02", title: "Glass Skyline", artist: "Neon Arcade", durationMs: 224_000, progressMs: 74_000 },
-  { id: "neon-03", title: "Soft Static", artist: "Satellite Bloom", durationMs: 181_000, progressMs: 12_000 },
-];
-
-function demoPlayback(index: number, isPlaying = true): SpotifyCurrentPlayback {
-  const track = demoTracks[index % demoTracks.length]!;
-  return {
-    is_playing: isPlaying,
-    progress_ms: track.progressMs,
-    item: {
-      type: "track",
-      id: track.id,
-      name: track.title,
-      duration_ms: track.durationMs,
-      artists: [{ name: track.artist }],
-      album: { images: [{ url: "/demo-cover.svg", width: 240, height: 240 }] },
-    },
-  };
-}
-
 function configuredWebPort(): number {
   const redirectPort = Number(new URL(redirectUri()).port);
   const configuredPort = Number(process.env["NEONBYTE_PORT"] ?? redirectPort);
@@ -139,14 +116,6 @@ function configuredWebPort(): number {
     throw new Error("NEONBYTE_PORT must match the port in SPOTIFY_REDIRECT_URI for the local OAuth callback.");
   }
   return configuredPort;
-}
-
-function configuredDisplayMode(): DisplayMode {
-  const mode = process.env["NEONBYTE_MODE"] ?? "auto";
-  if (mode !== "auto" && mode !== "spotify" && mode !== "gif") {
-    throw new Error("NEONBYTE_MODE must be auto, spotify, or gif.");
-  }
-  return mode;
 }
 
 async function runAgent(): Promise<void> {
@@ -168,14 +137,8 @@ async function runAgent(): Promise<void> {
   const spotify: CurrentPlaybackProvider = oauth
     ? new SpotifyWebApiClient({ tokenProvider: oauth, requestTimeoutMs })
     : { getCurrentPlayback: async () => { throw new ReauthorizationRequiredError(); } };
-  const mock = new MockSpotifyProvider(demoPlayback(0));
-  let demoEnabled = process.env["NEONBYTE_MOCK"] === "true" || (!oauth && process.env["NEONBYTE_MOCK"] !== "false");
-  let demoTrackIndex = 0;
-  const provider: CurrentPlaybackProvider = {
-    getCurrentPlayback: () => demoEnabled ? mock.getCurrentPlayback() : spotify.getCurrentPlayback(),
-  };
   const poller = new PlaybackPoller({
-    provider,
+    provider: spotify,
     pollIntervalMs,
     maxReconnectDelayMs: reconnectMaxMs,
     logger,
@@ -193,7 +156,11 @@ async function runAgent(): Promise<void> {
     throw new Error("NEONBYTE_AGENT_TIMEOUT_MS must be at least 1000.");
   }
   const recoveryStore = new SystemRecoveryCredentialStore();
-  const device = new DeviceIntegration({ store: new SystemDeviceConfigStore(), recoveryStore, poller, intervalMs: 15_000 });
+  const modeController = new DisplayModeController(new FileDisplayModeStore(), "auto");
+  await modeController.initialize();
+  if (modeController.view.syncState === "failed") logger.warn(modeController.view.message);
+  const device = new DeviceIntegration({ store: new SystemDeviceConfigStore(), recoveryStore, poller,
+    modeController, intervalMs: 15_000 });
   const firmwareUpdate = new FirmwareUpdateService({ recoveryStore, journal: new SystemFirmwareUpdateJournal(), device,
     createClient: (address, token) => new MaintenanceClient({ baseUrl: address, token }) });
   try { await firmwareUpdate.restore(); }
@@ -201,28 +168,16 @@ async function runAgent(): Promise<void> {
   const webApp = await startLocalWebApp({
     poller,
     device,
+    modeController,
     firmwareUpdate,
     oauth,
     spotifyConfigured: Boolean(oauth),
-    getDemoEnabled: () => demoEnabled,
-    setDemoEnabled: async (enabled) => { demoEnabled = enabled; },
-    onMockAction: async (action: MockPlaybackAction) => {
-      if (action === "offline") {
-        mock.setError(new Error("simulated offline"));
-      } else if (action === "next") {
-        demoTrackIndex = (demoTrackIndex + 1) % demoTracks.length;
-        mock.setPlayback(demoPlayback(demoTrackIndex));
-      } else {
-        mock.setPlayback(demoPlayback(demoTrackIndex, action === "play"));
-      }
-    },
     port: configuredWebPort(),
-    initialMode: configuredDisplayMode(),
     agentTimeoutMs,
   });
 
   logger.info(`Local interface available at ${webApp.url}.`);
-  logger.info(`Agent started. Polling interval: ${pollIntervalMs} ms.${demoEnabled ? " Demo data active." : ""}`);
+  logger.info(`Agent started. Polling interval: ${pollIntervalMs} ms.`);
   poller.start();
   try { await device.start(); }
   catch { logger.warn("Device configuration is unavailable; device connectivity is disabled."); }

@@ -14,7 +14,7 @@ The [final OTA safety audit](docs/final-ota-safety-audit.md) records offline sta
 
 The subsequent [final offline preparation](docs/final-offline-preparation.md) implements a separate authenticated return to the pinned vendor V1.0.6 while NeonByte is running. It includes failure tests, remaining risks and a [conditional physical checklist](docs/pre-installation-checklist.md). It does not provide independent boot recovery or change NO-GO.
 
-**Phases 1, 2, and 3 are complete.** The Node.js/TypeScript Spotify agent uses OAuth PKCE, polling, and state compatible with the v1 contract. The local interface includes a responsive 240 × 240 simulator, Spotify and looping GIF previews, display modes, uploads, and demo data. Real-account OAuth validation still requires configured Spotify credentials. Phase 4 includes the native C++ core and previously compiled ESP8266 runtime adapters under provisional assumptions. The [PC-only validation](docs/offline-validation.md) connects an explicitly constructed agent client to that core through loopback HTTP v1; production LAN synchronization remains Phase 5 work. No device has been contacted, flashed, or updated. These software checks do not establish hardware compatibility.
+**Phases 1, 2, and 3 are complete.** The Node.js/TypeScript Spotify agent uses OAuth PKCE, polling, and state compatible with the v1 contract. The local interface includes a responsive 240 × 240 simulator, a Spotify preview using real playback state when available, prepared GIF previews, display modes, uploads, and device controls. It does not display demonstration playback data. Real-account OAuth validation still requires configured Spotify credentials. Phase 4 includes the native C++ core and previously compiled ESP8266 runtime adapters under provisional assumptions. The [PC-only validation](docs/offline-validation.md) connects an explicitly constructed agent client to that core through loopback HTTP v1; production LAN synchronization remains Phase 5 work. No device has been contacted, flashed, or updated. These software checks do not establish hardware compatibility.
 
 The 240 × 240 resolution is a planning expectation, not a measurement of this unit. See [hardware investigation](docs/hardware.md) before any work that depends on the board.
 
@@ -28,14 +28,15 @@ On Windows 11, the maintainer reported successful automatic startup at login, hi
 | **spotify** | Spotify Now Playing | Spotify waiting screen |
 | **gif** | Fullscreen GIF | Fullscreen GIF |
 
-The simulator applies the modes to its local preview; the selected mode is stored in the browser. The agent reads and normalizes playback. Firmware persistence and runtime adapters are implemented and compile-validated; physical behavior and production LAN integration remain pending.
+The simulator applies the manually selected mode to its local preview. The agent persists that selection locally and synchronizes it only after an explicit selection; Spotify polling and GIF preparation do not change the mode. The agent reads and normalizes real playback state. Firmware persistence and runtime adapters are implemented and compile-validated; physical behavior and production LAN integration remain pending.
 
 ## Repository Structure
 
 ~~~text
 .
 ├── agent/                 # Spotify agent, dashboard, and Node.js/TypeScript simulator
-├── assets/samples/        # Reserved for future samples; no assets included
+├── assets/branding/       # Preserved original NeonByte logo used by the dashboard
+├── assets/samples/        # Reserved for future samples
 ├── contracts/v1/          # Contract schemas and examples
 ├── docs/                  # Hardware, protocol, development, and pending items
 ├── firmware/              # Native core and provisional ESP8266 integration
@@ -66,7 +67,7 @@ npm --prefix agent run build
 npm --prefix agent run start
 ~~~
 
-Open [http://localhost:8787](http://localhost:8787), connect Spotify with the button, and choose a mode. Without a valid Client ID, the agent starts with mock data; the controls can simulate play, pause, next track, and unavailability. The `auth` command remains available if you prefer to authorize without opening the interface. The refresh token is stored in the system credential manager; tokens are not written to `.env` or logs. `SPOTIFY_POLL_INTERVAL_MS` configures the polling interval (15 seconds by default). See [development](docs/development.md) and [installation](docs/installation.md) for details.
+Open [http://localhost:8787](http://localhost:8787), connect Spotify with the button, and choose a mode. Without a valid Client ID, the interface reports that Spotify is not configured and does not invent playback data; local mode selection, GIF preparation, and device settings remain available. The `auth` command remains available if you prefer to authorize without opening the interface. The refresh token is stored in the system credential manager; tokens are not written to `.env` or logs. `SPOTIFY_POLL_INTERVAL_MS` configures the polling interval (15 seconds by default). See [development](docs/development.md) and [installation](docs/installation.md) for details.
 
 Run `npm run test:offline` for PC-only agent-to-native-core validation. It builds a host test executable and requires a C++17 compiler and OpenSSL development headers. It uses loopback networking and mock Spotify data; it does not build firmware or contact a device. See the [results and remaining gaps](docs/offline-validation.md).
 

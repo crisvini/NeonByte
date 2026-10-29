@@ -8,6 +8,7 @@ import { NBIF_V2_MAX_FILE_BYTES } from "../media/animation-format.js";
 import type { SpotifyOAuthClient } from "../spotify/oauth.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 import type { PlaybackSnapshot } from "../spotify/types.js";
+import type { DisplayModeController } from "../device/mode-controller.js";
 import { resolveActiveScene, type DisplayMode } from "./scene.js";
 import type { FirmwareUpdateService, FirmwareUpdateState, FirmwareUpdateView } from "../device/firmware-update.js";
 import { MaintenanceRequestError, MaintenanceTransportError } from "../device/maintenance-client.js";
@@ -23,23 +24,20 @@ const PUBLIC_FILES: Record<string, { file: string; type: string }> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
   "/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
-  "/demo-cover.svg": { file: "demo-cover.svg", type: "image/svg+xml; charset=utf-8" },
+  "/neonbyte-logo.webp": { file: "neonbyte-logo.webp", type: "image/webp" },
+  "/favicon-32.png": { file: "favicon-32.png", type: "image/png" },
+  "/favicon-48.png": { file: "favicon-48.png", type: "image/png" },
 };
-
-export type MockPlaybackAction = "play" | "pause" | "next" | "offline";
 
 export interface LocalWebAppOptions {
   poller: PlaybackPoller;
+  modeController: DisplayModeController;
   device?: DeviceIntegration;
   firmwareUpdate?: FirmwareUpdateControl;
   oauth: Pick<SpotifyOAuthClient, "createAuthorizationRequest" | "exchangeAuthorizationCode"> | null;
   spotifyConfigured: boolean;
-  getDemoEnabled(): boolean;
-  setDemoEnabled(enabled: boolean): Promise<void>;
-  onMockAction(action: MockPlaybackAction): Promise<void>;
   fetchCover?: typeof fetch;
   port?: number;
-  initialMode?: DisplayMode;
   agentTimeoutMs?: number;
 }
 
@@ -86,10 +84,6 @@ function trustedOrigin(origin: string | undefined, port: number): boolean {
 
 function isDisplayMode(value: unknown): value is DisplayMode {
   return value === "auto" || value === "spotify" || value === "gif";
-}
-
-function isMockAction(value: unknown): value is MockPlaybackAction {
-  return value === "play" || value === "pause" || value === "next" || value === "offline";
 }
 
 function otaLocksMutations(view: FirmwareUpdateView | null | undefined): boolean {
@@ -202,8 +196,17 @@ async function serveStatic(pathname: string, response: ServerResponse): Promise<
   }
 }
 
-function snapshotIsConnected(snapshot: PlaybackSnapshot, spotifyConfigured: boolean, demoEnabled: boolean): boolean {
-  return spotifyConfigured && !demoEnabled && snapshot.sampledAtUnixMs > 0 && snapshot.unavailableReason !== "authentication_required";
+function spotifyConnectionState(snapshot: PlaybackSnapshot, spotifyConfigured: boolean, nowUnixMs: number, timeoutMs: number) {
+  if (!spotifyConfigured) return "unconfigured" as const;
+  if (snapshot.sampledAtUnixMs <= 0) return "checking" as const;
+  if (snapshot.status === "unavailable") {
+    if (snapshot.unavailableReason === "authentication_required") return "authentication_required" as const;
+    if (snapshot.unavailableReason === "rate_limited") return "rate_limited" as const;
+    if (snapshot.unavailableReason === "offline") return "offline" as const;
+    return "api_error" as const;
+  }
+  if (nowUnixMs < snapshot.sampledAtUnixMs || nowUnixMs - snapshot.sampledAtUnixMs > timeoutMs) return "stale" as const;
+  return "connected" as const;
 }
 
 export async function startLocalWebApp(options: LocalWebAppOptions): Promise<LocalWebApp> {
@@ -212,7 +215,6 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
     throw new RangeError("The local interface port must be between 0 and 65535.");
   }
 
-  let mode: DisplayMode = options.initialMode ?? "auto";
   let animation: AnimationAsset | null = null;
   let animationOriginalSizeBytes = 0;
   let cover: ReturnType<typeof createCoverAsset> | null = null;
@@ -252,7 +254,6 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
         pendingOAuth = null;
         try {
           await options.oauth.exchangeAuthorizationCode({ code: callback.code, codeVerifier: verifier });
-          await options.setDemoEnabled(false);
           await options.poller.pollOnce();
           response.writeHead(303, { ...securityHeaders(), Location: "/?connected=1" });
           response.end();
@@ -270,18 +271,22 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
 
       if (request.method === "GET" && url.pathname === "/api/status") {
         const snapshot = options.poller.currentSnapshot;
+        const modeControl = options.modeController.view;
+        const spotifyState = spotifyConnectionState(snapshot, options.spotifyConfigured, Date.now(), options.agentTimeoutMs ?? 45_000);
         sendJson(response, 200, {
-          mode,
+          mode: modeControl.mode,
+          modeControl,
           snapshot,
           activeScene: resolveActiveScene({
-            mode,
+            mode: modeControl.mode,
             snapshot,
             nowUnixMs: Date.now(),
             ...(options.agentTimeoutMs !== undefined ? { timeoutMs: options.agentTimeoutMs } : {}),
           }),
-          demoEnabled: options.getDemoEnabled(),
           spotifyConfigured: options.spotifyConfigured,
-          spotifyConnected: snapshotIsConnected(snapshot, options.spotifyConfigured, options.getDemoEnabled()),
+          spotifyConnected: spotifyState === "connected",
+          spotifyState,
+          spotifyAuthorizing: Boolean(pendingOAuth),
           animation: animation ? {
             available: true,
             width: 240,
@@ -297,6 +302,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           cover: cover ? { available: true, sizeBytes: cover.bytes.length, sha256: cover.sha256 } : { available: false },
           protocolVersion: "v1",
           device: options.device?.status ?? { address: "", enabled: false, paired: false, connection: "disabled",
+            mode: null, activeScene: null, lastObservedAtUnixMs: null,
             animation: { state: "none", attempts: 0, previousAnimation: "unchanged", freeStorageBytes: null, message: "" } },
           deviceConnected: options.device?.status.connection === "connected",
           firmwareUpdate: options.firmwareUpdate?.view ?? null,
@@ -504,49 +510,13 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
             sendError(response, 422, "Select one of the Auto, Spotify, or GIF modes.");
             return;
           }
-          mode = (payload as { mode: DisplayMode }).mode;
-          options.device?.setMode(mode);
+          await options.modeController.selectManual((payload as { mode: DisplayMode }).mode,
+            options.device?.modeTargetFingerprint ?? null);
+          options.device?.requestModeSynchronization();
           response.writeHead(204, securityHeaders());
           response.end();
         } catch (error) {
           sendError(response, error instanceof PayloadTooLargeError ? 413 : 400, error instanceof Error ? error.message : "Unable to change the mode.");
-        }
-        return;
-      }
-
-      if (url.pathname === "/api/demo") {
-        try {
-          const payload = await readJson(request);
-          if (typeof payload !== "object" || payload === null || typeof (payload as { enabled?: unknown }).enabled !== "boolean") {
-            sendError(response, 422, "Specify whether demo mode should be enabled or disabled.");
-            return;
-          }
-          await options.setDemoEnabled((payload as { enabled: boolean }).enabled);
-          await options.poller.pollOnce();
-          sendJson(response, 200, { demoEnabled: options.getDemoEnabled() });
-        } catch {
-          sendError(response, 400, "Unable to toggle demo data.");
-        }
-        return;
-      }
-
-      if (url.pathname === "/api/mock/playback") {
-        if (!options.getDemoEnabled()) {
-          sendError(response, 409, "Enable demo data before using mock controls.");
-          return;
-        }
-        try {
-          const payload = await readJson(request);
-          if (typeof payload !== "object" || payload === null || !isMockAction((payload as { action?: unknown }).action)) {
-            sendError(response, 422, "Invalid mock action. Use play, pause, next, or offline.");
-            return;
-          }
-          const action = (payload as { action: MockPlaybackAction }).action;
-          await options.onMockAction(action);
-          await options.poller.pollOnce();
-          sendJson(response, 200, { snapshot: options.poller.currentSnapshot });
-        } catch {
-          sendError(response, 400, "Unable to change demo playback.");
         }
         return;
       }

@@ -2,7 +2,7 @@
 
 ## Repository Status
 
-**Release readiness: NOT RELEASE READY.** Part 6 is **NO-GO** and Part 7 physical acceptance is blocked by missing unit-specific evidence, complete backup/restore, and independent Wi-Fi-only failed-boot recovery. Phases 1 through 3 are complete: documentation, the v1 contract, the Spotify agent, and the local interface with a 240 × 240 simulator. The interface uses the agent's state and works with either a Spotify account or demo data, without a connected device. `firmware/` contains a native core and provisional ESP8266 build profiles. The module is visually confirmed as ESP-12F / ESP8266; actual display settings, performance, flash capacity, and recovery remain PENDING. See [firmware development](firmware-development.md) and the [release-readiness report](release-readiness.md).
+**Release readiness: NOT RELEASE READY.** Part 6 is **NO-GO** and Part 7 physical acceptance is blocked by missing unit-specific evidence, complete backup/restore, and independent Wi-Fi-only failed-boot recovery. Phases 1 through 3 are complete: documentation, the v1 contract, the Spotify agent, and the local interface with a 240 × 240 simulator. The interface uses the agent's real playback state when Spotify is configured; it displays an explicit unconfigured or unavailable state without a connected account. The preview can run without a connected device. `firmware/` contains a native core and provisional ESP8266 build profiles. The module is visually confirmed as ESP-12F / ESP8266; actual display settings, performance, flash capacity, and recovery remain PENDING. See [firmware development](firmware-development.md) and the [release-readiness report](release-readiness.md).
 
 ## Current Requirements and Commands
 
@@ -24,7 +24,7 @@ Agent tests cover PKCE, the loopback callback, refresh, normalization, 204/401/4
 
 ## Local Interface and Simulator
 
-With `.env` configured (or without a valid Spotify Client ID to start the demo), run `npm --prefix agent run build` and `npm --prefix agent run start`. Open [http://localhost:8787](http://localhost:8787). The server binds only to `127.0.0.1`; `NEONBYTE_PORT` must match the port in `SPOTIFY_REDIRECT_URI` so the OAuth callback returns to the same server. The dashboard can connect Spotify, select `auto`, `spotify`, or `gif`, simulate play/pause/track changes/offline state, and upload a GIF.
+To start the agent, configure `.env` when Spotify access is needed, then run `npm --prefix agent run build` and `npm --prefix agent run start`. Open [http://localhost:8787](http://localhost:8787). The server binds only to `127.0.0.1`; `NEONBYTE_PORT` must match the port in `SPOTIFY_REDIRECT_URI` so the OAuth callback returns to the same server. The dashboard can connect Spotify, manually select `auto`, `spotify`, or `gif`, prepare and preview a GIF, configure the device, and access its maintenance controls. Without a valid Client ID it shows Spotify as unconfigured and does not fabricate playback data. Mock providers remain in automated tests.
 
 The simulator keeps its logical composition at 240 × 240 and scales the canvas responsively with CSS. `auto` selects Spotify only when the agent's recent state confirms playback. Manual Spotify mode shows a waiting state without a track; GIF mode and the `auto` fallback fill the entire frame with the animation. The clock status always reads “simulation without a device”; Phase 3 does not connect to the physical unit.
 
@@ -64,7 +64,7 @@ its separate explicit action. This API does not provide automatic disk storage.
 - The agent calls only `GET /me/player/currently-playing` with the `user-read-currently-playing` scope.
 - `PlaybackPoller.currentSnapshot` and `subscribe()` form the in-process local interface for future consumers; it does not open a network port or transport tokens.
 - The Spotify cover URL remains internal agent metadata. The dashboard fetches the image only from the permitted media host and converts it for the preview; sending it to the device is for a later phase.
-- `gifuct-js` 2.1.2 is MIT-licensed; the original demo vector asset is covered by this repository's MIT license. The package's license files remain in `agent/node_modules` after installation.
+- `gifuct-js` 2.1.2 is MIT-licensed. Its license files remain in `agent/node_modules` after installation.
 - Firmware language and build configuration depend on hardware identification.
 
 ## Direct Dependency and License Notes

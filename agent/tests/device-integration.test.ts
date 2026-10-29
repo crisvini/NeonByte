@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DeviceIntegration, type DeviceConfig, type DeviceConfigStore } from "../src/device/integration.js";
+import { createTestModeController } from "./helpers/mode-state.js";
 import { PlaybackPoller } from "../src/spotify/poller.js";
 import { startLocalWebApp } from "../src/web/server.js";
 import { convertGifToAnimationV2 } from "../src/media/animation.js";
@@ -19,7 +20,7 @@ test("GIF preparation never uploads automatically and an explicit replacement re
   let uploadOffset = 0;
   const capabilities = { formats: ["nbif-v1", "nbif-v2"], width: 240, height: 240, maxFrames: 20, maxDurationMs: 30000,
     maxEncodedBytes: 2359296, maxChunkBytes: 1024, reserveBytes: 32768, get freeStorageBytes() { return freeStorageBytes; } };
-  const device = new DeviceIntegration({ store: new MemoryStore(), poller: poller(), intervalMs: 10,
+  const device = new DeviceIntegration({ modeController: await createTestModeController(), store: new MemoryStore(), poller: poller(), intervalMs: 10,
     fetchDevice: async (input, init) => {
       const path = new URL(String(input)).pathname;
       const method = init?.method ?? "GET";
@@ -91,7 +92,7 @@ test("the prepared NBIF v2 remains available after a lost DELETE receipt and ret
   let installed = true;
   const capabilities = { formats: ["nbif-v1", "nbif-v2"], width: 240, height: 240, maxFrames: 20, maxDurationMs: 30000,
     maxEncodedBytes: 2359296, maxChunkBytes: 1024, reserveBytes: 32768, get freeStorageBytes() { return freeStorageBytes; } };
-  const device = new DeviceIntegration({ store: new MemoryStore(), poller: poller(), intervalMs: 1000,
+  const device = new DeviceIntegration({ modeController: await createTestModeController(), store: new MemoryStore(), poller: poller(), intervalMs: 1000,
     fetchDevice: async (input, init) => {
       const path = new URL(String(input)).pathname;
       const method = init?.method ?? "GET";
@@ -148,7 +149,7 @@ test("configuration requires explicit enable and safely restores it after restar
   const store = new MemoryStore();
   let calls = 0;
   const fetchDevice: typeof fetch = async () => { calls++; return new Response("", { status: 503 }); };
-  const device = new DeviceIntegration({ store, poller: poller(), intervalMs: 10, fetchDevice });
+  const device = new DeviceIntegration({ modeController: await createTestModeController(), store, poller: poller(), intervalMs: 10, fetchDevice });
   await device.start();
   await delay(20);
   assert.equal(calls, 0);
@@ -161,14 +162,14 @@ test("configuration requires explicit enable and safely restores it after restar
   const before = calls;
   await delay(20);
   assert.equal(calls, before);
-  const restarted = new DeviceIntegration({ store, poller: poller(), intervalMs: 10, fetchDevice });
+  const restarted = new DeviceIntegration({ modeController: await createTestModeController(), store, poller: poller(), intervalMs: 10, fetchDevice });
   await restarted.start();
   await delay(20);
   assert.ok(calls > before);
   await restarted.configure({ address: "http://127.0.0.1:1234", enabled: false });
   assert.equal(restarted.status.connection, "disabled");
   await restarted.stop();
-  const disabled = new DeviceIntegration({ store, poller: poller(), intervalMs: 10, fetchDevice });
+  const disabled = new DeviceIntegration({ modeController: await createTestModeController(), store, poller: poller(), intervalMs: 10, fetchDevice });
   await disabled.start();
   const afterDisable = calls;
   await delay(20);
@@ -176,9 +177,80 @@ test("configuration requires explicit enable and safely restores it after restar
   await disabled.stop();
 });
 
+test("Spotify refreshes, GIF preparation, and reconnects never write the device mode", async () => {
+  const modeController = await createTestModeController();
+  let deviceMode = "auto";
+  let offline = false;
+  let spotifyUnavailable = false;
+  let playback: { is_playing: boolean; progress_ms: number; item: { type: string; id: string; name: string; duration_ms: number; artists: { name: string }[]; album: { images: [] } } } | null = null;
+  const modeWrites: string[] = [];
+  const playbackPoller = new PlaybackPoller({ provider: { getCurrentPlayback: async () => {
+    if (spotifyUnavailable) throw new Error("test fixture network outage");
+    return playback;
+  } }, pollIntervalMs: 15_000 });
+  await playbackPoller.pollOnce();
+  const device = new DeviceIntegration({ modeController, store: new MemoryStore(), poller: playbackPoller, intervalMs: 10,
+    fetchDevice: async (input, init) => {
+      if (offline) return new Response(null, { status: 503 });
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/v1/status") return new Response(JSON.stringify({ protocolVersion: "v1", firmwareVersion: "test",
+        ip: "127.0.0.1", freeStorageBytes: 65536, mode: deviceMode, activeScene: deviceMode === "spotify" ? "spotify" : "gif" }));
+      if (path === "/api/v1/mode" && init?.method === "PUT") {
+        deviceMode = JSON.parse(String(init.body)).mode as string;
+        modeWrites.push(deviceMode);
+      }
+      return new Response(null, { status: 204 });
+    } });
+
+  const waitFor = async (predicate: () => boolean) => {
+    const deadline = Date.now() + 2000;
+    while (!predicate()) {
+      if (Date.now() >= deadline) throw new Error("Device mode synchronization did not settle.");
+      await delay(10);
+    }
+  };
+
+  await device.configure({ address: "http://127.0.0.1:1", token: "test-pairing", enabled: true });
+  try {
+    await waitFor(() => device.status.connection === "connected");
+    assert.deepEqual(modeWrites, [], "pairing and initial status reads do not apply a locally restored selection");
+
+    playback = { is_playing: true, progress_ms: 1000, item: { type: "track", id: "real-state", name: "Current Track",
+      duration_ms: 180000, artists: [{ name: "Current Artist" }], album: { images: [] } } };
+    await playbackPoller.pollOnce();
+    const asset = convertGifToAnimationV2(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64"));
+    device.setAnimation(asset);
+    await delay(35);
+    assert.deepEqual(modeWrites, [], "Spotify metadata refresh and GIF preparation do not write the mode endpoint");
+    assert.equal(modeController.selectedMode, "auto");
+
+    await modeController.selectManual("gif", device.modeTargetFingerprint);
+    device.requestModeSynchronization();
+    await waitFor(() => modeController.view.syncState === "confirmed");
+    assert.deepEqual(modeWrites, ["gif"], "only the explicit selection sends a mode command");
+
+    spotifyUnavailable = true;
+    await playbackPoller.pollOnce();
+    assert.equal(modeController.selectedMode, "gif");
+    assert.deepEqual(modeWrites, ["gif"], "Spotify failure does not change the selected or device mode");
+    spotifyUnavailable = false;
+    await playbackPoller.pollOnce();
+    await delay(25);
+    assert.deepEqual(modeWrites, ["gif"], "Spotify recovery does not send another mode command");
+
+    offline = true;
+    await waitFor(() => device.status.connection === "disconnected");
+    offline = false;
+    await waitFor(() => device.status.connection === "connected");
+    await delay(35);
+    assert.deepEqual(modeWrites, ["gif"], "reconnection observes the mode without reapplying it");
+    assert.equal(modeController.selectedMode, "gif");
+  } finally { await device.stop(); }
+});
+
 test("address changes require a new token and storage failures cannot leak secrets", async () => {
   const store = new MemoryStore();
-  const device = new DeviceIntegration({ store, poller: poller(), intervalMs: 10 });
+  const device = new DeviceIntegration({ modeController: await createTestModeController(), store, poller: poller(), intervalMs: 10 });
   await device.start();
   await device.configure({ address: "http://127.0.0.1:1", token: "test-secret", enabled: false });
   await assert.rejects(device.configure({ address: "http://127.0.0.1:2", enabled: true }), /pairing token/i);
@@ -190,11 +262,11 @@ test("address changes require a new token and storage failures cannot leak secre
 
 test("dashboard protects configuration and never returns pairing credentials", async () => {
   const store = new MemoryStore();
-  const device = new DeviceIntegration({ store, poller: poller(), intervalMs: 10 });
+  const modeController = await createTestModeController();
+  const device = new DeviceIntegration({ modeController, store, poller: poller(), intervalMs: 10 });
   await device.start();
   await device.configure({ address: "http://127.0.0.1:1", token: "test-secret", enabled: false });
-  const app = await startLocalWebApp({ poller: poller(), oauth: null, spotifyConfigured: false,
-    getDemoEnabled: () => true, setDemoEnabled: async () => {}, onMockAction: async () => {}, port: 0, device });
+  const app = await startLocalWebApp({ poller: poller(), modeController, oauth: null, spotifyConfigured: false, port: 0, device });
   const origin = `http://127.0.0.1:${app.port}`;
   try {
     const payload = JSON.stringify({ address: "http://127.0.0.1:1", enabled: true });
@@ -218,7 +290,7 @@ test("dashboard protects configuration and never returns pairing credentials", a
 test("credential-manager failures are safe and do not start a connection", async () => {
   let calls = 0;
   const store: DeviceConfigStore = { get: async () => null, set: async () => { throw new Error("test-secret"); } };
-  const device = new DeviceIntegration({ store, poller: poller(), intervalMs: 10,
+  const device = new DeviceIntegration({ modeController: await createTestModeController(), store, poller: poller(), intervalMs: 10,
     fetchDevice: async () => { calls++; throw new Error("unexpected"); } });
   await device.start();
   await assert.rejects(device.configure({ address: "http://127.0.0.1:1", token: "test-secret", enabled: true }),
@@ -237,7 +309,7 @@ test("shutdown during a configuration write never starts a new scheduler", async
     writing(); await new Promise<void>((resolve) => { release = resolve; });
   } };
   let calls = 0;
-  const device = new DeviceIntegration({ store, poller: poller(), intervalMs: 10,
+  const device = new DeviceIntegration({ modeController: await createTestModeController(), store, poller: poller(), intervalMs: 10,
     fetchDevice: async () => { calls++; throw new Error("unexpected"); } });
   await device.start();
   const configuring = device.configure({ address: "http://127.0.0.1:1", token: "test-secret", enabled: true });
@@ -252,7 +324,7 @@ test("shutdown during a configuration write never starts a new scheduler", async
 test("configuration cannot restart the scheduler while the integration is held for maintenance", async () => {
   const store = new MemoryStore();
   let calls = 0;
-  const device = new DeviceIntegration({ store, poller: poller(), intervalMs: 10,
+  const device = new DeviceIntegration({ modeController: await createTestModeController(), store, poller: poller(), intervalMs: 10,
     fetchDevice: async () => { calls++; return new Response("", { status: 503 }); } });
   await device.start();
   try {

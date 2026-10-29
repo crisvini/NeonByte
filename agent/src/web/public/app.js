@@ -7,6 +7,16 @@ const modeHelp = {
   spotify: "Keeps the Spotify screen active and shows a waiting state when no track is playing.",
   gif: "Keeps the GIF looping across the full display.",
 };
+const spotifyStateLabels = {
+  unconfigured: "Not configured",
+  checking: "Checking",
+  authentication_required: "Reconnect required",
+  rate_limited: "Rate limited",
+  offline: "Offline · retrying",
+  api_error: "Unavailable",
+  stale: "Status delayed",
+  connected: "Connected",
+};
 
 const canvas = document.querySelector("#display");
 const context = canvas.getContext("2d", { alpha: false });
@@ -16,10 +26,12 @@ let firmwareUpdate = null;
 let firmwareStatusPending = false;
 let statusPending = false;
 let agentOfflineNotified = false;
+let localAgentAvailable = false;
 let otaActionPending = false;
 let otaActionError = null;
 let mode = "auto";
-let previewAnimationSelected = false;
+let modePending = false;
+let preparedGifPreview = false;
 let animationFrames = [];
 let animationSha256 = "";
 let currentCoverUrl = "";
@@ -69,41 +81,56 @@ async function postJson(path, value, timeoutMs = 15_000) {
 function setModeButtons() {
   document.querySelectorAll("[data-mode]").forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.mode === mode));
+    button.disabled = modePending || otaMutationLocked();
   });
   document.querySelector("#mode-help").textContent = modeHelp[mode];
-}
-
-async function chooseMode(nextMode) {
-  if (!["auto", "spotify", "gif"].includes(nextMode)) return;
-  previewAnimationSelected = false;
-  mode = nextMode;
-  localStorage.setItem("neonbyte-mode", mode);
-  setModeButtons();
-  try {
-    await postJson("/api/mode", { mode });
-    await refreshStatus();
-  } catch (error) {
-    notify(error.message);
+  if (modePending) {
+    document.querySelector("#mode-sync").textContent = "Applying your selection to the device…";
+  } else {
+    const message = status?.modeControl?.message ?? "Mode status is unavailable.";
+    const deviceMode = status?.device?.mode;
+    const reportLabel = status?.device?.connection === "connected" ? "Device" : "Last device report";
+    document.querySelector("#mode-sync").textContent = deviceMode
+      ? `${reportLabel}: ${deviceMode.toUpperCase()} · selected: ${mode.toUpperCase()}. ${message}` : message;
   }
 }
 
-function setDemoControls(enabled) {
-  const toggle = document.querySelector("#demo-toggle");
-  toggle.setAttribute("aria-pressed", String(enabled));
-  toggle.querySelector(".sr-only").textContent = enabled ? "Disable demo data" : "Enable demo data";
-  document.querySelector("#demo-controls").hidden = !enabled;
+async function chooseMode(nextMode) {
+  if (!["auto", "spotify", "gif"].includes(nextMode) || nextMode === mode || modePending || otaMutationLocked()) return;
+  modePending = true;
+  setModeButtons();
+  try {
+    await postJson("/api/mode", { mode: nextMode });
+    mode = nextMode;
+    preparedGifPreview = false;
+    await refreshStatus();
+  } catch (error) {
+    notify(error.message);
+  } finally {
+    modePending = false;
+    setModeButtons();
+  }
+}
+
+function updateLamp(element, state) {
+  element.classList.toggle("connected", state === "connected");
+  element.classList.toggle("waiting", state === "waiting");
+  element.classList.toggle("offline", state === "offline");
 }
 
 function updateStatusText() {
-  if (!status) return;
   const agentDot = document.querySelector("#agent-dot");
-  agentDot.classList.toggle("offline", status.snapshot.status === "unavailable");
-  document.querySelector("#agent-label").textContent = status.snapshot.status === "unavailable"
-    ? "Spotify unavailable"
-    : status.demoEnabled ? "Agent demo mode" : "Local agent active";
+  agentDot.classList.toggle("offline", !localAgentAvailable);
+  document.querySelector("#agent-label").textContent = localAgentAvailable ? "Local agent active" : "Local agent unavailable";
+  document.querySelector("#agent-lamp").classList.toggle("connected", localAgentAvailable);
+  document.querySelector("#agent-lamp").classList.toggle("offline", !localAgentAvailable);
+  document.querySelector("#agent-summary").textContent = localAgentAvailable ? "Running" : "Unavailable";
+  if (!status) return;
+
   const device = status.device;
-  const labels = { disabled: "Device disabled", connecting: "Connecting", connected: "Connected", disconnected: "Disconnected; retrying" };
-  document.querySelector("#device-status").textContent = labels[device.connection] ?? "Device unavailable";
+  const deviceLabels = { disabled: "Disabled", connecting: "Connecting…", connected: "Connected", disconnected: "Disconnected · retrying" };
+  document.querySelector("#device-status").textContent = deviceLabels[device.connection] ?? "Unavailable";
+  updateLamp(document.querySelector("#device-lamp"), device.connection === "connected" ? "connected" : device.connection === "connecting" ? "waiting" : "offline");
   document.querySelector("#device-config-status").textContent = device.paired
     ? "Pairing credentials are stored in the Windows credential manager."
     : "Pairing credentials required. Use the foreground configure-device command.";
@@ -113,12 +140,35 @@ function updateStatusText() {
     document.querySelector("#device-enabled").checked = device.enabled;
   }
 
+  const spotifyState = status.spotifyState ?? "api_error";
   const badge = document.querySelector("#spotify-badge");
-  badge.textContent = status.spotifyConnected ? "Connected" : status.spotifyConfigured ? "Waiting for connection" : "Configure .env";
-  badge.classList.toggle("connected", status.spotifyConnected);
-  const previewScene = previewAnimationSelected && status.animation.available ? "gif" : status.activeScene;
-  document.querySelector("#scene-label").textContent = previewScene === "spotify" ? "SPOTIFY NOW PLAYING" : "GIF FULLSCREEN";
-  setDemoControls(status.demoEnabled);
+  badge.textContent = spotifyStateLabels[spotifyState] ?? "Unavailable";
+  updateLamp(document.querySelector("#spotify-lamp"), spotifyState === "connected" ? "connected" : spotifyState === "checking" ? "waiting" : "offline");
+  const spotifyDetail = {
+    unconfigured: "Spotify is not configured for this agent. Add its app settings to enable account connection.",
+    checking: "Checking the latest playback state…",
+    authentication_required: "Spotify authorization is missing or expired. Reconnect the account to resume playback updates.",
+    rate_limited: "Spotify has limited requests. The agent will retry after the allowed wait.",
+    offline: "Spotify could not be reached. The agent will retry without changing the selected display mode.",
+    api_error: "Spotify playback is unavailable. Check the account and local connection.",
+    stale: "The last Spotify update is old. Waiting for a fresh response.",
+    connected: status.snapshot.status === "playing" ? "Spotify is connected and playback is active."
+      : status.snapshot.status === "paused" ? "Spotify is connected and playback is paused."
+        : "Spotify is connected. No track is currently playing.",
+  };
+  document.querySelector("#spotify-detail").textContent = spotifyDetail[spotifyState] ?? "Spotify playback is unavailable.";
+  document.querySelector("#connect-spotify").disabled = !status.spotifyConfigured || Boolean(status.spotifyAuthorizing) || otaMutationLocked();
+  document.querySelector("#connect-spotify").textContent = status.spotifyAuthorizing ? "Waiting for Spotify authorization…"
+    : spotifyState === "unconfigured" ? "Configure Spotify first" : spotifyState === "connected" ? "Reconnect Spotify" : "Connect Spotify";
+  const scene = preparedGifPreview && status.animation.available ? "local-gif-preview" : status.activeScene;
+  document.querySelector("#scene-label").textContent = scene === "local-gif-preview" ? "LOCAL GIF PREVIEW"
+    : scene === "spotify" ? "SPOTIFY DISPLAY" : scene === "gif" ? "GIF DISPLAY" : "WAITING FOR MODE";
+  const track = spotifyState === "connected" ? status.snapshot.nowPlaying : null;
+  document.querySelector("#playback-state").textContent = spotifyState !== "connected" ? "SPOTIFY STATUS"
+    : status.snapshot.status === "playing" ? "NOW PLAYING" : status.snapshot.status === "paused" ? "PAUSED" : "PLAYBACK";
+  document.querySelector("#now-playing-title").textContent = track?.title ?? (spotifyState === "connected" ? "No active track" : badge.textContent);
+  document.querySelector("#now-playing-artist").textContent = track?.artist ?? (spotifyState === "connected" ? "Play a track to see its title and artist." : spotifyDetail[spotifyState]);
+  setModeButtons();
 
   const animation = status.animation;
   const compressionText = animation.compressionPercent >= 0
@@ -126,12 +176,18 @@ function updateStatusText() {
     : `${Math.abs(animation.compressionPercent).toFixed(1)}% larger`;
   document.querySelector("#upload-status").textContent = animation.available
     ? `${animation.width} × ${animation.height} px · ${animation.frameCount} frames · ${animation.durationMs} ms · ${formatBytes(animation.sizeBytes)} converted (${compressionText}) · SHA-256 ${animation.sha256.slice(0, 12)}…`
-    : "No GIF uploaded in this session.";
+    : "No GIF is prepared for this session.";
   const transfer = device.animation;
   if (animation.available && transfer && transfer.state !== "none") {
     document.querySelector("#upload-status").textContent += ` · ${transfer.message}${transfer.freeStorageBytes === null ? "" : ` Device reported ${formatBytes(transfer.freeStorageBytes)} free after removal.`}`;
   }
   const activeTransfer = transfer && ["removing", "uploading", "validating"].includes(transfer.state);
+  const previewButton = document.querySelector("#preview-animation");
+  previewButton.hidden = !animation.available;
+  previewButton.textContent = preparedGifPreview ? "Return to device mode preview" : "Preview prepared GIF here";
+  previewButton.setAttribute("aria-pressed", String(preparedGifPreview));
+  previewButton.disabled = otaMutationLocked() || Boolean(activeTransfer);
+  document.querySelector("#prepared-gif-note").hidden = !preparedGifPreview;
   const replace = document.querySelector("#replace-animation");
   replace.hidden = !animation.available || activeTransfer || transfer?.state === "complete";
   replace.textContent = transfer?.previousAnimation === "removed" || transfer?.previousAnimation === "unknown"
@@ -151,10 +207,12 @@ function otaMutationLocked() {
 }
 
 function setOtaMutationLock() {
-  const locked = otaMutationLocked();
-  document.querySelectorAll("#device-form input, #device-form button, [data-mode], #demo-toggle, [data-action], #gif-file, #replace-animation, #cancel-animation").forEach((element) => {
+  const locked = otaMutationLocked() || modePending;
+  document.querySelectorAll("#device-form input, #device-form button, [data-mode], #gif-file, #preview-animation, #replace-animation, #cancel-animation").forEach((element) => {
     element.disabled = locked;
   });
+  setModeButtons();
+  document.querySelector("#connect-spotify").disabled = locked || !status?.spotifyConfigured || Boolean(status?.spotifyAuthorizing);
   const device = status?.device;
   const animation = device?.animation;
   document.querySelector("#replace-animation").disabled = locked || !device?.enabled || !device?.paired ||
@@ -226,19 +284,27 @@ async function refreshStatus() {
   try {
     const response = await request("/api/status");
     status = await response.json();
-    if (status.mode !== mode) {
-      mode = status.mode;
-      localStorage.setItem("neonbyte-mode", mode);
-      setModeButtons();
-    }
+    localAgentAvailable = true;
+    mode = status.mode;
     updateStatusText();
     await refreshFirmwareStatus();
     await refreshAnimation();
-    loadCover(status.snapshot.coverUrl);
+    loadCover(status.spotifyState === "connected" && status.snapshot.status === "playing" ? status.snapshot.coverUrl : null);
     agentOfflineNotified = false;
   } catch (error) {
+    localAgentAvailable = false;
+    loadCover(null);
     document.querySelector("#agent-dot").classList.add("offline");
     document.querySelector("#agent-label").textContent = "Local agent unavailable";
+    document.querySelector("#agent-lamp").classList.add("offline");
+    document.querySelector("#agent-summary").textContent = "Unavailable";
+    document.querySelector("#scene-label").textContent = "AGENT OFFLINE";
+    document.querySelector("#playback-state").textContent = "AGENT STATUS";
+    document.querySelector("#now-playing-title").textContent = "Local agent unavailable";
+    document.querySelector("#now-playing-artist").textContent = "Current playback data cannot be read.";
+    document.querySelector("#spotify-badge").textContent = "Status unavailable";
+    document.querySelector("#spotify-detail").textContent = "The local agent status could not be read. Spotify connection and playback are unknown.";
+    document.querySelector("#spotify-lamp").classList.add("offline");
     if (status && !agentOfflineNotified) { notify(error.message); agentOfflineNotified = true; }
   } finally { statusPending = false; }
 }
@@ -509,26 +575,39 @@ function drawCover(target, image, x, y, width, height) {
 
 function drawWaiting(now) {
   const gradient = context.createLinearGradient(0, 0, 240, 240);
-  gradient.addColorStop(0, "#1c1529");
-  gradient.addColorStop(1, "#071c21");
+  gradient.addColorStop(0, "#281226");
+  gradient.addColorStop(1, "#10141d");
   context.fillStyle = gradient;
   context.fillRect(0, 0, 240, 240);
-  context.fillStyle = "rgba(182,140,255,.12)";
+  context.fillStyle = "rgba(255,74,171,.12)";
   context.beginPath();
   context.arc(120, 91, 47, 0, Math.PI * 2);
   context.fill();
-  context.strokeStyle = "rgba(199,255,235,.78)";
+  context.strokeStyle = "rgba(109,235,242,.78)";
   context.lineWidth = 2;
   context.beginPath();
   context.arc(120, 91, 31, now / 2000, now / 2000 + Math.PI * 1.55);
   context.stroke();
-  context.fillStyle = "#f5f1ff";
+  context.fillStyle = "#fff0f8";
   context.textAlign = "center";
   context.font = "600 13px system-ui, sans-serif";
-  context.fillText(status?.snapshot.status === "idle" ? "No active track" : "Waiting for Spotify", 120, 166);
-  context.fillStyle = "#9b98aa";
+  const waitingMessages = {
+    unconfigured: ["Spotify not configured", "Add Spotify app settings"],
+    checking: ["Checking Spotify", "Waiting for first update"],
+    authentication_required: ["Reconnect Spotify", "Authorization required"],
+    rate_limited: ["Spotify is waiting", "Retrying after request limit"],
+    offline: ["Spotify offline", "Waiting to reconnect"],
+    api_error: ["Spotify unavailable", "Check account or connection"],
+    stale: ["Status is delayed", "Waiting for a fresh update"],
+    connected: ["No active track", "Play a track to see it here"],
+  };
+  const [title, detail] = status?.spotifyState === "connected" && status.snapshot.status === "paused"
+    ? ["Playback paused", "Resume to show the current track"]
+    : waitingMessages[status?.spotifyState] ?? ["Spotify unavailable", "Waiting for a real playback update"];
+  context.fillText(title, 120, 166);
+  context.fillStyle = "#c5a8bc";
   context.font = "9px system-ui, sans-serif";
-  context.fillText("Connect Spotify or enable demo data", 120, 183);
+  context.fillText(detail, 120, 183);
 }
 
 const SPOTIFY_TITLE_Y = 190;
@@ -656,17 +735,17 @@ function drawGif(now) {
     context.fillStyle = "#080c12";
     context.fillRect(0, 0, 240, 240);
     const gradient = context.createRadialGradient(120, 110, 4, 120, 120, 150);
-    gradient.addColorStop(0, "rgba(164,111,238,.24)");
+    gradient.addColorStop(0, "rgba(255,74,171,.22)");
     gradient.addColorStop(1, "rgba(8,12,18,0)");
     context.fillStyle = gradient;
     context.fillRect(0, 0, 240, 240);
-    context.fillStyle = "#c6c0d1";
+    context.fillStyle = "#fff0f8";
     context.textAlign = "center";
     context.font = "600 12px system-ui, sans-serif";
-    context.fillText("Upload a GIF to get started", 120, 117);
-    context.fillStyle = "#807a8b";
+    context.fillText("No GIF prepared", 120, 117);
+    context.fillStyle = "#c5a8bc";
     context.font = "9px system-ui, sans-serif";
-    context.fillText("The animation will fill the entire display", 120, 136);
+    context.fillText("Choose a GIF in the panel", 120, 136);
     return;
   }
   if (frameIndex < 0 || now >= frameDeadline) {
@@ -678,7 +757,23 @@ function drawGif(now) {
 }
 
 function render(now) {
-  const scene = previewAnimationSelected && status?.animation?.available ? "gif" : status?.activeScene ?? "gif";
+  if (!localAgentAvailable) {
+    if (previousScene !== "local-agent-offline") {
+      previousScene = "local-agent-offline";
+      context.fillStyle = "#100914";
+      context.fillRect(0, 0, DISPLAY_SIZE, DISPLAY_SIZE);
+    }
+    context.fillStyle = "#ff9bce";
+    context.textAlign = "center";
+    context.font = "700 13px system-ui, sans-serif";
+    context.fillText("LOCAL AGENT OFFLINE", 120, 113);
+    context.fillStyle = "#c5a8bc";
+    context.font = "9px system-ui, sans-serif";
+    context.fillText("Waiting for a fresh status", 120, 132);
+    window.requestAnimationFrame(render);
+    return;
+  }
+  const scene = preparedGifPreview && status?.animation?.available ? "gif" : status?.activeScene ?? "gif";
   if (scene !== previousScene) {
     previousScene = scene;
     if (scene !== "spotify") spotifySceneActive = false;
@@ -688,27 +783,6 @@ function render(now) {
   if (scene === "spotify") drawSpotify(now);
   else drawGif(now);
   window.requestAnimationFrame(render);
-}
-
-async function toggleDemo() {
-  const enabled = !status?.demoEnabled;
-  try {
-    await postJson("/api/demo", { enabled });
-    await refreshStatus();
-    notify(enabled ? "Demo data enabled." : "Demo data disabled.");
-  } catch (error) {
-    notify(error.message);
-  }
-}
-
-async function mockAction(action) {
-  try {
-    await postJson("/api/mock/playback", { action });
-    document.querySelector("#demo-message").textContent = action === "offline" ? "Mock agent offline" : "Mock playback updated";
-    await refreshStatus();
-  } catch (error) {
-    notify(error.message);
-  }
 }
 
 async function connectSpotify() {
@@ -732,7 +806,7 @@ async function uploadGif(file) {
     label.classList.add("error");
     return;
   }
-  label.textContent = "Validating and preparing the preview…";
+  label.textContent = "Converting GIF and preparing a separate preview…";
   label.classList.remove("error");
   try {
     const response = await request("/api/animation", {
@@ -742,9 +816,8 @@ async function uploadGif(file) {
       timeoutMs: 120_000,
     });
     const result = await response.json();
-    previewAnimationSelected = true;
     await refreshStatus();
-    notify(`Converted NBIF v2 is ready: ${formatBytes(result.sizeBytes)}, ${result.frameCount} frames, ${result.durationMs} ms. Review it and confirm replacement when ready.`);
+    notify(`GIF prepared for local preview: ${formatBytes(result.sizeBytes)}, ${result.frameCount} frames, ${result.durationMs} ms. Device mode and animation are unchanged.`);
   } catch (error) {
     label.textContent = error.message;
     label.classList.add("error");
@@ -863,9 +936,9 @@ document.querySelectorAll("[data-mode]").forEach((button) => {
   button.addEventListener("click", () => void chooseMode(button.dataset.mode));
 });
 document.querySelector("#connect-spotify").addEventListener("click", () => void connectSpotify());
-document.querySelector("#demo-toggle").addEventListener("click", () => void toggleDemo());
-document.querySelectorAll("[data-action]").forEach((button) => {
-  button.addEventListener("click", () => void mockAction(button.dataset.action));
+document.querySelector("#preview-animation").addEventListener("click", () => {
+  preparedGifPreview = !preparedGifPreview;
+  updateStatusText();
 });
 document.querySelector("#replace-animation").addEventListener("click", () => void replaceAnimation());
 document.querySelector("#cancel-animation").addEventListener("click", () => void cancelAnimationTransfer());
@@ -881,14 +954,7 @@ if (oauthError) notify("Spotify authorization was not completed. Check the confi
 if (connected || oauthError) window.history.replaceState({}, "", "/");
 
 async function initialize() {
-  const savedMode = localStorage.getItem("neonbyte-mode");
   try {
-    const response = await request("/api/status");
-    status = await response.json();
-    mode = ["auto", "spotify", "gif"].includes(savedMode) ? savedMode : status.mode;
-    localStorage.setItem("neonbyte-mode", mode);
-    setModeButtons();
-    if (mode !== status.mode) await postJson("/api/mode", { mode });
     await refreshStatus();
   } catch (error) {
     document.querySelector("#agent-dot").classList.add("offline");

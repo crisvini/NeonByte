@@ -1,5 +1,4 @@
 import sharp from "sharp";
-import { readFile } from "node:fs/promises";
 import { createCoverAsset, type AnimationAsset, type MediaAsset } from "../media/animation.js";
 import { downloadSpotifyCover } from "../web/server.js";
 import type { DisplayMode } from "../web/scene.js";
@@ -9,6 +8,7 @@ import { DeviceScheduler, type DeviceConnectionStatus } from "./scheduler.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 import { MaintenanceClient } from "./maintenance-client.js";
 import type { RecoveryCredential, RecoveryCredentialStore } from "./recovery-store.js";
+import { DisplayModeController, modeTargetId } from "./mode-controller.js";
 
 export interface DeviceConfig { address: string; token: string; enabled: boolean }
 export interface DeviceConfigStore {
@@ -25,7 +25,16 @@ export interface DeviceAnimationView {
   freeStorageBytes: number | null;
   message: string;
 }
-export interface DeviceView { address: string; enabled: boolean; paired: boolean; connection: DeviceConnectionStatus; animation: DeviceAnimationView }
+export interface DeviceView {
+  address: string;
+  enabled: boolean;
+  paired: boolean;
+  connection: DeviceConnectionStatus;
+  mode: DisplayMode | null;
+  activeScene: "spotify" | "gif" | null;
+  lastObservedAtUnixMs: number | null;
+  animation: DeviceAnimationView;
+}
 
 
 /** The address and pairing token share one credential-manager entry. */
@@ -60,7 +69,9 @@ export class DeviceIntegration {
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
   private maintenanceHeld = false;
-  private desiredMode: DisplayMode | null = null;
+  private deviceMode: DisplayMode | null = null;
+  private deviceScene: "spotify" | "gif" | null = null;
+  private deviceModeObservedAtUnixMs: number | null = null;
   private animation: MediaAsset | AnimationAsset | null = null;
   private animationState: DeviceAnimationView = { state: "none", attempts: 0, previousAnimation: "unchanged", freeStorageBytes: null, message: "" };
   private animationReplacementController: AbortController | null = null;
@@ -68,14 +79,21 @@ export class DeviceIntegration {
 
   constructor(private readonly options: { store: DeviceConfigStore; poller: PlaybackPoller; intervalMs: number; fetchDevice?: typeof fetch;
     fetchCover?: typeof fetch; recoveryStore?: RecoveryCredentialStore;
+    modeController: DisplayModeController;
     createMaintenanceClient?: (address: string, token: string) => Pick<MaintenanceClient, "info"> }) {}
 
   get status(): DeviceView {
     return { address: this.config?.address ?? "", enabled: this.config?.enabled ?? false,
-      paired: Boolean(this.config?.token), connection: this.scheduler?.status ?? "disabled", animation: { ...this.animationState } };
+      paired: Boolean(this.config?.token), connection: this.scheduler?.status ?? "disabled",
+      mode: this.deviceMode, activeScene: this.deviceScene, lastObservedAtUnixMs: this.deviceModeObservedAtUnixMs,
+      animation: { ...this.animationState } };
   }
 
-  setMode(mode: DisplayMode): void { this.desiredMode = mode; }
+  get modeTargetFingerprint(): string | null {
+    return this.config?.token ? modeTargetId(this.config.token) : null;
+  }
+
+  requestModeSynchronization(): void { this.scheduler?.requestSynchronization(); }
 
   setAnimation(asset: MediaAsset | AnimationAsset): void {
     if (["removing", "uploading", "validating"].includes(this.animationState.state)) {
@@ -180,9 +198,7 @@ export class DeviceIntegration {
   }
 
   private async decodeCover(url: string): Promise<MediaAsset> {
-    const bytes = url === "/demo-cover.svg"
-      ? await readFile(new URL("../web/public/demo-cover.svg", import.meta.url))
-      : (await downloadSpotifyCover(url, this.options.fetchCover ?? fetch)).bytes;
+    const bytes = (await downloadSpotifyCover(url, this.options.fetchCover ?? fetch)).bytes;
     const decoded = await sharp(bytes, { limitInputPixels: 16_000_000 }).timeout({ seconds: 10 })
       .resize(240, 240, { fit: "cover" }).ensureAlpha().raw().toBuffer();
     return createCoverAsset(decoded, 240, 240);
@@ -277,6 +293,11 @@ export class DeviceIntegration {
       try { await this.options.store.set(config); }
       catch { this.config = previous ? { ...previous, enabled: false } : null; throw new Error("Unable to save device configuration in the system credential manager."); }
       this.config = config;
+      if (previous?.token !== config.token) {
+        this.deviceMode = null;
+        this.deviceScene = null;
+        this.deviceModeObservedAtUnixMs = null;
+      }
       if (this.animation && this.animationState.state !== "complete") {
         this.animationState = { state: "prepared", attempts: this.animationState.attempts,
           previousAnimation: "unchanged", freeStorageBytes: null, message: "The converted animation is ready for confirmation." };
@@ -303,9 +324,21 @@ export class DeviceIntegration {
     const scheduler = new DeviceScheduler({ intervalMs: this.options.intervalMs, synchronize: async () => {
       if (!await synchronizer.synchronize()) return false;
       try {
-        const status = await client.status();
-        const mode = this.desiredMode;
-        if (mode && status.mode !== mode) await client.setMode(mode);
+        let status = await client.status();
+        const observedAt = Date.now();
+        this.deviceMode = status.mode;
+        this.deviceScene = status.activeScene;
+        this.deviceModeObservedAtUnixMs = observedAt;
+        const targetFingerprint = modeTargetId(config.token);
+        const pendingMode = await this.options.modeController.pendingCommandFor(targetFingerprint);
+        if (pendingMode && status.mode !== pendingMode.mode) {
+          await client.setMode(pendingMode.mode);
+          status = await client.status();
+          this.deviceMode = status.mode;
+          this.deviceScene = status.activeScene;
+          this.deviceModeObservedAtUnixMs = Date.now();
+        }
+        await this.options.modeController.observeDeviceMode(status.mode, targetFingerprint, this.deviceModeObservedAtUnixMs);
         return true;
       } catch { return false; }
     } });

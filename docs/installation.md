@@ -20,11 +20,11 @@
 
 The agent starts polling with the interface. The default interval is 15 seconds; adjust `SPOTIFY_POLL_INTERVAL_MS` in `.env` if needed.
 
-The refresh token is stored through the native keyring library, not in a plaintext token file. On Linux, the installed library may silently fall back to a nonpersistent kernel keyring if Secret Service is unavailable; reconnecting after a restart is therefore not guaranteed. Login startup is optional; see the instructions below.
+The refresh token is stored through the native keyring library, not in a plaintext token file. On Linux, the installed library may silently fall back to a nonpersistent kernel keyring if Secret Service is unavailable; reconnecting after a restart is therefore not guaranteed. The display-mode selection is stored separately in the per-user NeonByte application data folder. A pending manual mode command stores only a hash of the device pairing token, not the token itself. Login startup is optional; see the instructions below.
 
-Without a valid `SPOTIFY_CLIENT_ID`, the agent starts in demo mode so you can test play, pause, track changes, GIFs, and display modes without external calls. With a Client ID configured, the interface offers demo data controls. GIFs must be animated and limited to 8 MiB, 60 frames for NBIF v2 (20 for v1), 30 seconds total duration, 1,048,576 pixels per logical screen or frame descriptor, and 16,777,216 pixels total across v2 descriptors. Conversion runs in a bounded worker. The preview is temporary and remains in memory until the agent exits.
+Without a valid `SPOTIFY_CLIENT_ID`, the dashboard reports Spotify as unconfigured. It does not show sample songs, covers, artists, or simulated playback. Manual display-mode selection, local GIF preparation and preview, and device settings remain available. GIFs must be animated and limited to 8 MiB, 60 frames for NBIF v2 (20 for v1), 30 seconds total duration, 1,048,576 pixels per logical screen or frame descriptor, and 16,777,216 pixels total across v2 descriptors. Conversion runs in a bounded worker. The preview is temporary and remains in memory until the agent exits.
 
-The `.env.example` file contains a placeholder Client ID and enables demo data; the placeholder is treated as unconfigured. Copying it supports a first run without Spotify credentials. Replace the Client ID and select **Connect Spotify** to authorize a real account. Because the sample enables `NEONBYTE_MOCK`, turn off **Demo data** in the interface after authorization to use Spotify playback. The Spotify credential store persists only the refresh token through Windows Credential Manager under the Windows account that runs the agent; access tokens remain in memory. Device synchronization settings are stored separately in the system credential manager. Do not put access tokens, refresh tokens, or a Spotify client secret in `.env`.
+The `.env.example` file contains a placeholder Client ID that the agent treats as unconfigured. Copying it supports local dashboard setup without Spotify credentials. Replace the Client ID and select **Connect Spotify** to authorize a real account. The Spotify credential store persists only the refresh token through Windows Credential Manager under the Windows account that runs the agent; access tokens remain in memory. Device synchronization settings are stored separately in the system credential manager. Do not put access tokens, refresh tokens, or a Spotify client secret in `.env`.
 
 These instructions do not install or configure the device. Any firmware depends on hardware identification, a tested backup and restore procedure, and explicit authorization to flash.
 
@@ -54,7 +54,8 @@ npm --prefix agent run build
 Copy `.env.example` to `.env`, configure your Spotify client ID and redirect,
 then start manually once with `npm --prefix agent run start`. Open
 [http://localhost:8787](http://localhost:8787) and connect Spotify. Stop the
-manual agent before enabling startup. Demo mode needs no Spotify credentials.
+manual agent before enabling startup. Without Spotify credentials, the panel
+shows an unconfigured state and does not display sample playback.
 
 To opt in or update an existing `NeonByte Agent` task, stop any running task
 and agent first, then run this command from the same checkout and Windows
@@ -156,8 +157,7 @@ reliably enforce its requested Secret Service backend. A scheduled `wsl.exe` inv
 user session, an accessible bus, or an unlocked keyring. The current session
 must have a working Secret Service and the scheduled process must inherit a
 usable bus address; an unlock prompt may require interaction. Verify Spotify
-reconnection after a real Windows login and after a lock or sleep. The agent does not fall back to a plaintext token file. Use demo mode or
-the Windows-native alternative until persistent credential access in the
+reconnection after a real Windows login and after a lock or sleep. The agent does not fall back to a plaintext token file. Use the Windows-native alternative until persistent credential access in the
 scheduled session has been verified. Do not put credentials or unlock passwords in the task,
 script, service file, or logs.
 

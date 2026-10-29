@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DeviceIntegration, type DeviceConfig, type DeviceConfigStore } from "../../src/device/integration.js";
+import { createTestModeController } from "../helpers/mode-state.js";
 import { PlaybackPoller } from "../../src/spotify/poller.js";
 import { MockSpotifyProvider } from "../../src/spotify/mock.js";
 import { startLocalWebApp } from "../../src/web/server.js";
@@ -28,10 +29,10 @@ test("dashboard configuration drives the native firmware through restart, outage
     item: { type: "track", id: "lifecycle-track", name: "Lifecycle Track", duration_ms: 180000,
       artists: [{ name: "Test Artist" }], album: { images: [] } } }), pollIntervalMs: 15000, now: () => EPOCH });
   await poller.pollOnce();
-  let device = new DeviceIntegration({ store, poller, intervalMs: 30 });
+  const modeController = await createTestModeController();
+  let device = new DeviceIntegration({ modeController, store, poller, intervalMs: 30 });
   await device.start();
-  const app = await startLocalWebApp({ poller, device, oauth: null, spotifyConfigured: false,
-    getDemoEnabled: () => true, setDemoEnabled: async () => {}, onMockAction: async () => {}, port: 0 });
+  const app = await startLocalWebApp({ poller, modeController, device, oauth: null, spotifyConfigured: false, port: 0 });
   t.after(async () => { await app.close(); await device.stop(); });
   const origin = `http://127.0.0.1:${app.port}`;
   const post = (data: unknown) => fetch(`${origin}/api/device`, { method: "POST",
@@ -57,7 +58,7 @@ test("dashboard configuration drives the native firmware through restart, outage
   const stopped = second.requests.length;
   await new Promise<void>((resolve) => setTimeout(resolve, 80));
   assert.equal(second.requests.length, stopped);
-  device = new DeviceIntegration({ store, poller, intervalMs: 30 });
+  device = new DeviceIntegration({ modeController, store, poller, intervalMs: 30 });
   await device.start();
   await waitFor(() => device.status.connection === "connected");
   assert.equal((await second.state()).trackId, "lifecycle-track");
@@ -72,7 +73,7 @@ test("verified maintenance address is used only after identity recheck and the l
   const recoveryStore: RecoveryCredentialStore = { get: async () => recovery, set: async () => {}, delete: async () => {} };
   const poller = new PlaybackPoller({ provider: new MockSpotifyProvider(), pollIntervalMs: 15_000, now: () => EPOCH });
   const fetchDevice: typeof fetch = async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
-  let device = new DeviceIntegration({ store, recoveryStore, poller, intervalMs: 30,
+  let device = new DeviceIntegration({ modeController: await createTestModeController(), store, recoveryStore, poller, intervalMs: 30,
     fetchDevice,
     createMaintenanceClient: () => ({ info: async () => ({ deviceId: recovery.deviceId, bootId: "boot-01", buildId: "build-01",
       firmwareVersion: "0.1.0", stationIp: "192.168.1.99", recoveryApIp: "192.168.4.1", otaEnabled: true,
@@ -83,7 +84,7 @@ test("verified maintenance address is used only after identity recheck and the l
   await device.suspendAndDrain();
   await device.stop();
 
-  device = new DeviceIntegration({ store, recoveryStore, poller, intervalMs: 30,
+  device = new DeviceIntegration({ modeController: await createTestModeController(), store, recoveryStore, poller, intervalMs: 30,
     fetchDevice,
     createMaintenanceClient: () => ({ info: async () => ({ deviceId: recovery.deviceId, bootId: "boot-01", buildId: "build-01",
       firmwareVersion: "0.1.0", stationIp: "192.168.1.99", recoveryApIp: "192.168.4.1", otaEnabled: true,

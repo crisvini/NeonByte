@@ -7,6 +7,7 @@ import type { DeviceIntegration } from "../src/device/integration.js";
 import { MockSpotifyProvider } from "../src/spotify/mock.js";
 import { PlaybackPoller } from "../src/spotify/poller.js";
 import { startLocalWebApp, type FirmwareUpdateControl } from "../src/web/server.js";
+import { createTestModeController } from "./helpers/mode-state.js";
 
 const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64");
 const track = (isPlaying = true, index = 0) => ({
@@ -26,12 +27,11 @@ async function makeApp(firmwareUpdate?: FirmwareUpdateControl, device?: DeviceIn
   const provider = new MockSpotifyProvider(track());
   const poller = new PlaybackPoller({ provider, pollIntervalMs: 15_000 });
   await poller.pollOnce();
-  let demoEnabled = false;
-  let trackIndex = 0;
   const coverFetches: string[] = [];
   let exchanged: { code: string; codeVerifier: string } | undefined;
   const app = await startLocalWebApp({
     poller,
+    modeController: await createTestModeController(),
     ...(firmwareUpdate ? { firmwareUpdate } : {}),
     ...(device ? { device } : {}),
     oauth: {
@@ -43,18 +43,6 @@ async function makeApp(firmwareUpdate?: FirmwareUpdateControl, device?: DeviceIn
       exchangeAuthorizationCode: async (value) => { exchanged = value; },
     },
     spotifyConfigured: true,
-    getDemoEnabled: () => demoEnabled,
-    setDemoEnabled: async (enabled) => { demoEnabled = enabled; },
-    onMockAction: async (action) => {
-      if (action === "offline") {
-        provider.setError(new Error("mock offline"));
-      } else if (action === "next") {
-        trackIndex += 1;
-        provider.setPlayback(track(true, trackIndex));
-      } else {
-        provider.setPlayback(track(action !== "pause", trackIndex));
-      }
-    },
     fetchCover: async (input) => {
       coverFetches.push(String(input));
       return new Response(Buffer.from("safe cover bytes"), {
@@ -75,7 +63,7 @@ test("serves the local panel and protects mode changes with a loopback origin ch
     assert.equal(page.status, 200);
     const html = await page.text();
     assert.match(html, /The Windows agent composes the GIF at 240 × 240/);
-    assert.match(html, /exact RGB565 colors with palettes, row compression, and frame differences/);
+    assert.match(html, /RGB565 colors with palettes, row compression, and frame differences/);
     assert.match(html, /up to 60 frames/);
     assert.match(html, /20-frame capacity/);
     assert.match(html, /32 KiB reserve/);
@@ -100,6 +88,70 @@ test("serves the local panel and protects mode changes with a loopback origin ch
   } finally {
     await app.close();
   }
+});
+
+test("public panel uses the official branding and has no demonstration controls", async () => {
+  const { app, origin } = await makeApp();
+  try {
+    const page = await fetch(origin).then((response) => response.text());
+    assert.match(page, /neonbyte-logo\.webp/);
+    assert.match(page, /favicon-32\.png/);
+    assert.doesNotMatch(page, /Demo data|mock-playback/i);
+    for (const asset of ["/neonbyte-logo.webp", "/favicon-32.png", "/favicon-48.png"]) {
+      assert.equal((await fetch(`${origin}${asset}`)).status, 200, `${asset} is served`);
+    }
+    assert.equal((await fetch(`${origin}/demo-cover.svg`)).status, 404);
+    const response = await fetch(`${origin}/api/demo`, { method: "POST",
+      headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ enabled: true }) });
+    assert.equal(response.status, 404);
+    const status = await fetch(`${origin}/api/status`).then((value) => value.json()) as Record<string, unknown>;
+    assert.equal("demoEnabled" in status, false);
+  } finally { await app.close(); }
+});
+
+test("Spotify availability reflects the latest poll instead of stale authorization", async () => {
+  const { app, origin, provider, poller } = await makeApp();
+  try {
+    let state = await fetch(`${origin}/api/status`).then((value) => value.json()) as { spotifyConnected: boolean };
+    assert.equal(state.spotifyConnected, true);
+    provider.setError(new Error("simulated network outage"));
+    await poller.pollOnce();
+    state = await fetch(`${origin}/api/status`).then((value) => value.json()) as { spotifyConnected: boolean };
+    assert.equal(state.spotifyConnected, false);
+  } finally { await app.close(); }
+});
+
+test("an unconfigured Spotify account returns no fabricated playback fields", async () => {
+  const poller = new PlaybackPoller({ provider: { getCurrentPlayback: async () => null }, pollIntervalMs: 15_000 });
+  await poller.pollOnce();
+  const app = await startLocalWebApp({ poller, modeController: await createTestModeController(), oauth: null,
+    spotifyConfigured: false, port: 0 });
+  const origin = `http://127.0.0.1:${app.port}`;
+  try {
+    const status = await fetch(`${origin}/api/status`).then((response) => response.json()) as {
+      spotifyState: string; spotifyConnected: boolean; snapshot: { status: string; nowPlaying: unknown; coverUrl: string | null };
+    };
+    assert.equal(status.spotifyState, "unconfigured");
+    assert.equal(status.spotifyConnected, false);
+    assert.equal(status.snapshot.status, "idle");
+    assert.equal(status.snapshot.nowPlaying, null);
+    assert.equal(status.snapshot.coverUrl, null);
+  } finally { await app.close(); }
+});
+
+test("Spotify authorization leaves the manually selected display mode unchanged", async () => {
+  const { app, origin } = await makeApp();
+  try {
+    await fetch(`${origin}/api/mode`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "gif" }) });
+    const authorization = await fetch(`${origin}/api/auth/connect`, { method: "POST", headers: { Origin: origin },
+      body: "" }).then((value) => value.json()) as { url: string };
+    assert.match(authorization.url, /accounts\.spotify\.com/);
+    const callback = await fetch(`${origin}/callback?code=authorization-code&state=mock-state`, { redirect: "manual" });
+    assert.equal(callback.status, 303);
+    const status = await fetch(`${origin}/api/status`).then((value) => value.json()) as { mode: string };
+    assert.equal(status.mode, "gif");
+  } finally { await app.close(); }
 });
 
 test("GIF selection only prepares NBIF v2 and the panel starts replacement after explicit confirmation", async () => {
@@ -230,49 +282,48 @@ test("dashboard reconciliation requires an explicit confirmed expected build and
   } finally { await app.close(); }
 });
 
-test("mock controls switch playback, pause, next track, and simulated agent failure in auto mode", async () => {
-  const { app, origin } = await makeApp();
-  const post = (path: string, body: unknown) => fetch(`${origin}${path}`, {
-    method: "POST",
-    headers: { Origin: origin, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+test("test-only Spotify provider fixtures exercise playback transitions without application demo routes", async () => {
+  const { app, origin, provider, poller } = await makeApp();
   try {
-    await post("/api/demo", { enabled: true });
-    let response = await post("/api/mock/playback", { action: "pause" });
-    assert.equal((await response.json() as { snapshot: { status: string } }).snapshot.status, "paused");
+    provider.setPlayback(track(false));
+    await poller.pollOnce();
+    let state = await fetch(`${origin}/api/status`).then((value) => value.json()) as { mode: string; snapshot: { status: string } };
+    assert.equal(state.snapshot.status, "paused");
+    assert.equal(state.mode, "auto");
 
-    response = await post("/api/mock/playback", { action: "play" });
-    const resumed = await response.json() as { snapshot: { status: string; nowPlaying: { trackId: string } } };
+    provider.setPlayback(track(true));
+    await poller.pollOnce();
+    const resumed = await fetch(`${origin}/api/status`).then((value) => value.json()) as { mode: string; snapshot: { status: string; nowPlaying: { trackId: string } } };
     assert.equal(resumed.snapshot.status, "playing");
     const firstTrackId = resumed.snapshot.nowPlaying.trackId;
 
-    response = await post("/api/mock/playback", { action: "next" });
-    const next = await response.json() as { snapshot: { nowPlaying: { trackId: string } } };
+    provider.setPlayback(track(true, 1));
+    await poller.pollOnce();
+    const next = await fetch(`${origin}/api/status`).then((value) => value.json()) as { mode: string; snapshot: { nowPlaying: { trackId: string } } };
     assert.notEqual(next.snapshot.nowPlaying.trackId, firstTrackId);
+    assert.equal(next.mode, "auto");
 
-    response = await post("/api/mock/playback", { action: "offline" });
-    assert.equal((await response.json() as { snapshot: { status: string } }).snapshot.status, "unavailable");
-    const state = await fetch(`${origin}/api/status`).then((value) => value.json()) as { activeScene: string };
-    assert.equal(state.activeScene, "gif");
+    provider.setError(new Error("test fixture outage"));
+    await poller.pollOnce();
+    state = await fetch(`${origin}/api/status`).then((value) => value.json()) as { mode: string; snapshot: { status: string } };
+    assert.equal(state.snapshot.status, "unavailable");
+    assert.equal(state.mode, "auto");
+    const scene = await fetch(`${origin}/api/status`).then((value) => value.json()) as { activeScene: string };
+    assert.equal(scene.activeScene, "gif");
   } finally {
     await app.close();
   }
 });
 
 test("manual Spotify mode holds the waiting scene without inventing a playing track", async () => {
-  const { app, origin, provider } = await makeApp();
+  const { app, origin, provider, poller } = await makeApp();
   try {
     provider.setPlayback(null);
+    await poller.pollOnce();
     await fetch(`${origin}/api/mode`, {
       method: "POST",
       headers: { Origin: origin, "Content-Type": "application/json" },
       body: JSON.stringify({ mode: "spotify" }),
-    });
-    await fetch(`${origin}/api/demo`, {
-      method: "POST",
-      headers: { Origin: origin, "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: true }),
     });
     const state = await fetch(`${origin}/api/status`).then((response) => response.json()) as { activeScene: string; snapshot: { nowPlaying: unknown } };
     assert.equal(state.activeScene, "spotify");

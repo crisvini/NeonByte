@@ -6,7 +6,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-web-assets.mjs",
+    "build": "node scripts/prepare-brand-assets.mjs && tsc -p tsconfig.json && node scripts/copy-web-assets.mjs",
     "typecheck": "tsc -p tsconfig.tests.json",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:offline": "node --import tsx --test tests/offline/*.test.ts",

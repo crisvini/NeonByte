@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import sharp from "sharp";
 import { DeviceIntegration, type DeviceConfig, type DeviceConfigStore } from "../../src/device/integration.js";
+import { createTestModeController } from "../helpers/mode-state.js";
 import { PlaybackPoller } from "../../src/spotify/poller.js";
 import { MockSpotifyProvider } from "../../src/spotify/mock.js";
 import { startLocalWebApp } from "../../src/web/server.js";
@@ -26,12 +27,12 @@ test("dashboard prepares a validated GIF locally and requires compatible v2 firm
     item: { type: "track", id: "media-track", name: "Media", duration_ms: 180000,
       artists: [{ name: "Artist" }], album: { images: [{ url: "https://i.scdn.co/test" }] } } }), pollIntervalMs: 15000, now: () => EPOCH });
   await poller.pollOnce();
-  const device = new DeviceIntegration({ store: new Store(), poller, intervalMs: 30,
+  const modeController = await createTestModeController();
+  const device = new DeviceIntegration({ modeController, store: new Store(), poller, intervalMs: 30,
     fetchCover: async () => new Response(png, { headers: { "Content-Type": "image/png" } }) });
   await device.start();
   await device.configure({ address: harness.url, token: harness.token, enabled: false });
-  const app = await startLocalWebApp({ poller, device, oauth: null, spotifyConfigured: false,
-    getDemoEnabled: () => false, setDemoEnabled: async () => {}, onMockAction: async () => {}, port: 0 });
+  const app = await startLocalWebApp({ poller, modeController, device, oauth: null, spotifyConfigured: false, port: 0 });
   t.after(async () => { await app.close(); await device.stop(); });
   const origin = `http://127.0.0.1:${app.port}`;
   const post = (path: string, body: unknown) => fetch(`${origin}${path}`, { method: "POST",
@@ -44,6 +45,8 @@ test("dashboard prepares a validated GIF locally and requires compatible v2 firm
   assert.equal(harness.requests.filter((r) => r.path === "/api/v1/cover").length, count);
   assert.equal((await post("/api/mode", { mode: "gif" })).status, 204);
   await waitFor(() => harness.requests.some((r) => r.path === "/api/v1/mode"));
+  await waitFor(() => device.status.mode === "gif");
+  const selectedModeWrites = harness.requests.filter((r) => r.path === "/api/v1/mode").length;
   assert.equal((await harness.state()).scene, "gif");
   const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64");
   const converted = await fetch(`${origin}/api/animation`, { method: "POST", headers: { Origin: origin, "Content-Type": "image/gif" }, body: gif });
@@ -55,6 +58,11 @@ test("dashboard prepares a validated GIF locally and requires compatible v2 firm
   assert.match(metadata.sha256, /^[0-9a-f]{64}$/);
   assert.equal(device.status.animation.state, "prepared");
   assert.equal((await harness.state()).animationFrames, 0);
+  const statusAfterPreparation = await fetch(`${origin}/api/status`).then((response) => response.json()) as { mode: string; device: { mode: string } };
+  assert.equal(statusAfterPreparation.mode, "gif");
+  assert.equal(statusAfterPreparation.device.mode, "gif");
+  assert.equal(harness.requests.filter((r) => r.path === "/api/v1/mode").length, selectedModeWrites,
+    "preparing a GIF does not add a mode command");
   assert.equal(harness.requests.some(({ path }) => path.includes("/animation")), false,
     "GIF selection only prepares the converted candidate; it must not upload or remove anything");
 
@@ -92,7 +100,7 @@ test("a slow cover download keeps native playback alive and schedules its ready 
   let release!: (response: Response) => void;
   let downloads = 0;
   const source = new Promise<Response>((resolve) => { release = resolve; });
-  const device = new DeviceIntegration({ store: new Store(), poller, intervalMs: 60000, fetchCover: async () => { downloads++; return source; } });
+  const device = new DeviceIntegration({ modeController: await createTestModeController(), store: new Store(), poller, intervalMs: 60000, fetchCover: async () => { downloads++; return source; } });
   t.after(async () => { release(new Response(png, { headers: { "Content-Type": "image/png" } })); await device.stop(); });
   await device.configure({ address: harness.url, token: harness.token, enabled: true });
   await waitFor(() => device.status.connection === "connected");
