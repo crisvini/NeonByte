@@ -78,6 +78,7 @@ private:
     SpotifyMarquee titleText_{}, artistText_{};
     SpotifyTextRender textRender_{};
     std::uint64_t nextFrame_ = 0, frameStarted_ = 0, displayNowMs_ = 0;
+    std::array<std::uint8_t,4> diagnosticIp_{};
     int scene_ = -1;
     bool initialized_ = false, animationV2Active_ = false, animationFrameNeedsStart_ = true;
     bool animationNeedsReopen_ = false;

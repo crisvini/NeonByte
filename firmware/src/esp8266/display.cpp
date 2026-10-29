@@ -1,7 +1,9 @@
 #ifdef ARDUINO_ARCH_ESP8266
 #include "neonbyte/esp8266/display.h"
 #include "neonbyte/scene_manager.h"
+#include <ESP8266WiFi.h>
 #include <algorithm>
+#include <cstdio>
 namespace neonbyte {
 namespace {
 constexpr unsigned ANIMATION_REOPEN_RETRY_MS = 1000;
@@ -61,6 +63,7 @@ void DeviceDisplay::setupCredentials(const DeviceConfiguration& configuration) {
 void DeviceDisplay::showGif() {
     if (!initialized_) return;
     if (scene_ != 0) {
+        if (scene_ == 3) panel_.fillScreen(ST77XX_BLACK);
         textRender_ = {};
         scene_ = 0; offset_ = 0; frame_ = 0; nextFrame_ = 0; animationFrameNeedsStart_ = true;
         animationRevision_ = storage_.animationRevision;
@@ -226,6 +229,36 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
     if (!initialized_) return;
     displayNowMs_ = now;
     const auto state = scenes.currentState();
+    if (!state.agentAvailable) {
+        std::array<std::uint8_t,4> address{};
+        if (WiFi.status() == WL_CONNECTED) {
+            const auto ip = WiFi.localIP();
+            for (unsigned i = 0; i < address.size(); ++i) address[i] = ip[i];
+        }
+        const bool entering = scene_ != 3;
+        if (entering) {
+            panel_.fillScreen(ST77XX_BLACK);
+            textRender_ = {};
+            scene_ = 3;
+            textLine("NEONBYTE",72,42,8,ST77XX_GREEN,2);
+            textLine("Agent disconnected",66,75,18,ST77XX_WHITE);
+        }
+        if (entering || address != diagnosticIp_) {
+            if (!entering) panel_.fillRect(0,104,240,44,ST77XX_BLACK);
+            diagnosticIp_ = address;
+            if (address == std::array<std::uint8_t,4>{}) {
+                textLine("Wi-Fi disconnected",66,116,20,ST77XX_WHITE);
+            } else {
+                char ipText[16];
+                std::snprintf(ipText,sizeof(ipText),"%u.%u.%u.%u",unsigned(address[0]),unsigned(address[1]),
+                              unsigned(address[2]),unsigned(address[3]));
+                const auto length = std::char_traits<char>::length(ipText);
+                textLine(ipText,static_cast<int>((240 - length * 12) / 2),116,15,ST77XX_WHITE,2);
+            }
+        }
+        storage_.promoteAnimationCandidateAtBoundary();
+        return;
+    }
     if (state.activeScene == ActiveScene::spotify) {
         storage_.promoteAnimationCandidateAtBoundary();
         if (state.waiting) showSpotifyWaiting();

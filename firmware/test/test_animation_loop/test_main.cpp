@@ -118,6 +118,7 @@ void testRepeatedLoopTransitionsPreserveAllPixelsAndFinalDelay() {
             display_test::panelState = {};
             PersistentStorage storage; installAnimation(storage, frames, finalDelay);
             TestClock clock; SceneManager scenes(clock, storage);
+            scenes.heartbeat();
             TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
             DeviceDisplay display(storage); display.begin();
             std::uint64_t now = 0;
@@ -136,6 +137,8 @@ void testRepeatedLoopTransitionsPreserveAllPixelsAndFinalDelay() {
 
                 now += finalDelay;
                 std::uint64_t simulatedNow = now;
+                clock.now = simulatedNow;
+                scenes.heartbeat();
                 storage.simulatedReadClock = &simulatedNow;
                 storage.simulatedReadDelayMs = 1;
                 const auto beforeReads = storage.animationReadCalls;
@@ -262,6 +265,7 @@ void testLoopDirectoryReadFailureRecoversAtTheFirstKeyframe() {
     display_test::panelState = {};
     PersistentStorage storage; installAnimation(storage, 14, 20);
     TestClock clock; SceneManager scenes(clock, storage);
+    scenes.heartbeat();
     TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
     DeviceDisplay display(storage); display.begin();
     std::uint64_t now = 0;
@@ -302,6 +306,7 @@ void testOptionalRealAnimationLoopsMatchEveryOraclePixel() {
     const unsigned frames = read16(10);
     TEST_ASSERT_EQUAL_UINT(frames * 115200, oracle.size());
     TestClock clock; SceneManager scenes(clock, storage);
+    scenes.heartbeat();
     TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
     DeviceDisplay display(storage); display.begin();
     auto& rows = display_test::panelState.rows;

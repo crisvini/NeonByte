@@ -2,6 +2,7 @@
 #define NEONBYTE_ENABLE_DISPLAY 1
 
 #include "neonbyte/esp8266/display.h"
+#include <ESP8266WiFi.h>
 #include "../../src/esp8266/display.cpp"
 
 #include <unity.h>
@@ -14,6 +15,7 @@
 using namespace neonbyte;
 
 namespace {
+
 bool countHeapAllocations = false;
 std::size_t heapAllocationCount = 0;
 }
@@ -43,6 +45,23 @@ public:
     std::uint64_t monotonicMillis() const override { return now; }
     std::uint64_t unixMillis() const override { return 0; }
 };
+
+void testDisconnectedAgentShowsCurrentStationIp() {
+    display_test::panelState = {};
+    WiFi.connectionStatus = WL_CONNECTED;
+    WiFi.address = {{192, 168, 100, 234}};
+    PersistentStorage storage;
+    TestClock clock;
+    SceneManager scenes(clock, storage);
+    DeviceDisplay display(storage);
+    display.begin();
+    display.tick(scenes, 0);
+    bool found = false;
+    for (const auto& entry : display_test::panelState.texts) {
+        if (entry.text == "192.168.100.234") found = true;
+    }
+    TEST_ASSERT_TRUE(found);
+}
 
 void appendLittleEndian16(std::vector<std::uint8_t>& bytes, std::uint16_t value) {
     bytes.push_back(static_cast<std::uint8_t>(value & 0xff));
@@ -133,6 +152,7 @@ void testGifFrameDelayAndLoopingUseDeviceDisplayTick() {
     installTwoFrameAnimation(storage);
     TestClock clock;
     SceneManager scenes(clock, storage);
+    scenes.heartbeat();
     TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
     DeviceDisplay display(storage);
     display.begin();
@@ -152,6 +172,7 @@ void testV2PlayerDrawsChangedSpansWithoutClearingAndRestartsAtKeyframe() {
     display_test::panelState = {};
     PersistentStorage storage; installV2Animation(storage);
     TestClock clock; SceneManager scenes(clock, storage);
+    scenes.heartbeat();
     TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
     DeviceDisplay display(storage); display.begin();
     auto& panel = display_test::panelState;
@@ -192,6 +213,7 @@ void testV2CandidatePromotionWaitsForFrameBoundaryAndRestartsAtKeyframe() {
     display_test::panelState = {};
     PersistentStorage storage; installV2Animation(storage);
     TestClock clock; SceneManager scenes(clock, storage);
+    scenes.heartbeat();
     TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
     DeviceDisplay display(storage); display.begin();
     auto& panel = display_test::panelState;
@@ -220,6 +242,7 @@ void testV2PlayerReopensFromKeyframeAfterAStorageReadFailure() {
     display_test::panelState = {};
     PersistentStorage storage; installV2Animation(storage);
     TestClock clock; SceneManager scenes(clock, storage);
+    scenes.heartbeat();
     TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
     DeviceDisplay display(storage); display.begin();
     auto& panel = display_test::panelState;
@@ -248,6 +271,7 @@ void testV2PlaybackPreservesFrameOrderAcrossLoopsWithSlowReadsAndServiceGaps() {
     storage.simulatedReadClock = &simulatedTime;
     storage.simulatedReadDelayMs = 1;
     TestClock clock; SceneManager scenes(clock, storage);
+    scenes.heartbeat();
     TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
     DeviceDisplay display(storage); display.begin();
     auto& rows = display_test::panelState.rows;
@@ -278,6 +302,7 @@ void testSlowFrameRenderingDoesNotAddASecondFullDelay() {
     installTwoFrameAnimation(storage);
     TestClock clock;
     SceneManager scenes(clock, storage);
+    scenes.heartbeat();
     TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
     DeviceDisplay display(storage);
     display.begin();
@@ -605,6 +630,7 @@ void testPersistentGifOpenFailureBacksOffAndNewRevisionBypassesWait() {
     display_test::panelState = {};
     PersistentStorage storage; installV2Animation(storage); storage.failAnimationReads = true;
     TestClock clock; SceneManager scenes(clock, storage);
+    scenes.heartbeat();
     TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
     DeviceDisplay display(storage); display.begin();
     display.tick(scenes, 0);
@@ -879,6 +905,7 @@ void testAutoPauseAndExpiryReturnToPreviouslyInstalledGif() {
     tickFrame(display, scenes, clock.now, 0x1234);
     scenes.updateNowPlaying(value); display.tick(scenes, clock.now);
     clock.now += 45001;
+    scenes.heartbeat();
     tickFrame(display, scenes, clock.now, 0x1234);
 }
 
@@ -945,10 +972,135 @@ void testTrackChangeClearsCompletedCoverBeforeNewMetadata() {
     TEST_ASSERT_EQUAL_HEX16(0, panel.rows.back().firstPixel);
 }
 
+bool hasDisplayedText(std::string_view expected) {
+    for (const auto& text : display_test::panelState.texts)
+        if (text.text == expected) return true;
+    return false;
+}
+
+void testDiagnosticUpdatesOnlyWhenWifiOrIpChanges() {
+    display_test::panelState = {};
+    WiFi.connectionStatus = WL_CONNECTED; WiFi.address = {{255, 255, 255, 255}};
+    PersistentStorage storage; TestClock clock; SceneManager scenes(clock, storage);
+    DeviceDisplay display(storage); display.begin(); display.tick(scenes, 0);
+    auto& panel = display_test::panelState;
+    TEST_ASSERT_TRUE(hasDisplayedText("255.255.255.255"));
+    TEST_ASSERT_TRUE(hasDisplayedText("Agent disconnected"));
+    const auto clears = panel.screenClears;
+    const auto textCount = panel.texts.size();
+    heapAllocationCount = 0; countHeapAllocations = true;
+    for (unsigned i = 0; i < 50; ++i) display.tick(scenes, i);
+    countHeapAllocations = false;
+    TEST_ASSERT_EQUAL_UINT32(0, heapAllocationCount);
+    TEST_ASSERT_EQUAL_UINT32(clears, panel.screenClears);
+    TEST_ASSERT_EQUAL_UINT32(textCount, panel.texts.size());
+
+    WiFi.address = {{10, 2, 3, 4}}; display.tick(scenes, 51);
+    TEST_ASSERT_TRUE(hasDisplayedText("10.2.3.4"));
+    TEST_ASSERT_EQUAL_UINT32(clears, panel.screenClears);
+    panel.texts.clear(); WiFi.connectionStatus = 0; display.tick(scenes, 52);
+    TEST_ASSERT_TRUE(hasDisplayedText("Wi-Fi disconnected"));
+    TEST_ASSERT_FALSE(hasDisplayedText("0.0.0.0"));
+    panel.texts.clear(); WiFi.connectionStatus = WL_CONNECTED; WiFi.address = {{0, 0, 0, 0}};
+    display.tick(scenes, 53);
+    TEST_ASSERT_TRUE(panel.texts.empty());
+    WiFi.address = {{192, 168, 1, 7}}; display.tick(scenes, 54);
+    TEST_ASSERT_TRUE(hasDisplayedText("192.168.1.7"));
+}
+
+void testDiagnosticPriorityAndHeartbeatRecoveryInAllModes() {
+    for (const auto mode : {DisplayMode::automatic, DisplayMode::spotify, DisplayMode::gif}) {
+        display_test::panelState = {};
+        WiFi.connectionStatus = 0; WiFi.address = {{192, 168, 1, 7}};
+        PersistentStorage storage; installTwoFrameAnimation(storage);
+        const auto original = storage.animationBytes;
+        TestClock clock; SceneManager scenes(clock, storage);
+        TEST_ASSERT_TRUE(scenes.setMode(mode));
+        DeviceDisplay display(storage); display.begin(); display.tick(scenes, 0);
+        TEST_ASSERT_TRUE(hasDisplayedText("Wi-Fi disconnected"));
+        TEST_ASSERT_TRUE(scenes.mode() == mode);
+        auto& panel = display_test::panelState;
+        panel.texts.clear(); scenes.heartbeat(); display.tick(scenes, 0);
+        if (mode == DisplayMode::spotify) TEST_ASSERT_TRUE(hasDisplayedText("Waiting for playback"));
+        else TEST_ASSERT_EQUAL_UINT32(1, panel.rows.size());
+        TEST_ASSERT_TRUE(scenes.mode() == mode);
+        clock.now = 45000; display.tick(scenes, clock.now);
+        TEST_ASSERT_FALSE(hasDisplayedText("Agent disconnected"));
+        clock.now = 45001; display.tick(scenes, clock.now);
+        TEST_ASSERT_TRUE(hasDisplayedText("Agent disconnected"));
+        panel.texts.clear(); scenes.heartbeat(); display.tick(scenes, clock.now);
+        TEST_ASSERT_FALSE(hasDisplayedText("Agent disconnected"));
+        if (mode == DisplayMode::spotify) TEST_ASSERT_TRUE(hasDisplayedText("Waiting for playback"));
+        TEST_ASSERT_TRUE(scenes.mode() == mode);
+        TEST_ASSERT_TRUE(original == storage.animationBytes);
+        TEST_ASSERT_EQUAL_UINT32(0, storage.animationRevision);
+    }
+}
+
+void testDiagnosticExitRebuildsV2KeyframeWithoutResidualPixels() {
+    display_test::panelState = {};
+    WiFi.connectionStatus = WL_CONNECTED; WiFi.address = {{10, 0, 0, 8}};
+    PersistentStorage storage; installV2Animation(storage);
+    const auto original = storage.animationBytes;
+    TestClock clock; SceneManager scenes(clock, storage);
+    TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
+    scenes.heartbeat(); DeviceDisplay display(storage); display.begin();
+    for (unsigned tick = 0; tick < 80; ++tick) display.tick(scenes, 0);
+    clock.now = 45001; display.tick(scenes, clock.now);
+    TEST_ASSERT_TRUE(hasDisplayedText("10.0.0.8"));
+    scenes.heartbeat();
+    auto& panel = display_test::panelState;
+    const auto initialRows = panel.rows.size();
+    for (unsigned tick = 0; tick < 350 && panel.rows.size() < initialRows + 240; ++tick)
+        display.tick(scenes, clock.now);
+    TEST_ASSERT_EQUAL_UINT32(initialRows + 240, panel.rows.size());
+    for (const auto pixel : panel.pixels) TEST_ASSERT_EQUAL_HEX16(0xf800, pixel);
+    TEST_ASSERT_TRUE(original == storage.animationBytes);
+    TEST_ASSERT_EQUAL_UINT32(0, storage.animationRevision);
+}
+
+void testDiagnosticExitRestoresPlayingSpotifyAndClearsMissingGif() {
+    display_test::panelState = {};
+    WiFi.connectionStatus = WL_CONNECTED; WiFi.address = {{192, 168, 1, 8}};
+    PersistentStorage storage; TestClock clock; SceneManager scenes(clock, storage);
+    auto value = track(); scenes.updateNowPlaying(value);
+    DeviceDisplay display(storage); display.begin(); display.tick(scenes, 0);
+    TEST_ASSERT_TRUE(hasDisplayedText("192.168.1.8"));
+    scenes.heartbeat(); display.tick(scenes, 0);
+    TEST_ASSERT_EQUAL_UINT32(1, display_test::panelState.rows.size());
+    TEST_ASSERT_EQUAL_INT(32, display_test::panelState.rows.front().x);
+    TEST_ASSERT_TRUE(scenes.mode() == DisplayMode::automatic);
+
+    clock.now = 45001; display.tick(scenes, clock.now);
+    TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
+    scenes.heartbeat(); display.tick(scenes, clock.now);
+    for (const auto pixel : display_test::panelState.pixels) TEST_ASSERT_EQUAL_HEX16(ST77XX_BLACK, pixel);
+    TEST_ASSERT_TRUE(scenes.mode() == DisplayMode::gif);
+    TEST_ASSERT_TRUE(storage.animationBytes.empty());
+}
+
+void testDiagnosticAllowsPendingAnimationPromotionWhileIdle() {
+    display_test::panelState = {};
+    WiFi.connectionStatus = 0;
+    PersistentStorage storage; installV2Animation(storage);
+    TestClock clock; SceneManager scenes(clock, storage);
+    DeviceDisplay display(storage); display.begin(); display.tick(scenes, 0);
+    storage.promotionPending = true;
+    display.tick(scenes, 1);
+    TEST_ASSERT_FALSE(storage.promotionPending);
+    TEST_ASSERT_EQUAL_UINT32(1, storage.animationRevision);
+}
+
 } // namespace
 
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(testDisconnectedAgentShowsCurrentStationIp);
+    RUN_TEST(testDiagnosticUpdatesOnlyWhenWifiOrIpChanges);
+    RUN_TEST(testDiagnosticPriorityAndHeartbeatRecoveryInAllModes);
+    RUN_TEST(testDiagnosticExitRebuildsV2KeyframeWithoutResidualPixels);
+    RUN_TEST(testDiagnosticExitRestoresPlayingSpotifyAndClearsMissingGif);
+    RUN_TEST(testDiagnosticAllowsPendingAnimationPromotionWhileIdle);
     RUN_TEST(testGifFrameDelayAndLoopingUseDeviceDisplayTick);
     RUN_TEST(testV2PlayerDrawsChangedSpansWithoutClearingAndRestartsAtKeyframe);
     RUN_TEST(testV2CandidatePromotionWaitsForFrameBoundaryAndRestartsAtKeyframe);
