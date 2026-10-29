@@ -304,6 +304,7 @@ Each phase includes deliverables, tasks, tests, acceptance criteria, and depende
 - [x] Document host memory costs, resource limits, protocol compatibility, and remaining hardware dependencies.
 - [x] Host-test `DeviceDisplay::tick` frame delays, row streaming, frame order, looping, and slow-render behavior with a fake panel and in-memory storage.
 - [x] Host-test zero-capacity animation replacement and verify the installed asset and mode survive a process restart.
+- [x] Investigate and reduce last-to-first NBIF v2 playback overhead offline: coalesce bounded frame-zero row-header reads, remove one idle restart tick, and verify repeated 14/20/48/60-frame seams and the supplied 48-frame GIF. See the [loop transition report](docs/gif-loop-transition.md); physical pause elimination and runtime resource acceptance remain pending.
 
 - [x] Add pinned, locally compilable ESP8266 profiles while retaining native tests and blocking PlatformIO device-operation targets.
 - [x] Bind the core to the ESP8266 clock, cooperative Wi-Fi retry/protected provisioning, and bounded HTTP v1 implementation; validate compilation and portable logic.

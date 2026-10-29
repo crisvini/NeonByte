@@ -177,11 +177,12 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
     }
     if (animationV2Active_) {
         if (!metadataV2_.frameCount || now < nextFrame_) return;
-        const auto status = animationV2_.step();
+        auto status = animationV2_.step();
         if (status == AnimationDecodeStatus::Error) { metadataV2_ = {}; animationNeedsReopen_ = true; return; }
         if (status == AnimationDecodeStatus::AnimationComplete) {
             animationV2_.restart(); animationFrameNeedsStart_ = true; nextFrame_ = now;
-            return;
+            status = animationV2_.step();
+            if (status == AnimationDecodeStatus::Error) { metadataV2_ = {}; animationNeedsReopen_ = true; return; }
         }
         if (animationFrameNeedsStart_) {
             beginAnimationFrame(240,240); frameStarted_ = now; animationFrameNeedsStart_ = false;

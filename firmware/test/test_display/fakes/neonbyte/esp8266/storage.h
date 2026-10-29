@@ -24,6 +24,10 @@ public:
     bool failAnimationReads = false;
     std::uint64_t* simulatedReadClock = nullptr;
     std::uint32_t simulatedReadDelayMs = 0;
+    mutable std::uint32_t animationReadCalls = 0;
+    mutable std::uint32_t animationReadBytes = 0;
+    mutable std::size_t largestAnimationRead = 0;
+    std::uint32_t failAnimationReadCall = 0;
     bool candidateReady = false;
     std::vector<std::uint8_t> animationBytes;
     std::vector<std::uint8_t> candidate;
@@ -79,8 +83,11 @@ public:
         return static_cast<std::uint32_t>(animationBytes.size());
     }
     bool readAnimationAt(std::uint32_t offset, std::uint8_t* destination, std::size_t length) const override {
+        ++animationReadCalls;
+        animationReadBytes += static_cast<std::uint32_t>(length);
+        largestAnimationRead = std::max(largestAnimationRead, length);
         if (simulatedReadClock) *simulatedReadClock += simulatedReadDelayMs;
-        if (failAnimationReads) return false;
+        if (failAnimationReads || animationReadCalls == failAnimationReadCall) return false;
         if (offset > animationBytes.size() || length > animationBytes.size() - offset) return false;
         std::copy_n(animationBytes.data() + offset, length, destination);
         return true;

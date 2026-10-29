@@ -79,6 +79,7 @@ bool AnimationDecoder::open(AnimationV2Metadata& metadata) {
     frameCompletionPending_ = false;
     rowReady_ = false;
     directoryEntryIndex_ = UINT16_MAX;
+    prefetchedHeaderOffset_ = UINT16_MAX;
     error_ = "invalid NBIF v2 header";
     if (encodedRow_ == nullptr || encodedCapacity_ < NBIF_V2_ROW_BUFFER_BYTES ||
         (outputRow_ == nullptr ? outputCapacity_ != 0 :
@@ -326,7 +327,10 @@ AnimationDecodeStatus AnimationDecoder::step() {
     }
 
     std::array<std::uint8_t, NBIF_V2_ROW_HEADER_BYTES> rowHeader{};
-    if (!source_.readAt(rowCursor_, rowHeader.data(), rowHeader.size())) {
+    if (prefetchedHeaderOffset_ != UINT16_MAX) {
+        std::memcpy(rowHeader.data(), encodedRow_ + prefetchedHeaderOffset_, rowHeader.size());
+        prefetchedHeaderOffset_ = UINT16_MAX;
+    } else if (!source_.readAt(rowCursor_, rowHeader.data(), rowHeader.size())) {
         fail("row header read failed");
         return AnimationDecodeStatus::Error;
     }
@@ -344,7 +348,14 @@ AnimationDecodeStatus AnimationDecoder::step() {
         fail("row bounds or order are invalid");
         return AnimationDecodeStatus::Error;
     }
-    if (encodedBytes != 0 && !source_.readAt(rowCursor_, encodedRow_, encodedBytes)) {
+    // Frame zero is rebuilt at every loop. Fold the next header into this read
+    // when it fits, retaining the existing row workspace and one row per step.
+    const bool prefetchHeader = outputRow_ != nullptr && frameIndex_ == 0 &&
+        rowCountRead_ + 1 < entry.rowCount &&
+        encodedBytes <= NBIF_V2_ROW_BUFFER_BYTES - NBIF_V2_ROW_HEADER_BYTES &&
+        entry.recordOffset + entry.recordBytes - rowCursor_ - encodedBytes >= NBIF_V2_ROW_HEADER_BYTES;
+    const auto readBytes = encodedBytes + (prefetchHeader ? NBIF_V2_ROW_HEADER_BYTES : 0);
+    if (readBytes != 0 && !source_.readAt(rowCursor_, encodedRow_, readBytes)) {
         fail("row payload read failed");
         return AnimationDecodeStatus::Error;
     }
@@ -352,6 +363,9 @@ AnimationDecodeStatus AnimationDecoder::step() {
                      : validateRow(codec, encodedRow_, encodedBytes, width))) {
         fail("row payload is malformed");
         return AnimationDecodeStatus::Error;
+    }
+    if (prefetchHeader) {
+        prefetchedHeaderOffset_ = encodedBytes;
     }
     rowCursor_ += encodedBytes;
     previousY_ = y;
@@ -385,6 +399,7 @@ void AnimationDecoder::restart() {
     frameCompletionPending_ = false;
     rowReady_ = false;
     directoryEntryIndex_ = UINT16_MAX;
+    prefetchedHeaderOffset_ = UINT16_MAX;
     error_ = nullptr;
 }
 

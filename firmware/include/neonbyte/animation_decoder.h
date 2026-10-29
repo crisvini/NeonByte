@@ -55,6 +55,8 @@ struct AnimationV2Metadata {
 class AnimationDecoder {
 public:
     // A null output row selects validation-only mode; encodedRow remains caller-owned.
+    // Playback retains a prefetched header there between steps; validation-only
+    // callers can continue sharing/clobbering their scratch between steps.
     AnimationDecoder(const AnimationSource& source, std::uint8_t* outputRow, std::size_t outputCapacity,
                      std::uint8_t* encodedRow, std::size_t encodedCapacity);
 
@@ -96,6 +98,7 @@ private:
     std::array<std::uint16_t, 256> palette_{};
     AnimationV2Metadata metadata_{};
     AnimationFrameInfo frameInfo_{};
+    std::uint16_t prefetchedHeaderOffset_ = UINT16_MAX;
     std::uint32_t rowCursor_ = 0;
     std::uint16_t paletteReadBytes_ = 0;
     std::uint16_t frameIndex_ = 0;
