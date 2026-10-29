@@ -41,6 +41,20 @@ The converted NBIF size is 11 + frameCount × 115,202 bytes, at most 2,304,051 b
 
 Converted GIFs and covers remain in memory for the local session and are discarded when the agent exits. The limits and format exist for the preview and must be reviewed against measured flash, RAM, and speed before any firmware integration. The decoder package is documented at [gifuct-js](https://github.com/matt-way/gifuct-js).
 
+### Preserving a Prepared Animation During Agent Repair
+
+Before restarting an agent with a prepared GIF, export the exact converted bytes
+from loopback `GET /api/animation` and retain its `X-Content-SHA256` header.
+After restart, `POST /api/animation/prepared` accepts those unchanged bytes with
+`Content-Type: application/vnd.neonbyte.animation`, a required lowercase
+`X-Content-SHA256`, and the trusted loopback `Origin`. Optional
+`X-Original-Size-Bytes` preserves the original GIF size statistics (0 through
+8 MiB); omission records an unknown original size. The route checks the existing
+NBIF v2 size limit, hash and complete format, and retains the current preview if
+validation fails. Existing host/origin checks and firmware-update locks apply.
+Restoration only prepares the local preview; device replacement still requires
+its separate explicit action. This API does not provide automatic disk storage.
+
 ## Conventions
 
 - Use UTF-8, LF, and kebab-case filenames for documentation.

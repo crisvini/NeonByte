@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { parseOAuthCallback } from "../spotify/oauth-callback.js";
 import { convertGifToAnimationV2InWorker, createCoverAsset, type AnimationAsset } from "../media/animation.js";
 import { validateAnimationV2 } from "../media/animation-decoder.js";
+import { NBIF_V2_MAX_FILE_BYTES } from "../media/animation-format.js";
 import type { SpotifyOAuthClient } from "../spotify/oauth.js";
 import type { PlaybackPoller } from "../spotify/poller.js";
 import type { PlaybackSnapshot } from "../spotify/types.js";
@@ -550,22 +551,34 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
         return;
       }
 
-      if (url.pathname === "/api/animation") {
-        if (request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== "image/gif") {
-          sendError(response, 415, "Send a GIF file with the image/gif media type.");
+      if (url.pathname === "/api/animation" || url.pathname === "/api/animation/prepared") {
+        const restoring = url.pathname === "/api/animation/prepared";
+        const mediaType = restoring ? "application/vnd.neonbyte.animation" : "image/gif";
+        if (request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== mediaType) {
+          sendError(response, 415, `Send animation data with the ${mediaType} media type.`);
           request.resume();
           return;
         }
         try {
-          const input = await readBody(request, GIF_LIMIT_BYTES);
-          const converted = await convertGifToAnimationV2InWorker(input);
+          const input = await readBody(request, restoring ? NBIF_V2_MAX_FILE_BYTES : GIF_LIMIT_BYTES);
+          let converted: AnimationAsset;
+          const originalSizeBytes = restoring ? Number(request.headers["x-original-size-bytes"] ?? 0) : input.byteLength;
+          if (restoring) {
+            const sha256 = request.headers["x-content-sha256"];
+            if (typeof sha256 !== "string" || !/^[a-f0-9]{64}$/.test(sha256)) throw new Error("Provide the prepared animation's lowercase SHA-256.");
+            if (!Number.isSafeInteger(originalSizeBytes) || originalSizeBytes < 0 || originalSizeBytes > GIF_LIMIT_BYTES) {
+              throw new Error("Provide a valid original GIF size or omit it.");
+            }
+            const metadata = validateAnimationV2(input, sha256);
+            converted = { bytes: input, sha256, frameCount: metadata.frameCount, durationMs: metadata.durationMs };
+          } else converted = await convertGifToAnimationV2InWorker(input);
           const metadata = validateAnimationV2(converted.bytes, converted.sha256);
           if (metadata.width !== 240 || metadata.height !== 240 || metadata.frameCount !== converted.frameCount || metadata.durationMs !== converted.durationMs) {
             throw new Error("The converted NBIF v2 animation failed its local metadata validation.");
           }
           options.device?.setAnimation(converted);
           animation = converted;
-          animationOriginalSizeBytes = input.byteLength;
+          animationOriginalSizeBytes = originalSizeBytes;
           sendJson(response, 201, {
             width: metadata.width,
             height: metadata.height,
@@ -573,8 +586,8 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
             durationMs: converted.durationMs,
             sizeBytes: converted.bytes.length,
             sha256: converted.sha256,
-            originalSizeBytes: input.byteLength,
-            compressionPercent: (1 - converted.bytes.length / input.byteLength) * 100,
+            originalSizeBytes,
+            compressionPercent: originalSizeBytes > 0 ? (1 - converted.bytes.length / originalSizeBytes) * 100 : 0,
             previewSha256: converted.sha256,
           });
         } catch (error) {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { validateCover } from "../src/media/animation.js";
 import { validateAnimationV2 } from "../src/media/animation-decoder.js";
@@ -188,6 +189,7 @@ test("dashboard OTA accepts only loopback-origin metadata actions and never rece
     assert.deepEqual(confirmationAcknowledgements, [true, false]);
     const blocked = await post("/api/mode", JSON.stringify({ mode: "spotify" }));
     assert.equal(blocked.status, 423);
+    assert.equal((await post("/api/animation/prepared")).status, 423);
     for (const terminalState of ["rejected", "transferFailed"] as const) {
       state = terminalState;
       putAttempted = true;
@@ -330,6 +332,41 @@ test("validates GIF uploads and serves the converted fullscreen animation with i
   } finally {
     await app.close();
   }
+});
+
+test("restores exported NBIF v2 after an agent restart without converting the GIF again", async () => {
+  const first = await makeApp();
+  let bytes: Buffer;
+  let sha256: string;
+  try {
+    const converted = await fetch(`${first.origin}/api/animation`, { method: "POST",
+      headers: { Origin: first.origin, "Content-Type": "image/gif" }, body: gif });
+    sha256 = (await converted.json() as { sha256: string }).sha256;
+    bytes = Buffer.from(await (await fetch(`${first.origin}/api/animation`)).arrayBuffer());
+  } finally { await first.app.close(); }
+  const { app, origin } = await makeApp();
+  try {
+    const restore = (body: Buffer, checksum = sha256, requestOrigin = origin) => fetch(`${origin}/api/animation/prepared`, {
+      method: "POST", headers: { Origin: requestOrigin, "Content-Type": "application/vnd.neonbyte.animation",
+        "X-Content-SHA256": checksum, "X-Original-Size-Bytes": String(gif.length) }, body });
+    assert.equal((await restore(bytes, sha256, "https://example.com")).status, 403);
+    assert.equal((await fetch(`${origin}/api/animation`)).status, 404);
+    const restored = await restore(bytes);
+    assert.equal(restored.status, 201);
+    assert.deepEqual(await restored.json(), { width: 240, height: 240, frameCount: 1, durationMs: 100,
+      sizeBytes: bytes.length, sha256, originalSizeBytes: gif.length,
+      compressionPercent: (1 - bytes.length / gif.length) * 100, previewSha256: sha256 });
+    assert.deepEqual(Buffer.from(await (await fetch(`${origin}/api/animation`)).arrayBuffer()), bytes);
+    assert.equal((await restore(bytes, "0".repeat(64))).status, 422);
+    const invalid = Buffer.from("invalid NBIF");
+    assert.equal((await restore(invalid, createHash("sha256").update(invalid).digest("hex"))).status, 422);
+    assert.equal((await restore(bytes, "")).status, 422);
+    assert.equal((await fetch(`${origin}/api/animation/prepared`, { method: "POST", headers: { Origin: origin,
+      "Content-Type": "application/vnd.neonbyte.animation", "X-Content-SHA256": sha256,
+      "X-Original-Size-Bytes": "-1" }, body: bytes })).status, 422);
+    assert.equal((await restore(Buffer.alloc(2_359_297))).status, 413);
+    assert.deepEqual(Buffer.from(await (await fetch(`${origin}/api/animation`)).arrayBuffer()), bytes);
+  } finally { await app.close(); }
 });
 
 test("a device that rejects GIF preparation does not replace the panel's current preview", async () => {
