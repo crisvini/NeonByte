@@ -1,6 +1,6 @@
 # Firmware Development
 
-**Status:** Phase 4 has a native C++17 core and locally compilable ESP8266 runtime adapters. The maintainer confirmed an ESP-12F / ESP8266 module; remaining hardware and Wi-Fi-only installation/recovery gates are unresolved. No device operation has been performed. See the [integration report](esp8266-integration.md) for measured artifact sizes and limitations.
+**Evidence boundary:** The native C++17 core and ESP8266 runtime adapters have host tests and compilation-only profiles. The maintainer confirmed an ESP-12F / ESP8266 module. On 2026-10-29 one GIF replacement and immediate playback were reported on the project unit. This narrow observation does not establish general display, storage, reboot, update, or recovery compatibility. See the [integration report](esp8266-integration.md) for build-artifact evidence.
 
 ## Local Validation
 
@@ -26,7 +26,7 @@ Run PlatformIO jobs sequentially: native test preparation may clean other enviro
 - `esp8266/main.cpp` binds the core to an extended monotonic clock, optional SNTP Unix time, nonblocking station retries, protected AP provisioning/reconfiguration, and a cooperative loop.
 - `esp8266/http_server.cpp` serves a single HTTP/1.1 connection on port 80 with bounded headers/body buffers, authentication before storage/body allocation, incremental binary writes, and incremental staged-file SHA-256.
 - `esp8266/storage.cpp` disables LittleFS autoformat, persists only `/neonbyte/` files, reads candidates after close before promoting settings, and atomically renames verified media. No stock settings migration is attempted.
-- `esp8266/display.cpp` uses the provisional ST7789 profile. Animation and cover pixels stream in 480-byte rows. Covers are sampled from 240 × 240 to centered 176 × 176. The unchanged size-1 built-in font displays up to two bounded lines each for title and artist, substitutes `?` for unsupported Unicode glyphs, and truncates with ASCII dots. Metadata redraws only when visible content changes; progress bars and playback times are absent. See the [display and GIF report](spotify-gif-display.md).
+- `esp8266/display.cpp` uses the provisional ST7789 profile. Animation and cover pixels stream in 480-byte rows. Covers are sampled from 240 × 240 to centered 176 × 176. The current size-2 built-in font shows title and artist in separate one-line viewports, with independent pixel-by-pixel marquees and bounded glyph substitution. Metadata redraws only when visible content changes; progress bars and playback times are absent. Host tests validate the renderer, not its visual appearance or timing on this unit. See the [display and GIF report](spotify-gif-display.md).
 
 ## Configuration and Network Behavior
 
@@ -42,7 +42,7 @@ SNTP uses `pool.ntp.org` and `time.nist.gov`; rendering does not require either.
 
 The linked LittleFS range matches the old artifact's addresses, without demonstrating compatible installed contents. Assets and settings are namespaced. Temporary media files are discarded at boot; installed assets are left intact. Settings are written to a candidate, flushed/closed, reopened, checked byte-for-byte, and renamed only on success. Runtime filesystem faults beyond the modeled failures still require physical validation.
 
-Cover files store a fixed private track-ID prefix together with the NBIC body, so the image and track association change in one rename. Only a matching current track is displayed. Animation files remain the existing NBIF v1 format. Uploads validate exact layout, dimensions, timing, complete staged-file SHA-256, and free-space reserve before replacement. Replacement never removes the installed file first. Same-loop serialization and an asset revision restart playback from frame zero after a successful replacement.
+Cover files store a fixed private track-ID prefix together with the NBIC body, so the image and track association change in one rename. Only a matching current track is displayed. Firmware reads installed NBIF v1 and v2 animations. The original authenticated v1 route uses candidate staging, validation, and atomic promotion, so a failed direct upload preserves the installed asset. The agent's current dashboard flow instead asks for explicit confirmation, removes the installed animation to free storage, and then uploads NBIF v2. A failure after removal leaves the prior animation absent. Same-loop serialization and an asset revision restart playback from frame zero after successful promotion.
 
 Animation timing is measured from the start of frame drawing. If drawing exceeds a frame delay, the loop proceeds as quickly as possible rather than waiting an additional full delay; no measured FPS is claimed. Missing/invalid animation data leaves a black fullscreen GIF scene. Each loop handles up to 512 network/hash bytes and one display row. Firmware validation/copy and filesystem operations can still pause application rendering; OTA is a maintenance operation, not seamless animation playback.
 

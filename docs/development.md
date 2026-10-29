@@ -1,8 +1,8 @@
 # Development
 
-## Repository Status
+## Scope and Hardware Evidence
 
-**Release readiness: NOT RELEASE READY.** Part 6 is **NO-GO** and Part 7 physical acceptance is blocked by missing unit-specific evidence, complete backup/restore, and independent Wi-Fi-only failed-boot recovery. Phases 1 through 3 are complete: documentation, the v1 contract, the Spotify agent, and the local interface with a 240 × 240 simulator. The interface uses the agent's real playback state when Spotify is configured; it displays an explicit unconfigured or unavailable state without a connected account. The preview can run without a connected device. `firmware/` contains a native core and provisional ESP8266 build profiles. The module is visually confirmed as ESP-12F / ESP8266; actual display settings, performance, flash capacity, and recovery remain PENDING. See [firmware development](firmware-development.md) and the [release-readiness report](release-readiness.md).
+This document records contributor commands and implementation details. The desktop agent, local panel, and device client are implemented. One maintainer-reported GIF replacement appeared on the project display on 2026-10-29; it does not establish general firmware installation, reboot persistence, performance, or recovery. The module is visually identified as ESP-12F / ESP8266, while the exact board, display settings, flash capacity, and independent recovery remain unverified. The ESP8266 build profiles are compile checks, not installation images. See [firmware development](firmware-development.md), [hardware evidence](hardware.md), and [recovery limits](recovery.md).
 
 ## Current Requirements and Commands
 
@@ -26,20 +26,20 @@ Agent tests cover PKCE, the loopback callback, refresh, normalization, 204/401/4
 
 To start the agent, configure `.env` when Spotify access is needed, then run `npm --prefix agent run build` and `npm --prefix agent run start`. Open [http://localhost:8787](http://localhost:8787). The server binds only to `127.0.0.1`; `NEONBYTE_PORT` must match the port in `SPOTIFY_REDIRECT_URI` so the OAuth callback returns to the same server. The dashboard can connect Spotify, manually select `auto`, `spotify`, or `gif`, prepare and preview a GIF, configure the device, and access its maintenance controls. Without a valid Client ID it shows Spotify as unconfigured and does not fabricate playback data. Mock providers remain in automated tests.
 
-The simulator keeps its logical composition at 240 × 240 and scales the canvas responsively with CSS. `auto` selects Spotify only when the agent's recent state confirms playback. Manual Spotify mode shows a waiting state without a track; GIF mode and the `auto` fallback fill the entire frame with the animation. The clock status always reads “simulation without a device”; Phase 3 does not connect to the physical unit.
+The panel preview keeps a logical composition at 240 × 240 and scales the canvas responsively with CSS. `auto` selects Spotify only when recent agent state confirms playback. Manual Spotify mode shows a waiting state without a track; GIF mode and the `auto` fallback fill the frame with the animation. The agent also has an optional configured device client that can send track metadata and prepared animation to a device. Its presence does not establish that arbitrary hardware or firmware is compatible, and the local preview is not a remote framebuffer.
 
 ### Simulator Media Intermediate Format
 
-The agent uses `gifuct-js` 2.1.2 (MIT) to read GIF frames. The preview format is now accepted by the provisional firmware v1 binary routes, with hardware performance still unverified:
+The agent uses `gifuct-js` 2.1.2 (MIT) to read GIF frames. It prepares NBIF v2 animation files for the current device upload path and retains an NBIF v1 parser for compatibility. Firmware-side performance and general compatibility remain unverified. The binary formats are documented in [animation-format.md](animation-format.md); NBIF v1 contains:
 
-- `NBIF` (animation): bytes `NBIF`, version `1` (u8), width and height `240` (u16 little-endian), frame count (u16 little-endian); then each frame contains a delay in milliseconds (u16 little-endian) followed by 240 × 240 RGB565 pixels in little-endian order.
+- `NBIF` v1 (animation): bytes `NBIF`, version `1` (u8), width and height `240` (u16 little-endian), frame count (u16 little-endian); then each frame contains a delay in milliseconds (u16 little-endian) followed by 240 × 240 RGB565 pixels in little-endian order. NBIF v1 is the raw RGB565 legacy format, not the current converted upload format.
 - `NBIC` (cover): bytes `NBIC`, version `1` (u8), width and height `240` (u16 little-endian), followed by 240 × 240 RGB565 pixels in little-endian order.
 - The lowercase hexadecimal SHA-256 covers the complete intermediate file, including its header and frame timings.
-- GIF limits: 8 MiB for the original GIF, 60 frames for NBIF v2 (20 for v1), 1,048,576 pixels per logical screen or frame descriptor, 16,777,216 total descriptor pixels for v2 conversion (4,194,304 for v1), and 30 seconds total duration. The Windows agent validates descriptors before decoding and performs conversion in a worker with a 10-second deadline and bounded memory. Frames are composed and encoded one at a time. A frame delay below 20 ms is set to 20 ms; a zero delay is set to 100 ms. The scaling policy is `cover` with a centered crop. GIF disposal method 2 restores the global background color while preserving transparency when the background index matches the transparent index. Device firmware advertises its own v2 frame capacity, and the agent rejects incompatible files before upload.
+- GIF limits: 8 MiB for the original GIF; NBIF v2 permits up to 60 frames, while v1 permits 20; at most 1,048,576 pixels per logical screen or frame descriptor; 16,777,216 total descriptor pixels for v2 conversion (4,194,304 for v1); and 30 seconds total duration. The Windows agent validates descriptors before decoding and performs conversion in a worker with a 10-second deadline and bounded memory. Frames are composed and encoded one at a time. A frame delay below 20 ms is set to 20 ms; a zero delay is set to 100 ms. Scaling uses `cover` with a centered crop. GIF disposal method 2 restores the global background color while preserving transparency when the background index matches the transparent index. Device firmware advertises its own v2 frame capacity, and the agent rejects incompatible files before upload.
 
-The converted NBIF size is 11 + frameCount × 115,202 bytes, at most 2,304,051 bytes. Device replacement also needs the installed asset and 32 KiB staging reserve; insufficient space is reported separately from the original upload limit. The [display report](spotify-gif-display.md) describes layout, capacity feedback and offline color fixtures.
+NBIF v1 size is 11 + frameCount × 115,202 bytes, at most 2,304,051 bytes at 20 frames. NBIF v2 has a 2,359,296-byte file limit and uses palette, row-compression, and frame-difference encoding; the device can advertise a lower frame capacity. Device replacement also needs the installed asset and a 32 KiB staging reserve; insufficient space is reported separately from the original GIF upload limit. The [display report](spotify-gif-display.md) describes layout, capacity feedback, and offline color fixtures.
 
-Converted GIFs and covers remain in memory for the local session and are discarded when the agent exits. The limits and format exist for the preview and must be reviewed against measured flash, RAM, and speed before any firmware integration. The decoder package is documented at [gifuct-js](https://github.com/matt-way/gifuct-js).
+Converted GIFs and covers remain in memory for the local session and are discarded when the agent exits. A direct v1 media upload preserves the current animation if upload fails. The dashboard's v2 replacement flow removes the installed animation before sending its replacement, so a later failure can leave no animation installed. The format and limits must still be reviewed against measured flash, RAM, and speed for any specific firmware. The decoder package is documented at [gifuct-js](https://github.com/matt-way/gifuct-js).
 
 ### Preserving a Prepared Animation During Agent Repair
 
@@ -63,7 +63,7 @@ its separate explicit action. This API does not provide automatic disk storage.
 - The `@napi-rs/keyring` 1.3.0 runtime dependency is MIT-licensed; upstream publishes notices for bundled libraries, including `libdbus` (AFL-2.1 or GPL-2.0-or-later in the Linux binary). Review upstream notices before redistributing binaries.
 - The agent calls only `GET /me/player/currently-playing` with the `user-read-currently-playing` scope.
 - `PlaybackPoller.currentSnapshot` and `subscribe()` form the in-process local interface for future consumers; it does not open a network port or transport tokens.
-- The Spotify cover URL remains internal agent metadata. The dashboard fetches the image only from the permitted media host and converts it for the preview; sending it to the device is for a later phase.
+- The Spotify cover URL remains internal agent metadata. The dashboard fetches the image only from the permitted media host and converts it for local preview; the cover is not sent to the device.
 - `gifuct-js` 2.1.2 is MIT-licensed. Its license files remain in `agent/node_modules` after installation.
 - Firmware language and build configuration depend on hardware identification.
 
@@ -83,9 +83,9 @@ The npm lockfiles pin the installed dependency tree. Direct package metadata and
 
 PlatformIO declares pinned Adafruit ST7735/ST7789, GFX, and BusIO libraries in `firmware/platformio.ini`. Their redistribution notices, all transitive npm notices, and bundled native-library notices must be collected and reviewed before distributing desktop or firmware binaries. No distributable bundle was prepared in this review. The project license is [MIT](../LICENSE).
 
-## Next Phases
+## User Documentation
 
-The agent uses Node.js and TypeScript; firmware is planned for C++ and PlatformIO, with the MCU family confirmed as ESP8266. Clock integration depends on approval for the next phase and hardware validation described in [hardware.md](hardware.md). Installation, authorization, and startup commands are in [installation.md](installation.md).
+Installation and end-user instructions are in [installation.md](installation.md) and the [user guide index](README.md).
 
 - `sharp` 0.35.5 is required to decode compressed Spotify artwork without an
   open browser; the existing converter produces the firmware asset. Sharp is

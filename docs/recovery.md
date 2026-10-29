@@ -1,8 +1,10 @@
 # Device Backup and Recovery
 
-**Status (2026-10-27): NOT RELEASE READY; deployment BLOCKED.** The maintainer visually confirmed ESP-12F / ESP8266 on 2026-10-26. Part 6 recorded **NO-GO** in the [installation decision report](installation-go-no-go.md), and Part 7 remains blocked. No safe Wi-Fi-only backup, first installation, or independent failed-boot recovery procedure has been established. No device requests, uploads, flashes, erases, or filesystem changes were performed. See the [release-readiness report](release-readiness.md).
+**Current recovery boundary:** A complete unit-specific backup and restore procedure, a general first-install procedure, and independent Wi-Fi recovery after a failed boot have not been established. The maintainer confirmed an ESP-12F / ESP8266 module on 2026-10-26. On 2026-10-29, one authorized session read status/capabilities and replaced a 53,489-byte GIF; the maintainer confirmed immediate playback. This limited operation did not prove backup, recovery, reboot persistence, or general installation safety. The [2026-10-27 installation decision](installation-go-no-go.md) remains a dated NO-GO assessment; see [hardware evidence](hardware.md) for later observations.
 
 The [OTA readiness review](ota-readiness-review.md) evaluates which evidence can be collected without device modification and why complete backup and independent Wi-Fi recovery remain unestablished. Its maintenance-only raw staging proposal was implemented offline in Part 4; that work preserves this deployment gate and authorizes no device operation.
+
+The dated assessments below describe the evidence available when each assessment was written. The later single-GIF observation documented above does not close any first-install, backup, failed-boot recovery, persistence, or compatibility gate.
 
 ## Permitted Scope
 

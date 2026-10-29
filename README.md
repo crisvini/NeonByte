@@ -1,84 +1,72 @@
-# NeonByte
+<!-- markdownlint-disable MD033 MD041 -->
 
-NeonByte is an open-source project planned for a JUZIPi SD PRO Wi-Fi display and a desktop agent that reads Spotify playback. The device is intended to have two screens: Spotify Now Playing and fullscreen GIF. The maintainer visually confirmed an ESP-12F / ESP8266 module; display, flash, and boot compatibility remain unverified.
+<p align="center">
+  <img src="assets/branding/neonbyte-retro-original.png" width="280" alt="NeonByte logo with a glowing pink retro television">
+</p>
 
-## Current Status
+<h1 align="center">NeonByte</h1>
 
-The [daily-startup and synchronization report](docs/daily-startup-and-sync.md)
-records offline Spotify/artwork fixes and a private automatic-power-on candidate.
-Post-OTA startup remains explicitly verified and hardware acceptance is pending.
+<p align="center"><strong>A local Spotify and GIF display dashboard with a retro neon look.</strong></p>
 
-**Release readiness: NOT RELEASE READY.** Part 6 concluded **NO-GO**, and Part 7 physical acceptance is blocked. A complete unit-specific backup/restore procedure and independent Wi-Fi-only failed-boot recovery have not been established. No firmware has been validated on the project clock. See the [release-readiness report](docs/release-readiness.md) and [installation decision](docs/installation-go-no-go.md).
+<p align="center">
+  <a href="docs/installation.md">Get started</a> ·
+  <a href="docs/user/spotify.md">Connect Spotify</a> ·
+  <a href="docs/user/usage.md">Use the panel</a> ·
+  <a href="docs/user/troubleshooting.md">Get help</a>
+</p>
 
-The [final OTA safety audit](docs/final-ota-safety-audit.md) records offline startup/recovery corrections, test evidence, and the remaining first-installation and return-to-stock blockers. Installation remains **NO-GO**.
+<!-- markdownlint-enable MD033 MD041 -->
 
-The subsequent [final offline preparation](docs/final-offline-preparation.md) implements a separate authenticated return to the pinned vendor V1.0.6 while NeonByte is running. It includes failure tests, remaining risks and a [conditional physical checklist](docs/pre-installation-checklist.md). It does not provide independent boot recovery or change NO-GO.
+NeonByte is an open-source desktop agent and browser dashboard for a compatible local Wi-Fi display. It reads the current Spotify track, prepares GIFs for a 240 × 240 display, and lets you choose how the display should behave.
 
-**Phases 1, 2, and 3 are complete.** The Node.js/TypeScript Spotify agent uses OAuth PKCE, polling, and state compatible with the v1 contract. The local interface includes a responsive 240 × 240 simulator, a Spotify preview using real playback state when available, prepared GIF previews, display modes, uploads, and device controls. It does not display demonstration playback data. Real-account OAuth validation still requires configured Spotify credentials. Phase 4 includes the native C++ core and previously compiled ESP8266 runtime adapters under provisional assumptions. The [PC-only validation](docs/offline-validation.md) connects an explicitly constructed agent client to that core through loopback HTTP v1; production LAN synchronization remains Phase 5 work. No device has been contacted, flashed, or updated. These software checks do not establish hardware compatibility.
+## What you can do
 
-The 240 × 240 resolution is a planning expectation, not a measurement of this unit. See [hardware investigation](docs/hardware.md) before any work that depends on the board.
+- Show Spotify album art, track title, and artist while a track is playing.
+- Choose `auto`, `spotify`, or `gif` display modes.
+- Convert and preview a GIF locally before choosing whether to send it to a configured device.
+- Run the dashboard on your own computer at `http://localhost:8787`.
 
-On Windows 11, the maintainer reported successful automatic startup at login, hidden execution without a persistent terminal window, and Spotify reconnection after a PC restart. A separate agent-only restart, safe stop, failure-log inspection, and startup removal/restoration have not been manually verified. See the [pending Windows acceptance checklist](docs/installation.md#pending-manual-windows-acceptance).
+The display shows track information; it does not play audio or control Spotify playback. The dashboard preview is rendered locally in your browser and is not a live picture from the physical display.
 
-## Planned Display Modes
+## How it works
 
-| Mode | With active playback and a connected agent | Without playback or when the agent is unavailable |
-|---|---|---|
-| **auto** | Spotify Now Playing | Fullscreen GIF |
-| **spotify** | Spotify Now Playing | Spotify waiting screen |
-| **gif** | Fullscreen GIF | Fullscreen GIF |
+- The desktop agent reads playback from the Spotify Web API and serves the local dashboard.
+- Your browser talks to that agent on the same computer.
+- If you already have a compatible device and firmware, the agent can send playback and prepared animation over your local network after you configure and enable the device connection.
 
-The simulator applies the manually selected mode to its local preview. The agent persists that selection locally and synchronizes it only after an explicit selection; Spotify polling and GIF preparation do not change the mode. The agent reads and normalizes real playback state. Firmware persistence and runtime adapters are implemented and compile-validated; physical behavior and production LAN integration remain pending.
+## Requirements
 
-## Repository Structure
+- Windows 11 is the primary desktop setup described in this guide.
+- Node.js 22 or 24 and npm. CI exercises these Node.js major versions.
+- Git and an Internet connection for setup, Spotify authorization, and playback updates.
+- A Spotify account and a Spotify Developer app configured for Development Mode. Spotify currently requires the app owner to have Premium, limits each developer to one Development Mode Client ID, and allows up to five authorized users for an app in this mode. Review Spotify's [current quota rules](https://developer.spotify.com/documentation/web-api/concepts/quota-modes).
+- To use a physical display, an already running compatible NeonByte firmware and a local device address and credentials.
 
-~~~text
-.
-├── agent/                 # Spotify agent, dashboard, and Node.js/TypeScript simulator
-├── assets/branding/       # Preserved original NeonByte logo used by the dashboard
-├── assets/samples/        # Reserved for future samples
-├── contracts/v1/          # Contract schemas and examples
-├── docs/                  # Hardware, protocol, development, and pending items
-├── firmware/              # Native core and provisional ESP8266 integration
-├── simulator/             # Reserved location; simulator is served by agent/src/web
-├── tests/                 # v1 contract tests
-├── AGENTS.md
-├── PLANNING.md
-└── README.md
-~~~
+The dashboard and agent can run without a device. The repository does not yet establish a general, validated procedure for first-time firmware installation or independent recovery after a failed boot. A maintainer reported that one GIF replacement completed and appeared on the project display on October 29, 2026. That observation does not validate other installation paths, reboot persistence, or long-term operation; see [hardware limits](docs/hardware.md) and [recovery limits](docs/recovery.md).
 
-## Validation
+## Get started
 
-Use Node.js 22 or 24, the major versions exercised by CI. Package metadata declares Node.js 22 or later, but CI does not validate every supported major. On Linux, the keyring library can fall back to a nonpersistent kernel keyring when Secret Service is unavailable, so refresh-token persistence across restarts is not guaranteed. On Windows, the agent uses Credential Manager. See [development requirements and dependency notes](docs/development.md).
+1. [Install the desktop agent on Windows 11](docs/installation.md).
+2. [Configure the local agent](docs/user/configuration.md).
+3. [Create a Spotify app and connect your account](docs/user/spotify.md).
+4. [Choose a mode and prepare a GIF](docs/user/usage.md).
+5. If you already have a compatible device, follow the device-connection notes in [configuration](docs/user/configuration.md).
 
-~~~sh
-npm ci
-npm ci --prefix agent
-npm run lint
-npm test
-# or
-npm run check
-~~~
+## Display modes
 
-`npm run check` also checks language consistency, verifies types, and runs the agent tests. To authorize and start the agent, copy `.env.example` to `.env`, set `SPOTIFY_CLIENT_ID`, register the exact redirect URI in the Spotify Developer Dashboard, and run:
+| Mode | What appears |
+|---|---|
+| `auto` | Spotify while recent playback state confirms a playing track; otherwise the device's GIF scene. |
+| `spotify` | Spotify when a track is playing, or a waiting state when there is no current track. |
+| `gif` | The GIF scene regardless of Spotify playback. |
 
-~~~sh
-npm --prefix agent run build
-npm --prefix agent run start
-~~~
+The firmware independently expires stale Spotify metadata after 45 seconds. A dashboard preview reflects local agent state and can differ temporarily from the device while the device retains a still-fresh sample.
 
-Open [http://localhost:8787](http://localhost:8787), connect Spotify with the button, and choose a mode. Without a valid Client ID, the interface reports that Spotify is not configured and does not invent playback data; local mode selection, GIF preparation, and device settings remain available. The `auth` command remains available if you prefer to authorize without opening the interface. The refresh token is stored in the system credential manager; tokens are not written to `.env` or logs. `SPOTIFY_POLL_INTERVAL_MS` configures the polling interval (15 seconds by default). See [development](docs/development.md) and [installation](docs/installation.md) for details.
+## Help and details
 
-Run `npm run test:offline` for PC-only agent-to-native-core validation. It builds a host test executable and requires a C++17 compiler and OpenSSL development headers. It uses loopback networking and mock Spotify data; it does not build firmware or contact a device. See the [results and remaining gaps](docs/offline-validation.md).
-
-## Documentation
-
-- [Planning and phase boundaries](PLANNING.md)
-- [Instructions for coding agents](AGENTS.md)
-- [Hardware and unknowns](docs/hardware.md)
-- [HTTP v1 contract](docs/protocol.md)
-- [Development](docs/development.md)
-- [Installation](docs/installation.md)
-- [Recovery](docs/recovery.md)
-- [Release readiness](docs/release-readiness.md)
+- [Documentation index](docs/README.md)
+- [Troubleshoot a problem](docs/user/troubleshooting.md)
+- [Device hardware evidence](docs/hardware.md)
+- [Recovery limits](docs/recovery.md)
+- [HTTP protocol](docs/protocol.md) and [animation format](docs/animation-format.md)
 - [License](LICENSE)

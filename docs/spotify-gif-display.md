@@ -127,12 +127,14 @@ margin, or HTTP/Wi-Fi responsiveness. Those hardware measurements remain
 
 ## Auto and Installed GIF Preservation
 
-Scene selection, manual modes and the independent 45-second heartbeat and metadata
-expiry rules are unchanged. Auto shows Spotify only for fresh confirmed playback;
-pause, no playback or expiry returns to the installed GIF. Native display tests
-exercise that switch through the real renderer and verify frame zero is read from
-the previously installed asset. Existing offline tests retain persistence,
-interrupted replacement, zero-capacity replacement and process-restart coverage.
+The current mode matrix is `auto` (Spotify for recent confirmed playback,
+otherwise GIF), `spotify` (Spotify while playing, otherwise its waiting state),
+and `gif` (always GIF). The device independently expires stale Spotify metadata
+after 45 seconds. Native display tests exercise scene selection through the real
+renderer and verify frame zero is read from the previously installed asset.
+Earlier offline tests cover persistence, interrupted replacement, zero-capacity
+replacement, and process-restart behavior; the dashboard's current replacement
+sequence is destructive as described below.
 
 ## Original GIF and Converted Storage Limits
 
@@ -147,18 +149,20 @@ limit are rejected; conversion does not silently discard frames.
 
 Decoded logical/frame pixels remain limited to 1,048,576 per canvas/descriptor and
 16,777,216 source descriptor pixels per v2 conversion (4,194,304 for the v1 path).
-Timing normalization, SHA-256 validation, atomic replacement and firmware storage
-admission are unchanged. No runtime dependency is added.
+Timing normalization, SHA-256 validation, and firmware storage admission are
+unchanged. A direct validated upload promotes its candidate atomically, but the
+dashboard first removes the installed animation to free space. No runtime
+dependency is added.
 
-Before uploading an animation the agent checks its converted length against the
-device's reported free storage, retaining the existing 32 KiB staging reserve and
-installed asset. Insufficient space produces a distinct `blocked` dashboard state
-with advice to choose fewer frames and confirmation that the installed GIF remains
-available. Synchronization and heartbeats continue, and each subsequent cycle
-rechecks space; ordinary communication failures retain existing retries. A device
-413 response also maps to a fixed safe capacity message without echoing its body.
-The status check is advisory: filesystem allocation or concurrent changes can
-still reject an upload with the existing generic conflict/retry behavior.
+Before removing the installed animation, the agent checks NBIF v2 support and
+frame, duration, and encoded-size limits. It then removes the installed animation,
+receives the resulting available-space count, checks the converted size against
+the device-reported 32 KiB reserve, and starts the upload. Insufficient space,
+cancellation, communication loss, validation failure, or another error after
+removal can leave the device without its previous animation. The dashboard keeps
+the converted animation in memory for an explicit retry during the current agent
+session. A direct upload that does not use the dashboard's removal workflow
+retains its existing atomic candidate-promotion behavior.
 
 ## Color Investigation
 

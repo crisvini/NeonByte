@@ -1,6 +1,6 @@
 # Local HTTP v1 Contract
 
-**Status:** the native core and provisional ESP8266 runtime implement v1. The runtime has compiled locally; no device endpoint has been contacted or deployed. An explicitly constructed agent client is validated against the native core in the [PC-only runner](offline-validation.md); the desktop agent can opt in to scheduled metadata, heartbeat, artwork, mode, and animation synchronization. The agent's simulator routes under `/api/*` are private to the local interface. Hardware compatibility and installation are PENDING.
+**Status:** the native core and provisional ESP8266 runtime implement v1, and the runtime has compiled locally. An explicitly constructed agent client is validated against the native core in the [PC-only runner](offline-validation.md). The desktop agent can opt in to scheduled metadata, heartbeat, artwork, mode, and animation synchronization. On 2026-10-29 one authenticated physical session read status/capabilities and replaced a GIF, followed by maintainer-confirmed playback. That observation does not establish general hardware compatibility, storage reliability, reboot persistence, or installation/recovery safety. The agent's simulator routes under `/api/*` are private to the local interface.
 
 ## Transport and Compatibility
 
@@ -29,7 +29,7 @@ Initial timeout interpretation: a missing heartbeat for 45 seconds makes the age
 
 The native firmware also expires Spotify metadata independently using the same timeout, even when heartbeats continue. Its age includes the nonnegative Unix sample age at receipt plus monotonic elapsed time since receipt; exactly 45 seconds remains fresh. Expired metadata selects GIF in `auto` and the waiting state in `spotify`. Fresh playback samples must therefore arrive within the timeout. Heartbeats record presence only. The ESP8266 adapter attempts SNTP; until Unix time is known, receipt freshness uses monotonic time and cannot reliably distinguish replayed old samples. The [core review](firmware-core-review.md) explains the underlying clock limitations.
 
-The suggested Spotify polling interval is 15 seconds and will be configurable in the agent. Keeping `spotify` on its waiting screen after heartbeat expiration reconciles the mode matrix with the planning timeout behavior; revisit this if the maintainer wants the timeout to override manual mode as well.
+The agent polls Spotify every 15 seconds by default; configure this with `SPOTIFY_POLL_INTERVAL_MS`. A manual `spotify` selection stays on its waiting screen without a current track, including when playback metadata expires. Only `auto` falls back to GIF when playback is absent or stale.
 
 | Mode | Recent agent update and track playing | No track, paused, or agent stale |
 |---|---|---|
@@ -55,7 +55,7 @@ The suggested Spotify polling interval is 15 seconds and will be configurable in
 }
 ~~~
 
-The Spotify display shows a centered 176 × 176 cover and two bounded title/artist fields with unchanged font sizes. It has no progress bar or playback times, and progress-only updates do not redraw metadata. The existing timing fields remain in v1 for compatibility.
+The Spotify display shows a centered 176 × 176 cover, with title and artist in separate one-line marquees. It has no progress bar or playback times, and progress-only updates do not redraw metadata. The existing timing fields remain in v1 for compatibility.
 
 The agent must clamp `progressMs` to `durationMs`. The firmware advances progress locally between updates and corrects it when it receives another timestamp. Initial text limits are 256 characters for `trackId`, `title`, and `artist`; keep them aligned across schemas, agent, and firmware.
 
@@ -136,7 +136,7 @@ the advertised values before opening an upload. An explicit capability-route
 404 permits a v1 fallback only for an animation of at most 20 frames; an
 over-limit animation is rejected without truncation or fallback.
 
-The ESP8266 profile accepts `application/octet-stream`, an exact nonzero `Content-Length`, and `X-Content-SHA256`: lowercase hexadecimal SHA-256 of the complete body. These limits describe the local implementation, not measured hardware performance. It rejects chunked transfers, `Expect`, duplicate sensitive headers, and incomplete input. Uploads use candidate files; checksum/format validation occurs after close and before atomic rename. Failed uploads preserve the installed asset.
+The ESP8266 v1 profile accepts `application/octet-stream`, an exact nonzero `Content-Length`, and `X-Content-SHA256`: lowercase hexadecimal SHA-256 of the complete body. These limits describe the local implementation, not measured hardware performance. It rejects chunked transfers, `Expect`, duplicate sensitive headers, and incomplete input. Direct uploads use candidate files; checksum/format validation occurs after close and before atomic rename. A failed direct upload preserves the installed asset. The dashboard's explicit v2 replacement flow removes the installed animation before starting the upload; failures after removal leave it absent. See the [v2 replacement sequence](#nbif-v2-animation-uploads).
 
 - Cover body: `NBIC`, version `1` (u8), width `240` and height `240` (u16 little-endian), followed by 115,200 little-endian RGB565 bytes. Example header bytes: `4e 42 49 43 01 f0 00 f0 00`.
 - `X-Track-Id` encodes the UTF-8 track ID with percent escapes, as produced by `encodeURIComponent`. For example, `track%2Fexample` identifies `track/example`; `+` is literal. Decoding must produce 1–256 Unicode code points. A 4,096-byte header budget accommodates the maximally percent-encoded 1,024-byte field and ordinary required headers.

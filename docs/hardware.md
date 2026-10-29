@@ -1,6 +1,6 @@
 # Hardware Investigation
 
-**Status (2026-10-27): NOT RELEASE READY.** The maintainer visually confirmed an **ESP-12F / ESP8266** module in the project unit on 2026-10-26. Part 6 concluded **NO-GO** and Part 7 remains blocked; the [installation decision report](installation-go-no-go.md) records the evidence and blockers. Display wiring, physical flash capacity, installed layout, power, boot compatibility, backup, and recovery remain **PENDING**. No device endpoint has been contacted and no firmware has been uploaded. See the [release-readiness report](release-readiness.md).
+**Current evidence boundary:** The maintainer visually confirmed an **ESP-12F / ESP8266** module in the project unit on 2026-10-26. On 2026-10-29, one authorized session read status/capabilities, replaced a 53,489-byte GIF, and the maintainer confirmed that it appeared on the display. This is evidence for that operation and immediate playback only; it does not establish reboot persistence, endurance, or general installation compatibility. The broader hardware, backup, and recovery gates remain pending. See the [dated installation decision](installation-go-no-go.md) for the original gate and [release-readiness review](release-readiness.md) for its scope.
 
 ## Evidence and Its Limits
 
@@ -36,11 +36,11 @@ The [safe first-boot report](safe-first-boot.md) documents host-tested provision
 
 ## Firmware and Storage Boundaries
 
-The native environment remains the default. ESP8266 code provides Wi-Fi, a bounded HTTP server, persisted bearer/configuration/mode, namespaced asset staging, RGB565 rows, animation playback, and gated OTA. These are compile-validated implementations, not physical validation. No agent-to-device client is implemented in this phase.
+The native environment remains the default. ESP8266 code provides Wi-Fi, a bounded HTTP server, persisted bearer/configuration/mode, namespaced asset staging, RGB565 rows, animation playback, and gated OTA. The desktop agent includes a device client. Host tests, target compilation, and the reported single GIF replacement do not validate all display, storage, update, or recovery behavior on this hardware.
 
 The 4m3m linker map retains the stock-researched filesystem offsets; it does not change device partitions during compilation. Runtime mounts explicitly disable autoformat. Code writes only under `/neonbyte/`, does not migrate stock configuration or activation data, and exposes no filesystem updater or erase route. Even a matching address range does not prove filesystem-version compatibility or that mounting/writing would preserve all stock behavior.
 
-A 240 × 240 RGB565 frame has 115,200 pixel bytes, too large for the chosen row buffer strategy. The implementation streams 480-byte rows. Up to 20 NBIF frames occupy 2,304,051 bytes; available space and atomic replacement can impose a much lower limit.
+A 240 × 240 RGB565 frame has 115,200 pixel bytes, too large for the chosen row buffer strategy. The implementation streams 480-byte rows. A maximally sized NBIF v1 animation with 20 frames occupies 2,304,051 bytes. NBIF v2 uses palettes, row compression, and frame differences; its encoded file limit is 2,359,296 bytes for up to 60 frames, subject to the firmware's advertised capacity and actual free storage. Neither limit establishes physical flash capacity or animation performance.
 
 ## Open Hardware and Installation Blockers
 

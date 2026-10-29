@@ -386,7 +386,7 @@ physical acceptance criteria are verified.
 
 - [x] Windows 11: validate automatic agent startup at **login** and hidden execution without a persistent terminal window (maintainer report).
 - [x] Validate real Spotify reconnection after the reported Windows restart (maintainer report).
-- [ ] Validate safe shutdown, accessible failure logs, startup removal, and a separate agent-only restart with real Spotify credentials; follow the [pending manual Windows checklist](docs/installation.md#pending-manual-windows-acceptance). Installation/removal and logging instructions are documented.
+- [ ] Validate safe shutdown, accessible failure logs, startup removal, and a separate agent-only restart with real Spotify credentials; follow the [Windows startup instructions](docs/installation.md#optional-startup-at-windows-login). Installation/removal and logging instructions are documented.
 - [ ] Prevent multiple concurrent instances, log errors without exposing tokens, and shut down cleanly.
 - [x] Document a reproducible Windows installation on the Node.js 22/24 major lines exercised by CI, including dependencies, configuration, credential storage, and optional startup removal.
 - [x] Reconcile `README.md`, desktop installation guidance, recovery status, and known limitations with the Part 6 **NO-GO** decision.
