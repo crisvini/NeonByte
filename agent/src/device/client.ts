@@ -1,4 +1,6 @@
 import { isIP } from "node:net";
+import { request as httpRequest } from "node:http";
+import { Readable } from "node:stream";
 import { createHash } from "node:crypto";
 import type { AnimationAsset, MediaAsset } from "../media/animation.js";
 import { ANIMATION_HEADER_BYTES, COVER_BYTES, DISPLAY_HEIGHT, DISPLAY_WIDTH, MEDIA_VERSION, validateAnimation, validateCover } from "../media/animation.js";
@@ -175,6 +177,51 @@ async function safeFirmwareError(response: Response): Promise<{ code: string; me
   return { code: receipt["code"], ...(message ? { message } : {}) };
 }
 
+function requestWithoutBody(url: URL, method: string, headers: Record<string, string>, timeoutMs: number,
+                            signal: AbortSignal): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    let responseReceived = false;
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    const request = httpRequest(url, { method, headers, signal }, (incoming) => {
+      responseReceived = true;
+      const status = incoming.statusCode;
+      if (status === undefined || status < 200 || status > 599) {
+        incoming.resume();
+        fail(new Error("The device returned an invalid HTTP response."));
+        return;
+      }
+      if ([301, 302, 303, 307, 308].includes(status) && incoming.headers.location !== undefined) {
+        incoming.resume();
+        fail(new Error("Device redirects are disabled."));
+        request.destroy();
+        return;
+      }
+      const responseHeaders = new Headers();
+      for (const [name, value] of Object.entries(incoming.headers)) {
+        if (value !== undefined) responseHeaders.set(name, Array.isArray(value) ? value.join(", ") : value);
+      }
+      const hasNoBody = status === 204 || status === 205 || status === 304;
+      if (hasNoBody) incoming.resume();
+      settled = true;
+      resolve(new Response(hasNoBody ? null : Readable.toWeb(incoming), {
+        status,
+        ...(incoming.statusMessage ? { statusText: incoming.statusMessage } : {}),
+        headers: responseHeaders,
+      }));
+    });
+    request.setTimeout(timeoutMs, () => request.destroy(new Error("The device request timed out.")));
+    request.on("error", (error: Error) => {
+      if (!responseReceived) fail(error);
+    });
+    request.end();
+  });
+}
+
 function isPrivateDeviceAddress(hostname: string): boolean {
   if (hostname === "[::1]") return true;
   if (isIP(hostname) !== 4) return false;
@@ -186,6 +233,7 @@ export class DeviceClient {
   private readonly baseUrl: URL;
   private readonly token: string;
   private readonly fetchDevice: typeof fetch;
+  private readonly useNativeHttpForEmptyBody: boolean;
   private readonly timeoutMs: number;
   private readonly hasTimeoutOverride: boolean;
   private lastPlayback: NowPlayingV1 | null = null;
@@ -199,6 +247,7 @@ export class DeviceClient {
     if (!options.token || /[\r\n]/.test(options.token)) throw new Error("Provide a valid device pairing token.");
     this.token = options.token;
     this.fetchDevice = options.fetchDevice ?? fetch;
+    this.useNativeHttpForEmptyBody = options.fetchDevice === undefined;
     this.timeoutMs = options.timeoutMs ?? 10_000;
     this.hasTimeoutOverride = options.timeoutMs !== undefined;
     if (!Number.isInteger(this.timeoutMs) || this.timeoutMs < 1) throw new Error("Use a positive device timeout.");
@@ -209,12 +258,17 @@ export class DeviceClient {
                         signal?: AbortSignal): Promise<Response> {
     try {
       const publicStatus = method === "GET" && path === "/api/v1/status";
-      const response = await this.fetchDevice(new URL(path, this.baseUrl), {
-        method, redirect: "error", signal: signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs),
-        headers: { ...headers, ...(publicStatus ? {} : { Authorization: `Bearer ${this.token}` }),
-          ...(method === "GET" ? {} : { "Content-Length": String(body === undefined ? 0 : Buffer.byteLength(body)) }) },
-        ...(body === undefined ? {} : { body }),
-      });
+      const url = new URL(path, this.baseUrl);
+      const requestSignal = signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs);
+      const requestHeaders = { ...headers, ...(publicStatus ? {} : { Authorization: `Bearer ${this.token}` }),
+        ...(method === "GET" ? {} : { "Content-Length": String(body === undefined ? 0 : Buffer.byteLength(body)) }) };
+      const bodyLength = body === undefined ? 0 : Buffer.byteLength(body);
+      const response = this.useNativeHttpForEmptyBody && method !== "GET" && bodyLength === 0
+        ? await requestWithoutBody(url, method, requestHeaders, timeoutMs, requestSignal)
+        : await this.fetchDevice(url, {
+          method, redirect: "error", signal: requestSignal, headers: requestHeaders,
+          ...(body === undefined ? {} : { body }),
+        });
       const expected = acceptedStatuses ?? [method === "GET" ? 200 : 204];
       if (!expected.includes(response.status)) {
         if (path === "/api/v1/animation" && response.status === 413) throw new AnimationStorageError();

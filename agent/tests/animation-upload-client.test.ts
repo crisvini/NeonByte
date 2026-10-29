@@ -244,6 +244,55 @@ test("explicit replacement confirms NBIF v2 compatibility, deletes the installed
   assert.ok(statusPolls > 0);
 });
 
+test("replacement sends an authenticated HTTP Content-Length zero before device removal", async () => {
+  const animation = makeAnimation();
+  const token = "replacement-framing-test";
+  const removalRequests: Array<{ contentLength: string | undefined; transferEncoding: string | undefined; authenticated: boolean }> = [];
+  let removed = false;
+  let uploadStarted = false;
+  const server = createServer((request, response) => {
+    void (async () => {
+      for await (const chunk of request) assert.equal(Buffer.from(chunk).length, 0);
+      const sendJson = (statusCode: number, value: unknown) => {
+        const body = Buffer.from(JSON.stringify(value));
+        response.writeHead(statusCode, { "Content-Type": "application/json", "Content-Length": String(body.length), Connection: "close" }).end(body);
+      };
+      const method = request.method ?? "GET";
+      const path = request.url ?? "/";
+      if (method === "GET" && path === "/api/v1/status") { sendJson(200, status); return; }
+      if (method === "DELETE" && path === "/api/v2/animation") {
+        removalRequests.push({ contentLength: request.headers["content-length"],
+          transferEncoding: request.headers["transfer-encoding"], authenticated: request.headers.authorization === `Bearer ${token}` });
+        if (request.headers["content-length"] !== "0" || request.headers["transfer-encoding"] !== undefined) {
+          sendJson(400, { code: "invalid_request", message: "Use unambiguous HTTP/1.1 framing and Content-Length." });
+          return;
+        }
+        if (request.headers.authorization !== `Bearer ${token}`) { sendJson(401, { code: "unauthorized", message: "A valid bearer token is required." }); return; }
+        removed = true;
+        sendJson(200, { removed: true, freeStorageBytes: 0 });
+        return;
+      }
+      if (request.headers.authorization !== `Bearer ${token}`) { sendJson(401, { code: "unauthorized", message: "A valid bearer token is required." }); return; }
+      if (method === "GET" && path === "/api/v2/media-capabilities") { sendJson(200, capabilities); return; }
+      if (method === "POST" && path === "/api/v2/animation/uploads") uploadStarted = true;
+      sendJson(404, { code: "not_found", message: "The route was not found." });
+    })().catch((error: unknown) => { response.destroy(error instanceof Error ? error : undefined); });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const client = new DeviceClient({ baseUrl: `http://127.0.0.1:${address.port}`, token, timeoutMs: 1000 });
+  try {
+    await assert.rejects(client.replaceAnimation(animation), AnimationStorageError);
+    assert.deepEqual(removalRequests, [{ contentLength: "0", transferEncoding: undefined, authenticated: true }]);
+    assert.equal(removed, true);
+    assert.equal(uploadStarted, false, "the transfer must wait for a valid removal receipt and storage check");
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("a lost close-delimited removal receipt is diagnosed and the same converted asset can be retried safely", async () => {
   const animation = makeAnimation();
   const receipt = Buffer.from(JSON.stringify({ removed: true, freeStorageBytes: capabilities.freeStorageBytes }));
@@ -251,6 +300,7 @@ test("a lost close-delimited removal receipt is diagnosed and the same converted
   let installedAnimation = true;
   let receivedBytes = 0;
   let unauthorized = false;
+  const emptyBodyFrames: Array<{ method: string; path: string; contentLength: string | undefined; transferEncoding: string | undefined }> = [];
   const server = createServer((request, response) => {
     void (async () => {
       const chunks: Buffer[] = [];
@@ -258,6 +308,8 @@ test("a lost close-delimited removal receipt is diagnosed and the same converted
       const body = Buffer.concat(chunks);
       const method = request.method ?? "GET";
       const path = request.url ?? "/";
+      if (method !== "GET" && body.length === 0) emptyBodyFrames.push({ method, path,
+        contentLength: request.headers["content-length"], transferEncoding: request.headers["transfer-encoding"] });
       if (!(method === "GET" && path === "/api/v1/status") && request.headers.authorization !== "Bearer replacement-test") {
         unauthorized = true;
         response.writeHead(401, { Connection: "close", "Content-Length": "0" }).end();
@@ -324,6 +376,10 @@ test("a lost close-delimited removal receipt is diagnosed and the same converted
     assert.equal(removalRequests, 2, "a retry repeats the authenticated idempotent removal");
     assert.equal(receivedBytes, animation.bytes.length, "the cached NBIF v2 is uploaded without reconversion");
     assert.equal(unauthorized, false, "all mutating requests carry the configured bearer credential");
+    assert.ok(emptyBodyFrames.some(({ method, path }) => method === "DELETE" && path === "/api/v2/animation"));
+    assert.ok(emptyBodyFrames.some(({ method, path }) => method === "POST" && path === "/api/v2/animation/uploads/b16b00b5/complete"));
+    assert.ok(emptyBodyFrames.every(({ contentLength, transferEncoding }) => contentLength === "0" && transferEncoding === undefined),
+      "every bodyless mutating request must use Content-Length: 0 without chunked framing");
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
