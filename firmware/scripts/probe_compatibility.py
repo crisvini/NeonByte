@@ -26,14 +26,15 @@ def extractFunction(source, signature):
     raise ValueError(f"Unterminated definition of {signature}")
 
 
-def runProbe(directory, name, source):
+def runProbe(directory, name, source, extraFlags=None):
     sourcePath = directory / f"{name}.cpp"
     binaryPath = directory / name
     sourcePath.write_text(source, encoding="utf-8")
     sanitizerFlags = (["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie"]
                       if os.environ.get("NEONBYTE_PROBE_SANITIZERS") == "1" else [])
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-Wall", "-Wextra",
-                    "-Werror", *sanitizerFlags, str(sourcePath), "-o", str(binaryPath)], check=True)
+                    "-Werror", *sanitizerFlags, *(extraFlags or []), str(sourcePath),
+                    "-o", str(binaryPath)], check=True)
     result = subprocess.run([str(binaryPath)], capture_output=True, text=True, cwd=directory)
     if result.returncode:
         raise RuntimeError(f"{name} failed ({result.returncode}): {result.stderr.strip()}")

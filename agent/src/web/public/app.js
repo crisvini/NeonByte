@@ -518,8 +518,8 @@ const SPOTIFY_LINE_HEIGHT = 20;
 const SPOTIFY_TEXT_X = 8;
 const SPOTIFY_TEXT_VIEWPORT_WIDTH = 224;
 const SPOTIFY_MARQUEE_START_DELAY_MS = 1500;
-const SPOTIFY_MARQUEE_INTERVAL_MS = 125;
-const SPOTIFY_MARQUEE_STEP_PIXELS = 3;
+const SPOTIFY_MARQUEE_INTERVAL_MS = 40;
+const SPOTIFY_MARQUEE_STEP_PIXELS = 1;
 const SPOTIFY_TITLE_FONT = "600 16px system-ui, sans-serif";
 const SPOTIFY_ARTIST_FONT = "16px system-ui, sans-serif";
 
@@ -628,9 +628,8 @@ function drawSpotify(now) {
   previousSpotifyCoverPresent = Boolean(coverImage);
   spotifySceneActive = true;
 
-  if (!advanceSpotifyMarquee(spotifyTitleMarquee, SPOTIFY_TITLE_Y, "#ffffff", SPOTIFY_TITLE_FONT, now)) {
-    advanceSpotifyMarquee(spotifyArtistMarquee, SPOTIFY_ARTIST_Y, "#9c9e9c", SPOTIFY_ARTIST_FONT, now);
-  }
+  advanceSpotifyMarquee(spotifyTitleMarquee, SPOTIFY_TITLE_Y, "#ffffff", SPOTIFY_TITLE_FONT, now);
+  advanceSpotifyMarquee(spotifyArtistMarquee, SPOTIFY_ARTIST_Y, "#9c9e9c", SPOTIFY_ARTIST_FONT, now);
 }
 
 function drawGif(now) {

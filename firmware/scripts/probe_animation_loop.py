@@ -48,7 +48,11 @@ def main():
                         str(production / "firmware/src/animation_decoder.cpp"),
                         str(repository / "firmware/src/animation_reader.cpp"),
                         str(repository / "firmware/src/scene_manager.cpp"),
-                        str(build / "unity.o"), str(build / "hooks.o"), "-o", str(build / "probe")])
+                        str(build / "unity.o"), str(build / "hooks.o")])
+        spotifyText = production / "firmware/src/spotify_text.cpp"
+        if spotifyText.is_file():
+            command.append(str(spotifyText))
+        command.extend(["-o", str(build / "probe")])
         subprocess.run(command, check=True)
         subprocess.run([str(build / "probe")], check=True)
 

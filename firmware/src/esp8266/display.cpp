@@ -5,6 +5,7 @@
 namespace neonbyte {
 namespace {
 constexpr unsigned ANIMATION_REOPEN_RETRY_MS = 1000;
+constexpr unsigned SPOTIFY_TEXT_ROWS_PER_TICK = 2;
 
 bool metadataMatches(std::string_view text, const SpotifyMarquee& result, const std::uint8_t* cachedText) {
     unsigned index = 0;
@@ -22,7 +23,7 @@ void metadataText(std::string_view text, SpotifyMarquee& result, std::uint8_t* c
         if (result.length == MAX_TEXT_CODE_POINTS) break;
         cachedText[result.length++] = character >= 32 && character < 127 ? character : '?';
     }
-    result.offset = 0; result.reverse = false; result.lastStepMs = now;
+    result.offset = 0; result.reverse = false; result.lastStepMs = now; result.needsRender = true;
 }
 } // namespace
 
@@ -60,6 +61,7 @@ void DeviceDisplay::setupCredentials(const DeviceConfiguration& configuration) {
 void DeviceDisplay::showGif() {
     if (!initialized_) return;
     if (scene_ != 0) {
+        textRender_ = {};
         scene_ = 0; offset_ = 0; frame_ = 0; nextFrame_ = 0; animationFrameNeedsStart_ = true;
         animationRevision_ = storage_.animationRevision;
         animationNeedsReopen_ = !openAnimation();
@@ -77,59 +79,135 @@ bool DeviceDisplay::openAnimation() {
 void DeviceDisplay::showSpotifyWaiting() {
     if (!initialized_) return;
     if (scene_ != 1) {
+        textRender_ = {};
         panel_.fillScreen(ST77XX_BLACK); textLine("Waiting for playback",20,116,32,ST77XX_WHITE); scene_ = 1;
     }
 }
-void DeviceDisplay::drawSpotifyText(const SpotifyMarquee& text, const std::uint8_t* cachedText,
-                                  int y, std::uint16_t color, bool clear) {
-    if (clear) panel_.fillRect(0,y,240,SPOTIFY_TEXT_LINE_HEIGHT,ST77XX_BLACK);
-    constexpr int cellWidth = 6 * SPOTIFY_TEXT_SIZE;
-    const int x = static_cast<int>(SPOTIFY_TEXT_X) - text.offset;
-    const unsigned first = x < 0 ? static_cast<unsigned>(-x / cellWidth) : 0;
-    const unsigned end = std::min<unsigned>(text.length,static_cast<unsigned>((240 - x + cellWidth - 1) / cellWidth));
-    const std::string_view visibleText{reinterpret_cast<const char*>(cachedText),text.length};
-    if (first < end) textLine(visibleText.substr(first,end-first),x + static_cast<int>(first) * cellWidth,y,end-first,color,SPOTIFY_TEXT_SIZE);
-}
-bool DeviceDisplay::updateMarquee(SpotifyMarquee& text, const std::uint8_t* cachedText,
-                                int y, std::uint16_t color, std::uint64_t now) {
-    const unsigned width = text.length * 6 * SPOTIFY_TEXT_SIZE;
-    if (width <= SPOTIFY_TEXT_VIEWPORT_WIDTH) return false;
-    const unsigned end = width - SPOTIFY_TEXT_VIEWPORT_WIDTH;
-    const bool atEnd = text.offset == 0 || text.offset == end;
-    const auto interval = atEnd ? SPOTIFY_MARQUEE_PAUSE_MS : SPOTIFY_MARQUEE_INTERVAL_MS;
-    if (now - text.lastStepMs < interval) return false;
-    if (text.reverse) text.offset = text.offset > SPOTIFY_MARQUEE_STEP_PIXELS ? text.offset - SPOTIFY_MARQUEE_STEP_PIXELS : 0;
-    else text.offset = std::min<unsigned>(end,text.offset + SPOTIFY_MARQUEE_STEP_PIXELS);
-    if (text.offset == end) text.reverse = true;
-    else if (text.offset == 0) text.reverse = false;
-    text.lastStepMs = now;
-    drawSpotifyText(text,cachedText,y,color,true);
+
+bool DeviceDisplay::startSpotifyTextRender(std::uint64_t now) {
+    if (textRender_.active) return true;
+
+    const auto textWidth = [](const SpotifyMarquee& text) {
+        return static_cast<unsigned>(text.length) * 6 * SPOTIFY_TEXT_SIZE;
+    };
+    const auto endpoint = [&](const SpotifyMarquee& text) {
+        const unsigned width = textWidth(text);
+        return text.offset == 0 || (width > SPOTIFY_TEXT_VIEWPORT_WIDTH &&
+            text.offset == width - SPOTIFY_TEXT_VIEWPORT_WIDTH);
+    };
+    const auto eligible = [&](const SpotifyMarquee& text) {
+        if (text.needsRender) return true;
+        if (textWidth(text) <= SPOTIFY_TEXT_VIEWPORT_WIDTH) return false;
+        const auto interval = endpoint(text) ? SPOTIFY_MARQUEE_PAUSE_MS : SPOTIFY_MARQUEE_INTERVAL_MS;
+        return now - text.lastStepMs >= interval;
+    };
+
+    const bool titleEligible = eligible(titleText_);
+    const bool artistEligible = eligible(artistText_);
+    if (!titleEligible && !artistEligible) return false;
+
+    const bool artist = artistEligible &&
+        (!titleEligible || artistText_.lastStepMs < titleText_.lastStepMs);
+    auto& text = artist ? artistText_ : titleText_;
+    textRender_ = {};
+    textRender_.active = true;
+    textRender_.artist = artist;
+    textRender_.startedAtMs = now;
+    textRender_.targetOffset = text.offset;
+    textRender_.targetReverse = text.reverse;
+
+    if (!text.needsRender) {
+        const unsigned end = textWidth(text) - SPOTIFY_TEXT_VIEWPORT_WIDTH;
+        if (text.reverse) {
+            textRender_.targetOffset = text.offset > 0
+                ? text.offset - SPOTIFY_MARQUEE_STEP_PIXELS : 0;
+            textRender_.targetReverse = textRender_.targetOffset != 0;
+        } else {
+            textRender_.targetOffset = std::min<unsigned>(end,
+                text.offset + SPOTIFY_MARQUEE_STEP_PIXELS);
+            textRender_.targetReverse = textRender_.targetOffset == end;
+        }
+        textRender_.moving = true;
+        text.needsRender = true;
+        // The older deadline moves first, even when both display ticks are late.
+        text.lastStepMs = now;
+    }
     return true;
+}
+
+void DeviceDisplay::renderSpotifyTextRows(std::uint64_t now) {
+    if (!textRender_.active || scene_ != 2) return;
+    auto& text = textRender_.artist ? artistText_ : titleText_;
+    const auto* cachedText = encodedWorkspace_.data() +
+        (textRender_.artist ? MAX_TEXT_CODE_POINTS : 0);
+    const unsigned y = textRender_.artist ? SPOTIFY_ARTIST_Y : SPOTIFY_TITLE_Y;
+    const std::uint16_t color = textRender_.artist ? 0x9cf3 : ST77XX_WHITE;
+
+    for (unsigned count = 0; count < SPOTIFY_TEXT_ROWS_PER_TICK &&
+         textRender_.nextRow < SPOTIFY_TEXT_ROW_HEIGHT; ++count,++textRender_.nextRow) {
+        const std::string_view content{reinterpret_cast<const char*>(cachedText),text.length};
+        if (!composeSpotifyTextRow(content,textRender_.targetOffset,textRender_.nextRow,color,
+                                   pixels_.data(),pixels_.size())) {
+            textRender_ = {};
+            return;
+        }
+        panel_.startWrite(); panel_.setAddrWindow(0,y+textRender_.nextRow,SPOTIFY_TEXT_ROW_WIDTH,1);
+        for (unsigned x = 0; x < SPOTIFY_TEXT_ROW_WIDTH; ++x) {
+            const auto pixel = static_cast<std::uint16_t>(pixels_[x*2]) |
+                static_cast<std::uint16_t>(static_cast<std::uint16_t>(pixels_[x*2+1]) << 8);
+            panel_.SPI_WRITE16(pixel);
+        }
+        panel_.endWrite();
+    }
+    if (textRender_.nextRow < SPOTIFY_TEXT_ROW_HEIGHT) return;
+
+    const auto render = textRender_;
+    text.needsRender = false;
+    text.offset = render.targetOffset;
+    text.reverse = render.targetReverse;
+    const unsigned width = static_cast<unsigned>(text.length) * 6 * SPOTIFY_TEXT_SIZE;
+    const unsigned end = width > SPOTIFY_TEXT_VIEWPORT_WIDTH
+        ? width - SPOTIFY_TEXT_VIEWPORT_WIDTH : 0;
+    const bool atEndpoint = text.offset == 0 || (end != 0 && text.offset == end);
+    text.lastStepMs = render.moving && !atEndpoint ? render.startedAtMs : now;
+    textRender_ = {};
 }
 void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t) {
     if (!initialized_) return;
     const bool entering = scene_ != 2;
-    if (entering) panel_.fillScreen(ST77XX_BLACK);
+    if (entering) { panel_.fillScreen(ST77XX_BLACK); textRender_ = {}; }
     const bool trackChanged = displayedTrack_.view() != track.trackId.view();
     if (trackChanged && !entering) panel_.fillRect(32,4,SPOTIFY_COVER_SIZE,SPOTIFY_COVER_SIZE,ST77XX_BLACK);
-    if (entering || trackChanged || coverRevision_ != storage_.assetRevision) {
+    const bool coverChanged = entering || trackChanged || coverRevision_ != storage_.assetRevision;
+    if (coverChanged) {
         displayedTrack_ = track.trackId;
         coverRow_ = 0; coverRevision_ = storage_.assetRevision;
+        if (textRender_.active && textRender_.moving) {
+            auto& renderingText = textRender_.artist ? artistText_ : titleText_;
+            renderingText.needsRender = true;
+            textRender_ = {};
+        }
     }
     scene_ = 2;
     auto* titleCache = encodedWorkspace_.data();
     auto* artistCache = titleCache + MAX_TEXT_CODE_POINTS;
     const bool titleChanged = entering || !metadataMatches(track.title.view(),titleText_,titleCache);
     const bool artistChanged = entering || !metadataMatches(track.artist.view(),artistText_,artistCache);
-    if (entering || titleChanged || (trackChanged && titleText_.offset)) {
+    if (entering || titleChanged) {
         metadataText(track.title.view(),titleText_,titleCache,displayNowMs_);
-        drawSpotifyText(titleText_,titleCache,SPOTIFY_TITLE_Y,ST77XX_WHITE,!entering);
+        if (textRender_.active && !textRender_.artist) textRender_ = {};
     }
-    if (entering || artistChanged || (trackChanged && artistText_.offset)) {
+    if (entering || artistChanged) {
         metadataText(track.artist.view(),artistText_,artistCache,displayNowMs_);
-        drawSpotifyText(artistText_,artistCache,SPOTIFY_ARTIST_Y,0x9cf3,!entering);
+        if (textRender_.active && textRender_.artist) textRender_ = {};
     }
-    if (trackChanged) { titleText_.lastStepMs = displayNowMs_; artistText_.lastStepMs = displayNowMs_; }
+    if (trackChanged) {
+        textRender_ = {};
+        for (auto* text : {&titleText_,&artistText_}) {
+            text->needsRender = true;
+            text->offset = 0; text->reverse = false; text->lastStepMs = displayNowMs_;
+        }
+    }
 }
 void DeviceDisplay::beginAnimationFrame(std::uint16_t, std::uint16_t) {}
 void DeviceDisplay::writeAnimationPixels(std::uint32_t offset, const std::uint8_t* pixels, std::size_t length) {
@@ -167,11 +245,9 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
                 if (coverRow_ == SPOTIFY_COVER_SIZE) {
                     titleText_.lastStepMs = now; artistText_.lastStepMs = now;
                 }
-            } else if (artistText_.lastStepMs < titleText_.lastStepMs) {
-                if (!updateMarquee(artistText_,encodedWorkspace_.data()+MAX_TEXT_CODE_POINTS,SPOTIFY_ARTIST_Y,0x9cf3,now))
-                    updateMarquee(titleText_,encodedWorkspace_.data(),SPOTIFY_TITLE_Y,ST77XX_WHITE,now);
-            } else if (!updateMarquee(titleText_,encodedWorkspace_.data(),SPOTIFY_TITLE_Y,ST77XX_WHITE,now)) {
-                updateMarquee(artistText_,encodedWorkspace_.data()+MAX_TEXT_CODE_POINTS,SPOTIFY_ARTIST_Y,0x9cf3,now);
+            } else {
+                startSpotifyTextRender(now);
+                renderSpotifyTextRows(now);
             }
         }
         return;

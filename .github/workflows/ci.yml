@@ -55,6 +55,8 @@ jobs:
         run: python firmware/scripts/probe_compatibility.py
       - name: Probe pinned RGB565 SPI byte order offline
         run: python firmware/scripts/probe_display_colors.py
+      - name: Compare Spotify scanlines with the pinned GFX font offline
+        run: python firmware/scripts/probe_spotify_text.py
       - name: Probe stock restoration HTTP admission offline
         run: python firmware/scripts/probe_stock_http.py
       - name: Probe HTTP connection lifecycle offline

@@ -44,6 +44,8 @@ struct PanelState {
     std::vector<RowWrite> rows;
     std::vector<Rectangle> rectangles;
     std::vector<TextWrite> texts;
+    std::size_t totalRowWrites = 0;
+    bool captureRowHistory = true;
     unsigned screenClears = 0;
     std::uint32_t initializationFrequency = 0;
     std::uint32_t drawingFrequency = 0;
@@ -106,23 +108,39 @@ public:
     void setAddrWindow(int x, int y, int width, int height) {
         activeRow_ = -1;
         if (x >= 0 && y >= 0 && y < 240 && x + width <= 240 && height == 1) {
-            neonbyte::display_test::panelState.rows.push_back({x, width, y, 0, 0, {}});
-            activeRow_ = static_cast<int>(neonbyte::display_test::panelState.rows.size() - 1);
+            auto& panel = neonbyte::display_test::panelState;
+            ++panel.totalRowWrites;
+            activeX_ = x;
+            activeY_ = y;
+            activeWidth_ = width;
+            activePixelCount_ = 0;
+            if (panel.captureRowHistory) {
+                panel.rows.push_back({x, width, y, 0, 0, {}});
+                activeRow_ = static_cast<int>(panel.rows.size() - 1);
+            } else {
+                activeRow_ = -2;
+            }
         }
     }
     void SPI_WRITE16(std::uint16_t pixel) {
-        if (activeRow_ < 0) return;
-        auto& row = neonbyte::display_test::panelState.rows[static_cast<std::size_t>(activeRow_)];
-        if (row.pixelCount == 0) row.firstPixel = pixel;
-        if (row.pixelCount < static_cast<std::size_t>(row.width))
-            neonbyte::display_test::panelState.pixels[row.y * 240 + row.x + row.pixelCount] = pixel;
-        ++row.pixelCount;
-        row.pixels.push_back(pixel);
+        if (activeRow_ == -1) return;
+        auto& panel = neonbyte::display_test::panelState;
+        if (activePixelCount_ < static_cast<std::size_t>(activeWidth_))
+            panel.pixels[activeY_ * 240 + activeX_ + activePixelCount_] = pixel;
+        if (activeRow_ >= 0) {
+            auto& row = panel.rows[static_cast<std::size_t>(activeRow_)];
+            if (row.pixelCount == 0) row.firstPixel = pixel;
+            row.pixels.push_back(pixel);
+            ++row.pixelCount;
+        }
+        ++activePixelCount_;
     }
     void endWrite() {}
 
 private:
     int activeRow_ = -1;
+    int activeX_ = 0, activeY_ = 0, activeWidth_ = 0;
+    std::size_t activePixelCount_ = 0;
     std::uint32_t frequency_ = 0;
     int cursorX_ = 0, cursorY_ = 0;
     std::uint8_t textSize_ = 1;

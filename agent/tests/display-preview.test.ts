@@ -97,7 +97,7 @@ test("Spotify preview scrolls a long title after a pause without redrawing the c
   display.run("drawSpotify(2500);");
   assert.equal(display.texts.length, 3);
   assert.deepEqual(display.texts.slice(2).map(({ value, x, y, clip }) => ({ value, x, y, clip })), [
-    { value: "T".repeat(50), x: 5, y: 190, clip: [0, 190, 240, 20] },
+    { value: "T".repeat(50), x: 7, y: 190, clip: [0, 190, 240, 20] },
   ]);
   assert.deepEqual(display.covers, [[32, 4, 176, 176]]);
   assert.deepEqual(display.rectangles.slice(1), [[0, 190, 240, 20]]);
@@ -111,7 +111,7 @@ test("Spotify preview scrolls a long artist independently from a static title", 
   drawSpotify(1500);`);
   assert.equal(display.texts.length, 3);
   assert.deepEqual(display.texts.slice(2).map(({ value, x, y }) => ({ value, x, y })), [
-    { value: "A".repeat(40), x: 5, y: 211 },
+    { value: "A".repeat(40), x: 7, y: 211 },
   ]);
   assert.deepEqual(display.texts.slice(0, 1).map(({ value, x, y }) => ({ value, x, y })), [
     { value: "Title", x: 8, y: 190 },
@@ -129,7 +129,7 @@ test("Spotify preview resets both marquee positions and delay when the track cha
   assert.deepEqual(resetLines.map(({ x, y }) => [x, y]), [[8, 190], [8, 211]]);
   const resetCount = display.texts.length;
   display.run("drawSpotify(3500); drawSpotify(3501);");
-  assert.deepEqual(display.texts.slice(resetCount).map(({ x, y }) => [x, y]), [[5, 190], [5, 211]]);
+  assert.deepEqual(display.texts.slice(resetCount).map(({ x, y }) => [x, y]), [[7, 190], [7, 211]]);
 });
 
 test("Spotify preview pauses at the far edge before reversing", async () => {
@@ -137,13 +137,13 @@ test("Spotify preview pauses at the far edge before reversing", async () => {
   display.run(`status = { snapshot: { status: "playing", nowPlaying: {
     trackId: "track", title: "T".repeat(40), artist: "Short"
   } } }; coverImage = { naturalWidth: 240, naturalHeight: 240 }; drawSpotify(0); drawSpotify(1500);
-  for (let step = 1; step < 86; step += 1) drawSpotify(1500 + step * 125);`);
+  for (let step = 1; step < 256; step += 1) drawSpotify(1500 + step * 40);`);
   assert.equal(display.texts.at(-1)?.x, -248);
   const loopCount = display.texts.length;
-  display.run("drawSpotify(13624);");
+  display.run("drawSpotify(13199);");
   assert.equal(display.texts.length, loopCount);
-  display.run("drawSpotify(13625);");
-  assert.equal(display.texts.at(-1)?.x, -245);
+  display.run("drawSpotify(13200);");
+  assert.equal(display.texts.at(-1)?.x, -247);
 });
 
 test("Spotify preview restarts timing when delayed artwork appears and on scene reentry", async () => {
@@ -153,11 +153,11 @@ test("Spotify preview restarts timing when delayed artwork appears and on scene 
   } } }; drawSpotify(0); drawSpotify(1500);`);
   const beforeCover = display.texts.length;
   display.run(`coverImage = { naturalWidth: 240, naturalHeight: 240 }; coverLoadId += 1;
-    drawSpotify(1550); drawSpotify(1674);`);
+    drawSpotify(1550); drawSpotify(1589);`);
   assert.equal(display.texts.length, beforeCover);
   assert.deepEqual(display.covers, [[32, 4, 176, 176]]);
-  display.run("drawSpotify(1675);");
-  assert.equal(display.texts.at(-1)?.x, 4);
+  display.run("drawSpotify(1590);");
+  assert.equal(display.texts.at(-1)?.x, 6);
   display.run("spotifySceneActive = false; drawSpotify(2000);");
   assert.deepEqual(display.texts.slice(-2).map(({ x, y }) => [x, y]), [[8, 190], [8, 211]]);
 });

@@ -8,42 +8,51 @@ Other physical acceptance and backup/recovery gates remain pending. A later
 pre-correction color-chart observation is recorded below; the corrected candidate
 still needs visual confirmation.
 
-## Current Firmware Text Behavior (2026-10-28)
+## Current Firmware Text Behavior (2026-10-29)
 
-Title and artist retain their original positions, colors and 2x font. Fields
-of at most 18 cells remain still. Longer fields move independently by three
-pixels per 125 ms, reversing after a 1.5-second pause at either end. The first
-pause starts after all 176 cover rows have been drawn. A later cover revision
-suspends movement until its rows have been drawn; changes to one metadata field
-restart that field, and track or scene changes restart both. Unsupported Unicode
-code points use one replacement cell. Each field has a bounded 256-cell cache.
+Title and artist retain their original positions, colors, 2x built-in GFX font,
+and 224-pixel inset viewport. Text wider than the viewport moves independently
+by exactly one physical pixel per step, with a 40 ms minimum interval and a
+1,500 ms pause at each end. Short fields stay still. The display sends two
+complete RGB565 scanlines per cooperative tick, so a 20-row field takes ten
+ticks to compose. If the loop cannot complete that work within the interval,
+the observed speed will be lower than 25 pixels per second. Delayed ticks still
+advance one pixel at a time and the older field deadline is serviced first.
 
-Each animation step clears only its own 240 by 20 text strip and draws visible
-glyphs, with at most one animated field per loop. It does not allocate a
-framebuffer or perform a per-frame allocation. The preview uses the same cell
-width, timing and direction; browser glyph shapes and artwork timing may differ
-from the device. Browser artwork is drawn as one operation, while the firmware
-streams one cover row per cooperative loop iteration.
+Each output scanline combines black background and glyph pixels before the
+ST7789 transfer. It reuses the existing 480-byte `pixels_` buffer; no
+framebuffer, large additional buffer, or per-update heap allocation is used.
+The renderer embeds the 475-byte printable-ASCII subset of the pinned Adafruit
+GFX 1.11.11 classic font in `PROGMEM`, and an offline probe compares its pixels
+against that library's actual `drawChar()` implementation. Unsupported Unicode
+code points still use one replacement cell. Cover rows remain higher priority
+than text composition, and the 512-byte workspace continues to be shared by the
+Spotify caches and GIF decoder. GIF playback code is unchanged.
 
-The earlier marquee updated both text strips before drawing the next cover row.
-Each strip clear transmits 4,800 pixels, at least 3.84 ms of pixel data at the
-configured 20 MHz SPI rate, before commands and glyph drawing. Each cover row
-also opens and checks its track-bound LittleFS file. These operations share the
-loop with HTTP and Wi-Fi service, so their combined latency is a plausible source
-of contention; a physical failure was not reproduced or diagnosed. A missing or
-mismatched cover, storage read failure, or failed artwork transfer can also leave
-the cover black. GIF decoding, cover storage and network processing are unchanged.
+The web preview keeps its existing appearance and font, but now uses the same
+one-pixel, 40 ms motion cadence and advances title and artist independently.
+Its browser glyph metrics remain different from the physical GFX rasterizer.
 
-Display tests exercise delayed and updated artwork, independent fields and
-unchanged cover pixels. Actual LCD flicker, runtime heap and stack margin, Wi-Fi
-responsiveness, cover transfers and GIF timing remain pending physical validation.
+At the configured 20 MHz SPI clock, one 240-pixel RGB565 line carries 480 bytes
+and has a 192 microsecond raw wire-time lower bound. A two-line tick therefore
+has a 384 microsecond pixel-data lower bound; one 20-row field sends 9,600 bytes
+over ten ticks. When both fields move once per 40 ms, their combined raw pixel
+traffic occupies about 19.2% of the SPI bit rate, before commands and CPU
+rasterization. Sustaining 25 pixels per second for both fields also requires the
+main loop to provide at least 20 composition ticks per 40 ms, or one tick every
+2 ms on average. Compile-time and native probes cannot establish the actual
+ESP8266 loop cadence, LCD scanout artifacts, Wi-Fi responsiveness, or physical
+cover-transfer behavior; those remain pending device validation.
 
-Offline PlatformIO builds compared the same two existing compilation profiles
-before and after this change. The provisional profile changed from 46,160 to
-46,692 bytes of static RAM and from 384,643 to 385,247 bytes of reported flash.
-The integration-check profile changed from 46,160 to 46,692 bytes of static RAM
-and from 385,667 to 386,287 bytes of reported flash. These measurements do not
-establish installed hardware compatibility or runtime memory availability.
+Compared with commit `8333039`, both local ESP8266 compilation profiles use
+46,228 bytes of linked static RAM, up 16 bytes from 46,212. The provisional
+profile reports 387,171 bytes of flash, up 1,120 from 386,051; the
+integration-check profile reports 388,211 bytes, up 1,120 from 387,091. The
+480-byte line buffer and 512-byte shared workspace are unchanged; the new
+per-render state accounts for the 16-byte static RAM increase. The font table
+is in flash, and the offline heap counter observes zero allocations over a
+complete text update. These compilation profiles do not establish installed
+hardware compatibility or available runtime stack/heap margin.
 
 The following sections describe earlier revisions and their historical results.
 

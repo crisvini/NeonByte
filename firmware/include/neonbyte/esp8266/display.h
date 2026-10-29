@@ -3,6 +3,7 @@
 #include "neonbyte/animation_decoder.h"
 #include "neonbyte/esp8266/storage.h"
 #include "neonbyte/scene_manager.h"
+#include "neonbyte/spotify_text.h"
 #include <Adafruit_ST7789.h>
 namespace neonbyte {
 // Researched from another SD PRO unit. Every display setting is provisional.
@@ -17,13 +18,20 @@ constexpr unsigned SPOTIFY_TITLE_Y = 190;
 constexpr unsigned SPOTIFY_ARTIST_Y = 211;
 constexpr unsigned SPOTIFY_TEXT_LINE_HEIGHT = 20;
 constexpr unsigned SPOTIFY_MARQUEE_PAUSE_MS = 1500;
-constexpr unsigned SPOTIFY_MARQUEE_INTERVAL_MS = 125;
-constexpr unsigned SPOTIFY_MARQUEE_STEP_PIXELS = 3;
+constexpr unsigned SPOTIFY_MARQUEE_INTERVAL_MS = 40;
+constexpr unsigned SPOTIFY_MARQUEE_STEP_PIXELS = 1;
 struct SpotifyMarquee {
     std::uint64_t lastStepMs = 0;
     std::uint16_t offset = 0, length = 0;
-    bool reverse = false;
+    bool reverse = false, needsRender = false;
 };
+struct SpotifyTextRender {
+    std::uint64_t startedAtMs = 0;
+    std::uint16_t targetOffset = 0;
+    std::uint8_t nextRow = 0;
+    bool active = false, artist = false, moving = false, targetReverse = false;
+};
+static_assert(sizeof(SpotifyTextRender) <= 24);
 
 class BoundedDisplayPanel final : public Adafruit_ST7789 {
 public:
@@ -50,10 +58,8 @@ private:
     bool openAnimation();
     void textLine(std::string_view text, int x, int y, unsigned limit, std::uint16_t color,
                   unsigned size = 1);
-    void drawSpotifyText(const SpotifyMarquee& text, const std::uint8_t* cachedText,
-                         int y, std::uint16_t color, bool clear);
-    bool updateMarquee(SpotifyMarquee& text, const std::uint8_t* cachedText,
-                       int y, std::uint16_t color, std::uint64_t now);
+    bool startSpotifyTextRender(std::uint64_t now);
+    void renderSpotifyTextRows(std::uint64_t now);
     PersistentStorage& storage_;
     std::array<std::uint8_t,480> pixels_{};
     // GIF: dedicated encoded row (including its prefetched header). Spotify:
@@ -70,6 +76,7 @@ private:
     std::uint16_t frame_ = 0, coverRow_ = SPOTIFY_COVER_SIZE;
     FixedText displayedTrack_{};
     SpotifyMarquee titleText_{}, artistText_{};
+    SpotifyTextRender textRender_{};
     std::uint64_t nextFrame_ = 0, frameStarted_ = 0, displayNowMs_ = 0;
     int scene_ = -1;
     bool initialized_ = false, animationV2Active_ = false, animationFrameNeedsStart_ = true;
