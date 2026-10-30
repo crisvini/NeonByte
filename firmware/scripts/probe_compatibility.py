@@ -76,6 +76,16 @@ constexpr uint8_t SPI_MODE3 = 0x11;
 constexpr int DISPLAY_BACKLIGHT = 5, OUTPUT = 1, HIGH = 1, LOW = 0;
 void pinMode(int, int) {}
 void digitalWrite(int, int) {}
+class FakeSPI {
+public:
+    inline static std::vector<uint8_t> writtenBytes;
+    inline static std::vector<uint32_t> writeLengths;
+    void writeBytes(const uint8_t* bytes, uint32_t length) {
+        writtenBytes.insert(writtenBytes.end(), bytes, bytes + length);
+        writeLengths.push_back(length);
+    }
+};
+FakeSPI fakeSPI;
 ''' + constants + "\n" + frequency + "\n" + panelSource[tableStart:tableEnd] + r'''
 class Adafruit_ST77xx {
 public:
@@ -100,6 +110,8 @@ public:
     void setSPISpeed(uint32_t frequency) { busFrequency = frequency; }
     void invertDisplay(bool) {}
     void fillScreen(uint16_t) {}
+protected:
+    struct { FakeSPI* _spi = &fakeSPI; } hwspi;
 };
 class Adafruit_ST7789 : public Adafruit_ST77xx {
 public:
@@ -132,6 +144,10 @@ int main() {
     DeviceDisplay display;
     display.begin();
     assert(display.initialized_);
+    alignas(4) const uint8_t pixelBytes[] = {0x12,0x34,0x56,0x78};
+    display.panel_.writePixelBytes(pixelBytes, sizeof(pixelBytes));
+    assert(FakeSPI::writeLengths == std::vector<uint32_t>({sizeof(pixelBytes)}));
+    assert(FakeSPI::writtenBytes == std::vector<uint8_t>(pixelBytes, pixelBytes + sizeof(pixelBytes)));
     assert(display.panel_._width == 240 && display.panel_._height == 240);
     assert(display.panel_.initializationFrequency == 20000000);
     assert(display.panel_.busFrequency == 20000000);
