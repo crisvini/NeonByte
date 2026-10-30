@@ -60,24 +60,35 @@ The closed manifest format uses these exact fields:
 | `linkedRegions` | Exactly `bootloaderStart: 0`, `applicationStart: 4096`, `filesystemStart: 1048576`, `filesystemEnd: 4169728`, and `eepromStart: 4173824` (4m3m profile) |
 | `featureGates` | `otaEnabled: true`; either legacy `maintenanceOnBoot: true`, or `maintenanceOnBoot: false` with the additional `maintenanceAfterSoftwareRestart: true` gate |
 | `purpose` | Omit for production; set exactly to `experimental-test` for a separately authorized experimental test |
-| `minimumResources` | Production requires positive integer `minimumFreeHeapBytes` and `minimumLargestBlockBytes`; experimental-test requires explicit JSON `null` and records pending resource floors |
-| `validation` | `combinedImage`, `modernCrc`, `runtimeBounds`, and `recoveryIdentity` all `true` in the approved build record |
+| `minimumResources` | Production requires positive integer `minimumFreeHeapBytes` and `minimumLargestBlockBytes`; experimental-test accepts the same positive floors or explicit JSON `null` for pending floors |
+| `validation` | `combinedImage`, `modernCrc`, and `recoveryIdentity` must be `true`. Production requires `runtimeBounds: true`; experimental-test also accepts a pending `runtimeBounds` object bound to the reviewed installed build |
 
-These fields are requirements, not proof by themselves: the operator compares them with the trusted private build record. Production still requires approved positive resource floors. The experimental-test purpose permits only those floors to remain null; it keeps all manifest identity, image integrity, target, linked-layout, runtime, and recovery checks in force.
+These fields are requirements, not proof by themselves: the operator compares them with the trusted private build record. Production still requires approved positive resource floors and validated runtime bounds. Experimental candidates may provide positive floors, which remain enforced during preflight and post-boot checks. A `device-check-pending` state binds the exception to the authenticated `requiredBuildId` whose pre-write checks were reviewed. It means actual geometry has not been observed before upload; it is never accepted for production or reported as independently validated. The installed firmware must verify its runtime geometry, flash mode, and staging bounds before beginning flash writes. This qualification does not prove the device will boot or establish independent recovery.
 
 The non-secret experimental manifest fields are exactly:
 
 ~~~json
 {
   "purpose": "experimental-test",
-  "minimumResources": null
+  "minimumResources": {
+    "minimumFreeHeapBytes": 22168,
+    "minimumLargestBlockBytes": 21544
+  },
+  "validation": {
+    "combinedImage": true,
+    "modernCrc": true,
+    "runtimeBounds": { "state": "device-check-pending", "requiredBuildId": "reviewed-installed-build-id" },
+    "recoveryIdentity": true
+  }
 }
 ~~~
 
-Do not put `0`, guessed values, or omitted resource floors in an experimental
-manifest. The agent still reads authenticated diagnostics during preflight and
-post-boot observation, but it does not treat unmeasured heap floors as passed.
-It stores the floors as null and reports resource approval as pending.
+This excerpt omits the other mandatory manifest fields. Do not use zero, guessed
+values, or omitted resource floors. Explicit `null` remains supported for a
+separately authorized experiment with unmeasured floors; the agent does not treat
+them as passed. Positive floors are checked normally and retained in the journal.
+The deferred geometry state also remains in the journal after the device check;
+it is not converted to an independent geometry measurement.
 
 The agent reads the fixed inbox only after **Prepare local firmware** is selected. It rejects missing/extra files, weak local permissions, reparse/path redirection, changing or oversized files, malformed manifests, identity/profile mismatch, unsupported headers, and SHA-256/length mismatch. It holds one bounded in-memory image snapshot. The browser receives only an opaque candidate ID and sanitized non-secret metadata; no firmware upload, path, or download route is provided.
 
@@ -86,7 +97,7 @@ The agent reads the fixed inbox only after **Prepare local firmware** is selecte
 1. Open `http://localhost:8787` in the same Windows user session. Confirm the enrolled maintenance credentials and approved device are available.
 2. Copy the reviewed `firmware.bin` and `manifest.json` pair to the fixed inbox. Wait for the copy to finish.
 3. Select **Prepare local firmware**. Review the displayed purpose, filename, byte length, SHA-256, expected build ID, device ID, profile, source revision, target geometry, and linked layout. Compare them with the independent trusted build record.
-4. For a production manifest, select **Confirm firmware update** and accept the production confirmation. For `experimental-test`, the panel names the action as an experimental test and asks for separate explicit authorization; the request carries a distinct acknowledgement that the service requires before upload. This suspends and drains the agent scheduler, rechecks identity/network/diagnostics/capacity, and accepts either an already paused app or an active app that can be paused. It sends `/pause` only for the active case, confirms the paused state, records a credential-free intent journal, and sends at most one raw firmware PUT. It never starts the application as part of OTA. If preflight aborts before pause/upload, the scheduler resumes only when the last maintenance status confirms that the application is still active; an already paused or uncertain state stays held. Progress counts bytes handed to the HTTP transport; it does not mean flash validation is complete.
+4. For a production manifest, select **Confirm firmware update** and accept the production confirmation. For `experimental-test`, the panel asks for separate explicit authorization. If geometry is pending, the prompt identifies the deferred device check and the request carries an additional acknowledgement. The service rejects an absent acknowledgement before pausing or uploading. It suspends and drains the agent scheduler, rechecks identity/network/diagnostics/capacity, and accepts either an already paused app or an active app that can be paused. It sends `/pause` only for the active case, confirms the paused state, records a credential-free intent journal, and sends at most one raw firmware PUT. It never starts the application as part of OTA. If preflight aborts before pause/upload, the scheduler resumes only when the last maintenance status confirms that the application is still active; an already paused or uncertain state stays held. Progress counts bytes handed to the HTTP transport; it does not mean flash validation is complete.
 5. Select **Verify device** after the reboot begins. The agent uses the last verified private address with bounded read-only attempts for up to 120 seconds. Both production and experimental verification require authenticated info/status/diagnostics, the same device and recovery identity, a changed boot ID, the expected build ID, the application still paused, active recovery AP and station, loaded configuration and storage, no pending/volatile Wi-Fi, and two matching observations at least two seconds apart on the same new boot. Production additionally requires both approved memory floors. Experimental success is reported as `experimentallyVerified`; its journal retains null floor values and production approval remains pending.
 6. If DHCP changed the address, enter the device's private IPv4 HTTP origin in **Verified maintenance IPv4 address** and select **Verify and save device address**. The agent authenticates and checks the same device identity before persisting the maintenance-only address. After any PUT attempt, changing the address only resumes read-only reconciliation; it never re-sends the image.
 7. After the panel reports **verified** for production or **experimentallyVerified** for an experimental test, select the corresponding **Start application** button and confirm. The experimental prompt repeats that the action does not grant production approval. Either action sends the separate maintenance `/run` request only after operator confirmation. The dashboard scheduler resumes only after the application is confirmed running, and only if its existing `enabled` setting is true.
@@ -95,7 +106,10 @@ The agent reads the fixed inbox only after **Prepare local firmware** is selecte
 
 An `experimental-test` manifest and a separate panel acknowledgement permit the
 panel to prepare a candidate whose live resource floors are explicitly
-unmeasured. This path still requires trusted device/profile/recovery identity,
+unmeasured or whose geometry check is deferred to the device. Positive resource
+floors, when supplied, are enforced. Deferred geometry requires its own explicit
+acknowledgement and remains recorded as pending, not as independent validation.
+This path still requires trusted device/profile/recovery identity,
 exact source revision, complete local image integrity checks, the fixed target
 and linked layout, authenticated preflight, capacity, pause safety, a one-use
 PUT, and healthy same-boot maintenance observations. A zero, placeholder, or

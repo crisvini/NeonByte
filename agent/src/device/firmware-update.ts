@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { rename, mkdir, open, lstat, unlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { MAINTENANCE_HTTP_TIMEOUT_MS, MaintenanceRequestError, MaintenanceTransportError, type MaintenanceClient, type MaintenanceDiagnostics, type MaintenanceInfo, type MaintenanceStatus, validateMaintenanceOrigin } from "./maintenance-client.js";
-import { FirmwareInbox, verifyLocalProtectedAccess, type PreparedFirmwareCandidate } from "./firmware-inbox.js";
+import { FirmwareInbox, isDeferredRuntimeBounds, verifyLocalProtectedAccess, type PreparedFirmwareCandidate, type RuntimeBoundsValidation } from "./firmware-inbox.js";
 import type { RecoveryCredential, RecoveryCredentialStore } from "./recovery-store.js";
 
 export type FirmwareUpdateState = "idle" | "preparing" | "ready" | "preflight" | "pausing" | "uploading" |
@@ -36,6 +36,7 @@ export interface FirmwareUpdateRecord {
   expectedBootId: string;
   verifiedBootId?: string;
   sourceRevision?: string;
+  runtimeBounds?: RuntimeBoundsValidation;
   sha256: string;
   byteLength: number;
   minimumFreeHeapBytes: number | null;
@@ -133,7 +134,7 @@ function validRecord(value: unknown, allowHistory = true): value is FirmwareUpda
   const keys = ["version", "state", "putAttempted", "deviceId", "profile", "recoveryIdentityFingerprint", "previousBuildId", "expectedBuildId", "expectedBootId",
     "sha256", "byteLength", "minimumFreeHeapBytes", "minimumLargestBlockBytes", "previousAddress"];
   const presentKeys = Object.keys(item);
-  if (!presentKeys.every((key) => keys.includes(key) || ["purpose", "sourceRevision", "verifiedBootId", "history", "manualReconciliation"].includes(key)) || !keys.every((key) => Object.hasOwn(item, key)) || item["version"] !== 1 ||
+  if (!presentKeys.every((key) => keys.includes(key) || ["purpose", "sourceRevision", "runtimeBounds", "verifiedBootId", "history", "manualReconciliation"].includes(key)) || !keys.every((key) => Object.hasOwn(item, key)) || item["version"] !== 1 ||
       typeof item["state"] !== "string" || !validStates.has(item["state"] as FirmwareUpdateState) || typeof item["putAttempted"] !== "boolean" ||
       (Object.hasOwn(item, "purpose") && item["purpose"] !== "production" && item["purpose"] !== "experimental-test") ||
       typeof item["deviceId"] !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/.test(item["deviceId"]) ||
@@ -144,13 +145,17 @@ function validRecord(value: unknown, allowHistory = true): value is FirmwareUpda
       typeof item["expectedBootId"] !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/.test(item["expectedBootId"]) ||
       (Object.hasOwn(item, "verifiedBootId") && (typeof item["verifiedBootId"] !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/.test(item["verifiedBootId"]))) ||
       (Object.hasOwn(item, "sourceRevision") && (typeof item["sourceRevision"] !== "string" || !/^[a-f0-9]{40}$/.test(item["sourceRevision"]))) ||
+      (Object.hasOwn(item, "runtimeBounds") && item["runtimeBounds"] !== true &&
+        !(isDeferredRuntimeBounds(item["runtimeBounds"]) && item["runtimeBounds"].requiredBuildId === item["previousBuildId"] && recordPurpose(item as Pick<FirmwareUpdateRecord, "purpose">) === "experimental-test")) ||
       typeof item["sha256"] !== "string" || !/^[a-f0-9]{64}$/.test(item["sha256"]) ||
       !Number.isSafeInteger(item["byteLength"]) || Number(item["byteLength"]) < 1 || Number(item["byteLength"]) > 458_752 ||
       (recordPurpose(item as Pick<FirmwareUpdateRecord, "purpose">) === "production" &&
         (!Number.isSafeInteger(item["minimumFreeHeapBytes"]) || Number(item["minimumFreeHeapBytes"]) < 1 ||
          !Number.isSafeInteger(item["minimumLargestBlockBytes"]) || Number(item["minimumLargestBlockBytes"]) < 1)) ||
       (recordPurpose(item as Pick<FirmwareUpdateRecord, "purpose">) === "experimental-test" &&
-        (item["minimumFreeHeapBytes"] !== null || item["minimumLargestBlockBytes"] !== null)) ||
+        !((item["minimumFreeHeapBytes"] === null && item["minimumLargestBlockBytes"] === null) ||
+          (Number.isSafeInteger(item["minimumFreeHeapBytes"]) && Number(item["minimumFreeHeapBytes"]) > 0 &&
+           Number.isSafeInteger(item["minimumLargestBlockBytes"]) && Number(item["minimumLargestBlockBytes"]) > 0))) ||
       typeof item["previousAddress"] !== "string") return false;
   if ((item["state"] === "experimentallyVerified" &&
       (recordPurpose(item as Pick<FirmwareUpdateRecord, "purpose">) !== "experimental-test" || !item["putAttempted"] || !item["verifiedBootId"])) ||
@@ -181,6 +186,7 @@ function validRecord(value: unknown, allowHistory = true): value is FirmwareUpda
           previous.expectedBuildId !== item["expectedBuildId"] || previous.expectedBootId !== item["expectedBootId"] ||
           previous.sha256 !== item["sha256"] || previous.byteLength !== item["byteLength"] ||
           recordPurpose(previous) !== recordPurpose(item as Pick<FirmwareUpdateRecord, "purpose">) ||
+          JSON.stringify(previous.runtimeBounds) !== JSON.stringify(item["runtimeBounds"]) ||
           previous.minimumFreeHeapBytes !== item["minimumFreeHeapBytes"] ||
           previous.minimumLargestBlockBytes !== item["minimumLargestBlockBytes"]) return false;
     }
@@ -204,9 +210,11 @@ export interface FirmwareUpdateView {
   state: FirmwareUpdateState;
   purpose: FirmwareUpdatePurpose | null;
   sourceRevision: string | null;
+  runtimeBounds?: RuntimeBoundsValidation | null;
   candidate: null | { id: string; fileName: "firmware.bin"; byteLength: number; sha256: string; expectedBuildId: string;
     deviceId: string; profile: string; purpose: FirmwareUpdatePurpose; sourceRevision: string;
-    target: PreparedFirmwareCandidate["manifest"]["target"]; linkedRegions: PreparedFirmwareCandidate["manifest"]["linkedRegions"] };
+    target: PreparedFirmwareCandidate["manifest"]["target"]; linkedRegions: PreparedFirmwareCandidate["manifest"]["linkedRegions"];
+    runtimeBounds?: PreparedFirmwareCandidate["manifest"]["validation"]["runtimeBounds"] };
   bytesSent: number;
   totalBytes: number;
   message: string;
@@ -265,8 +273,10 @@ export class FirmwareUpdateService {
       candidate: this.candidate ? { id: this.candidate.id, fileName: this.candidate.fileName, byteLength: this.candidate.byteLength,
         sha256: this.candidate.sha256, expectedBuildId: this.candidate.manifest.buildId, deviceId: this.candidate.manifest.deviceId,
         profile: this.candidate.manifest.profile, purpose: candidatePurpose(this.candidate), sourceRevision: this.candidate.manifest.sourceRevision,
-        target: this.candidate.manifest.target, linkedRegions: this.candidate.manifest.linkedRegions } : null,
+        target: this.candidate.manifest.target, linkedRegions: this.candidate.manifest.linkedRegions,
+        runtimeBounds: this.candidate.manifest.validation.runtimeBounds } : null,
       purpose, sourceRevision: this.candidate?.manifest.sourceRevision ?? record?.sourceRevision ?? null,
+      runtimeBounds: this.candidate?.manifest.validation.runtimeBounds ?? record?.runtimeBounds ?? null,
       bytesSent: this.bytesSent, totalBytes: this.candidate?.byteLength ?? record?.byteLength ?? 0,
       message,
       putAttempted: record?.putAttempted ?? false, effectiveAddress: this.effectiveAddress || record?.previousAddress || "",
@@ -345,6 +355,9 @@ export class FirmwareUpdateService {
       if (previousRecord?.state === "manuallyReconciled" && !sameBinding(previousRecord, credential)) await invalidateReconciliation();
       this.effectiveAddress = credential.lastVerifiedAddress;
       const candidate = await (this.options.inbox ?? new FirmwareInbox()).prepare(credential);
+      if (isDeferredRuntimeBounds(candidate.manifest.validation.runtimeBounds) && candidatePurpose(candidate) !== "experimental-test") {
+        throw new Error("Deferred geometry is allowed only for experimental tests.");
+      }
       const info = await this.options.createClient(credential.lastVerifiedAddress, credential.token).info();
       if (previousRecord?.state === "manuallyReconciled" &&
           (info.deviceId !== previousRecord.deviceId || info.profile !== previousRecord.profile ||
@@ -370,7 +383,7 @@ export class FirmwareUpdateService {
     } finally { this.leave(); }
   }
 
-  async confirm(candidateId: string, experimentalTestConfirmed = false): Promise<FirmwareUpdateView> {
+  async confirm(candidateId: string, experimentalTestConfirmed = false, deviceGeometryConfirmed = false): Promise<FirmwareUpdateView> {
     await this.restore();
     if (!this.enter()) throw new Error("A firmware update operation is already in progress.");
     if (this.journalUnavailable) { this.leave(); throw new Error("The protected firmware update journal is unavailable."); }
@@ -380,6 +393,9 @@ export class FirmwareUpdateService {
       if (!candidate || this.state !== "ready" || candidate.id !== candidateId) throw new Error("Prepare firmware again before confirming this update.");
       if (candidatePurpose(candidate) === "experimental-test" && !experimentalTestConfirmed) {
         throw new Error("Explicit experimental authorization is required before sending this firmware.");
+      }
+      if (isDeferredRuntimeBounds(candidate.manifest.validation.runtimeBounds) && !deviceGeometryConfirmed) {
+        throw new Error("Deferred device geometry confirmation is required before sending this firmware.");
       }
       if (this.now() - this.candidatePreparedAt > (this.options.candidateTtlMs ?? 5 * 60_000)) {
         this.candidate = null;
@@ -736,7 +752,8 @@ export class FirmwareUpdateService {
     const resources = candidate.manifest.minimumResources;
     return { version: 1, state, purpose: candidatePurpose(candidate), putAttempted, deviceId: credential.deviceId, profile: credential.profile,
       recoveryIdentityFingerprint: credential.recoveryIdentityFingerprint, previousBuildId: info.buildId, expectedBuildId: candidate.manifest.buildId,
-      expectedBootId: info.bootId, sourceRevision: candidate.manifest.sourceRevision, sha256: candidate.sha256, byteLength: candidate.byteLength,
+      expectedBootId: info.bootId, sourceRevision: candidate.manifest.sourceRevision, runtimeBounds: candidate.manifest.validation.runtimeBounds,
+      sha256: candidate.sha256, byteLength: candidate.byteLength,
       minimumFreeHeapBytes: resources?.minimumFreeHeapBytes ?? null,
       minimumLargestBlockBytes: resources?.minimumLargestBlockBytes ?? null,
       previousAddress: credential.lastVerifiedAddress, ...(this.record?.history ? { history: this.record.history } : {}) };
@@ -748,6 +765,8 @@ export class FirmwareUpdateService {
   }
 
   private assertCapacity(info: MaintenanceInfo, candidate: PreparedFirmwareCandidate): void {
+    const bounds = candidate.manifest.validation.runtimeBounds;
+    if (isDeferredRuntimeBounds(bounds) && info.buildId !== bounds.requiredBuildId) throw new Error("The device does not match the reviewed installed build for deferred geometry.");
     if (!info.otaEnabled || info.maxFirmwareBytes < candidate.byteLength) throw new Error("This device build does not allow the approved firmware size or maintenance OTA.");
     if (candidate.manifest.buildId === info.buildId) throw new Error("The candidate build ID must differ from the currently running firmware.");
     if (candidate.manifest.deviceId !== info.deviceId || candidate.manifest.profile !== info.profile ||
@@ -797,6 +816,6 @@ function sameBinding(left: Pick<RecoveryCredential, "deviceId" | "profile" | "re
 function safeUpdateError(error: unknown, fallback: string): Error {
   if (error instanceof MaintenanceRequestError) return error;
   if (error instanceof MaintenanceTransportError) return error;
-  if (error instanceof Error && /^(Prepare firmware again|A firmware update|Explicit experimental authorization|Maintenance credentials required|Maintenance credentials could|The device identity|The responding device|The enrolled recovery identity|The device does not|This device build|The firmware target|The device is not|The application did not|The device does not meet|Only verified firmware|There is no attempted firmware|Confirm the expected build|The device cannot be reconciled|The previous firmware transfer|The protected update history|The reconciled device)/.test(error.message)) return error;
+  if (error instanceof Error && /^(Prepare firmware again|A firmware update|Explicit experimental authorization|Deferred device geometry confirmation|Maintenance credentials required|Maintenance credentials could|The device identity|The responding device|The enrolled recovery identity|The device does not|This device build|The firmware target|The device is not|The application did not|The device does not meet|Only verified firmware|There is no attempted firmware|Confirm the expected build|The device cannot be reconciled|The previous firmware transfer|The protected update history|The reconciled device)/.test(error.message)) return error;
   return new Error(fallback);
 }

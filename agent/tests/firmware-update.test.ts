@@ -16,7 +16,8 @@ const manifest = { buildId: "build-new", deviceId: credential.deviceId, profile:
   target: { family: "esp8266", flashMode: "dio", flashFrequencyMHz: 40, flashBytes: 4_194_304 },
   sourceRevision: "1".repeat(40),
   linkedRegions: { bootloaderStart: 0, applicationStart: 4096, filesystemStart: 1_048_576, filesystemEnd: 4_169_728, eepromStart: 4_173_824 },
-  featureGates: { maintenanceOnBoot: true, otaEnabled: true }, minimumResources: { minimumFreeHeapBytes: 1000, minimumLargestBlockBytes: 500 } } as PreparedFirmwareCandidate["manifest"];
+  featureGates: { maintenanceOnBoot: true, otaEnabled: true }, minimumResources: { minimumFreeHeapBytes: 1000, minimumLargestBlockBytes: 500 },
+  validation: { combinedImage: true, modernCrc: true, runtimeBounds: true, recoveryIdentity: true } } as PreparedFirmwareCandidate["manifest"];
 const candidate: PreparedFirmwareCandidate = { id: "candidate-1", fileName: "firmware.bin", byteLength: 4096,
   sha256: "c".repeat(64), bytes: Buffer.from("firmware"), manifest };
 
@@ -26,7 +27,7 @@ class MemoryJournal implements FirmwareUpdateJournal {
   async save(value: FirmwareUpdateRecord) { this.value = structuredClone(value); }
 }
 
-function fixture(options: { lostPut?: boolean; bootId?: string; buildId?: string; candidateTtlMs?: number; bootSequence?: string[]; automaticStartup?: boolean; experimental?: boolean;
+function fixture(options: { lostPut?: boolean; bootId?: string; buildId?: string; candidateTtlMs?: number; bootSequence?: string[]; automaticStartup?: boolean; experimental?: boolean; geometryPending?: boolean; experimentalFloors?: boolean;
   offlineAfterPut?: boolean; reconnectWindowMs?: number; initiallyPaused?: boolean; recoveryApLostAfterDrain?: boolean; candidateBuildId?: string } = {}) {
   const journal = new MemoryJournal();
   const calls: string[] = [];
@@ -71,7 +72,8 @@ function fixture(options: { lostPut?: boolean; bootId?: string; buildId?: string
   let preflightAbortResumed = false;
   const service = new FirmwareUpdateService({
     recoveryStore, inbox: { prepare: async () => ({ ...candidate, manifest: { ...manifest,
-      ...(options.experimental ? { purpose: "experimental-test", minimumResources: null } : {}),
+      ...(options.experimental ? { purpose: "experimental-test", minimumResources: options.experimentalFloors ? manifest.minimumResources : null } : {}),
+      ...(options.geometryPending ? { validation: { ...manifest.validation, runtimeBounds: { state: "device-check-pending", requiredBuildId: "build-old" } } } : {}),
       ...(options.candidateBuildId ? { buildId: options.candidateBuildId } : {}),
       ...(options.automaticStartup ? { featureGates: { maintenanceOnBoot: false, otaEnabled: true, maintenanceAfterSoftwareRestart: true } } : {}) } }) }, journal,
     createClient: () => client,
@@ -149,6 +151,64 @@ test("experimental OTA requires separate confirmation and is never reported as p
   assert.equal(f.resumed, true);
   assert.equal(f.calls.includes("run"), true);
   assert.match(f.service.view.message, /experimental.*production/i);
+});
+
+test("deferred geometry requires its own acknowledgement and remains pending in the journal", async () => {
+  const f = fixture({ experimental: true, geometryPending: true, experimentalFloors: true });
+  await f.service.prepare();
+  assert.deepEqual(f.service.view.candidate?.runtimeBounds, { state: "device-check-pending", requiredBuildId: "build-old" });
+  assert.deepEqual(f.journal.value?.runtimeBounds, { state: "device-check-pending", requiredBuildId: "build-old" });
+  await assert.rejects(f.service.confirm("candidate-1", true), /geometry.*confirmation/i);
+  assert.equal(f.calls.includes("pause"), false);
+  assert.equal(f.calls.includes("put"), false);
+  await f.service.confirm("candidate-1", true, true);
+  assert.equal(f.calls.filter((call) => call === "put").length, 1);
+  await f.service.verify();
+  assert.equal(f.service.view.state, "experimentallyVerified");
+  assert.deepEqual(f.journal.value?.runtimeBounds, { state: "device-check-pending", requiredBuildId: "build-old" });
+  assert.equal(f.journal.value?.minimumFreeHeapBytes, 1000);
+  assert.equal(f.journal.value?.minimumLargestBlockBytes, 500);
+});
+
+test("experimental candidates with explicit resource floors reject low memory before pausing", async () => {
+  const f = fixture({ experimental: true, geometryPending: true, experimentalFloors: true });
+  f.diagnostics.maxFreeBlockBytes = 499;
+  await f.service.prepare();
+  await assert.rejects(f.service.confirm("candidate-1", true, true), /memory requirement/i);
+  assert.equal(f.calls.includes("pause"), false);
+  assert.equal(f.calls.includes("put"), false);
+});
+
+test("production cannot use deferred geometry even if an inbox returns it", async () => {
+  const f = fixture({ geometryPending: true });
+  await assert.rejects(f.service.prepare(), /preparation failed/i);
+  assert.equal(f.calls.includes("pause"), false);
+  assert.equal(f.calls.includes("put"), false);
+});
+
+test("deferred geometry rejects an installed build other than the reviewed build", async () => {
+  const f = fixture({ experimental: true, geometryPending: true, experimentalFloors: true });
+  f.setInfo({ deviceId: credential.deviceId, bootId: "boot-before", buildId: "unreviewed-build", firmwareVersion: "0.2.0",
+    stationIp: "192.168.1.20", recoveryApIp: "192.168.4.1", otaEnabled: true, maxFirmwareBytes: 458752,
+    profile: credential.profile, recoveryIdentityFingerprint: credential.recoveryIdentityFingerprint });
+  await assert.rejects(f.service.prepare(), /reviewed installed build/i);
+  assert.equal(f.calls.includes("pause"), false);
+  assert.equal(f.calls.includes("put"), false);
+});
+
+test("protected journal retains deferred geometry and rejects production or partial floors", async (t) => {
+  const f = fixture({ experimental: true, geometryPending: true, experimentalFloors: true });
+  await f.service.prepare();
+  const directory = await mkdtemp(join(tmpdir(), "neonbyte-deferred-journal-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  restrictWindowsAcl(directory);
+  const journal = new SystemFirmwareUpdateJournal(join(directory, "NeonByte", "firmware-update.json"));
+  const record = f.journal.value!;
+  await journal.save(record);
+  assert.deepEqual((await journal.load())?.runtimeBounds, { state: "device-check-pending", requiredBuildId: "build-old" });
+  await assert.rejects(journal.save({ ...record, purpose: "production" }), /invalid/i);
+  await assert.rejects(journal.save({ ...record, minimumLargestBlockBytes: null }), /invalid/i);
+  assert.deepEqual((await journal.load())?.runtimeBounds, { state: "device-check-pending", requiredBuildId: "build-old" });
 });
 
 test("experimental post-boot observations still require healthy recovery network and loaded storage", async () => {

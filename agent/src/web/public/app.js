@@ -254,11 +254,13 @@ async function refreshFirmwareStatus() {
     const candidateBox = document.querySelector("#ota-candidate");
     candidateBox.hidden = !candidate;
     candidateBox.textContent = candidate
-      ? `${candidate.purpose === "experimental-test" ? "EXPERIMENTAL TEST · " : ""}${candidate.fileName} · ${formatBytes(candidate.byteLength)} · SHA-256 ${candidate.sha256} · build ${candidate.expectedBuildId} · device ${candidate.deviceId} · profile ${candidate.profile} · source ${candidate.sourceRevision} · ${candidate.target.flashMode.toUpperCase()} ${candidate.target.flashFrequencyMHz} MHz / ${formatBytes(candidate.target.flashBytes)} flash · FS ${candidate.linkedRegions.filesystemStart}–${candidate.linkedRegions.filesystemEnd}, EEPROM ${candidate.linkedRegions.eepromStart}`
+      ? `${candidate.purpose === "experimental-test" ? "EXPERIMENTAL TEST · " : ""}${candidate.fileName} · ${formatBytes(candidate.byteLength)} · SHA-256 ${candidate.sha256} · build ${candidate.expectedBuildId} · device ${candidate.deviceId} · profile ${candidate.profile} · source ${candidate.sourceRevision} · ${candidate.target.flashMode.toUpperCase()} ${candidate.target.flashFrequencyMHz} MHz / ${formatBytes(candidate.target.flashBytes)} flash · FS ${candidate.linkedRegions.filesystemStart}–${candidate.linkedRegions.filesystemEnd}, EEPROM ${candidate.linkedRegions.eepromStart}${candidate.runtimeBounds?.state === "device-check-pending" ? " · Runtime geometry pending device validation" : ""}`
       : "";
-    document.querySelector("#ota-status").textContent = otaActionError || (state === "uploading"
+    const geometryStatus = firmwareUpdate.runtimeBounds?.state === "device-check-pending"
+      ? " Runtime geometry is not independently verified; the device checks it before staging." : "";
+    document.querySelector("#ota-status").textContent = (otaActionError || (state === "uploading"
       ? `${firmwareUpdate.message} ${formatBytes(firmwareUpdate.bytesSent)} of ${formatBytes(firmwareUpdate.totalBytes)} handed to the transport.`
-      : firmwareUpdate.message);
+      : firmwareUpdate.message)) + geometryStatus;
     const progress = document.querySelector("#ota-progress");
     progress.hidden = !firmwareUpdate.putAttempted || !["uploading", "waitingForReboot", "reconnecting", "verifying", "outcomeUnknown", "verificationFailed", "verified", "experimentallyVerified", "started"].includes(state);
     progress.max = 1;
@@ -895,12 +897,14 @@ document.querySelector("#ota-confirm").addEventListener("click", async () => {
   const candidate = firmwareUpdate?.candidate;
   if (!candidate) return;
   const experimental = candidate.purpose === "experimental-test";
+  const deviceGeometryPending = candidate.runtimeBounds?.state === "device-check-pending";
+  const geometryNotice = deviceGeometryPending ? ` Runtime geometry is pending validation by the device before staging for reviewed installed build ${candidate.runtimeBounds.requiredBuildId}. The device rejects incompatible geometry before flash writes.` : "";
   const prompt = experimental
-    ? `Authorize ONE EXPERIMENTAL TEST upload of build ${candidate.expectedBuildId} (${formatBytes(candidate.byteLength)}, SHA-256 ${candidate.sha256}) from source ${candidate.sourceRevision} to device ${candidate.deviceId}, profile ${candidate.profile}? Declared target: ${candidate.target.flashMode.toUpperCase()}, ${candidate.target.flashFrequencyMHz} MHz, ${formatBytes(candidate.target.flashBytes)} flash; filesystem ${candidate.linkedRegions.filesystemStart}–${candidate.linkedRegions.filesystemEnd}, EEPROM ${candidate.linkedRegions.eepromStart}. This will pause the application if it is running. Locally checked image integrity, identity and declared flash layout passed; live resource floors, physical flash compatibility, full backup and independent Wi-Fi recovery remain unapproved. Production approval remains pending. Continue only with separate explicit authorization for this experiment.`
+    ? `Authorize ONE EXPERIMENTAL TEST upload of build ${candidate.expectedBuildId} (${formatBytes(candidate.byteLength)}, SHA-256 ${candidate.sha256}) from source ${candidate.sourceRevision} to device ${candidate.deviceId}, profile ${candidate.profile}? Declared target: ${candidate.target.flashMode.toUpperCase()}, ${candidate.target.flashFrequencyMHz} MHz, ${formatBytes(candidate.target.flashBytes)} flash; filesystem ${candidate.linkedRegions.filesystemStart}–${candidate.linkedRegions.filesystemEnd}, EEPROM ${candidate.linkedRegions.eepromStart}. This will pause the application if it is running. Locally checked image integrity, identity and declared flash layout passed; live resource floors, physical flash compatibility, full backup and independent Wi-Fi recovery remain unapproved.${geometryNotice} Production approval remains pending. Continue only with separate explicit authorization for this experiment.`
     : `Install build ${candidate.expectedBuildId} (${formatBytes(candidate.byteLength)}, SHA-256 ${candidate.sha256}) on device ${candidate.deviceId}? The application will pause and the image will be sent once.`;
   const accepted = window.confirm(prompt);
   if (!accepted) return;
-  await runOtaAction(() => postJson("/api/ota/confirm", { candidateId: candidate.id, ...(experimental ? { experimentalTestConfirmed: true } : {}) }, 150_000));
+  await runOtaAction(() => postJson("/api/ota/confirm", { candidateId: candidate.id, ...(experimental ? { experimentalTestConfirmed: true } : {}), ...(deviceGeometryPending ? { deviceGeometryConfirmed: true } : {}) }, 150_000));
 });
 
 document.querySelector("#ota-verify").addEventListener("click", async () => {

@@ -12,6 +12,15 @@ const execFile = promisify(execFileCallback);
 const MANIFEST_LIMIT_BYTES = 16 * 1024;
 const FILE_READ_CHUNK_BYTES = 64 * 1024;
 
+export interface DeferredRuntimeBounds { state: "device-check-pending"; requiredBuildId: string }
+export type RuntimeBoundsValidation = true | DeferredRuntimeBounds;
+
+export function isDeferredRuntimeBounds(value: unknown): value is DeferredRuntimeBounds {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return Object.keys(item).length === 2 && item["state"] === "device-check-pending" && validText(item["requiredBuildId"], 96);
+}
+
 export interface FirmwareManifest {
   schemaVersion: 1;
   fileName: "firmware.bin";
@@ -29,7 +38,7 @@ export interface FirmwareManifest {
   linkedRegions: { bootloaderStart: 0; applicationStart: 4096; filesystemStart: number; filesystemEnd: number; eepromStart: number };
   featureGates: { maintenanceOnBoot: boolean; otaEnabled: boolean; maintenanceAfterSoftwareRestart?: true };
   minimumResources: { minimumFreeHeapBytes: number; minimumLargestBlockBytes: number } | null;
-  validation: { combinedImage: true; modernCrc: true; runtimeBounds: true; recoveryIdentity: true };
+  validation: { combinedImage: true; modernCrc: true; runtimeBounds: RuntimeBoundsValidation; recoveryIdentity: true };
 }
 
 export interface PreparedFirmwareCandidate {
@@ -90,13 +99,12 @@ function validManifest(value: unknown): value is FirmwareManifest {
   if (!gates || !Object.keys(gates).every((key) => ["maintenanceOnBoot", "otaEnabled", "maintenanceAfterSoftwareRestart"].includes(key)) ||
       typeof gates["maintenanceOnBoot"] !== "boolean" || typeof gates["otaEnabled"] !== "boolean" ||
       (Object.hasOwn(gates, "maintenanceAfterSoftwareRestart") && gates["maintenanceAfterSoftwareRestart"] !== true)) return false;
-  if (experimental) {
-    if (resources !== null) return false;
-  } else if (!resources || Object.keys(resources).length !== 2 || !Number.isSafeInteger(resources["minimumFreeHeapBytes"]) ||
+  if (!(experimental && resources === null) && (!resources || Object.keys(resources).length !== 2 || !Number.isSafeInteger(resources["minimumFreeHeapBytes"]) ||
       Number(resources["minimumFreeHeapBytes"]) <= 0 || !Number.isSafeInteger(resources["minimumLargestBlockBytes"]) ||
-      Number(resources["minimumLargestBlockBytes"]) <= 0) return false;
+      Number(resources["minimumLargestBlockBytes"]) <= 0)) return false;
   return Boolean(validation && Object.keys(validation).length === 4 && validation["combinedImage"] === true &&
-      validation["modernCrc"] === true && validation["runtimeBounds"] === true && validation["recoveryIdentity"] === true);
+      validation["modernCrc"] === true && (validation["runtimeBounds"] === true ||
+        (experimental && isDeferredRuntimeBounds(validation["runtimeBounds"]))) && validation["recoveryIdentity"] === true);
 }
 
 function readLittleEndian32(bytes: Buffer, offset: number): number {

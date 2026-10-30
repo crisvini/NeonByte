@@ -147,6 +147,35 @@ test("experimental inbox candidates retain image and identity checks while leavi
   await assert.rejects(new FirmwareInbox({ directory: production.directory, accessControl: { protectAndVerify: async () => {} } }).prepare(binding), /manifest/);
 });
 
+test("only experimental manifests may defer runtime geometry while retaining resource floors", async (t) => {
+  const pending = { state: "device-check-pending", requiredBuildId: "build-old" };
+  const validation = { combinedImage: true, modernCrc: true, runtimeBounds: pending, recoveryIdentity: true };
+  const resources = { minimumFreeHeapBytes: 22_168, minimumLargestBlockBytes: 21_544 };
+  const experimental = await makeInbox(t, { purpose: "experimental-test", minimumResources: resources, validation });
+  const inbox = new FirmwareInbox({ directory: experimental.directory, accessControl: { protectAndVerify: async () => {} } });
+  const candidate = await inbox.prepare(binding);
+  assert.deepEqual(candidate.manifest.validation.runtimeBounds, pending);
+  assert.deepEqual(candidate.manifest.minimumResources, resources);
+
+  const production = await makeInbox(t, { minimumResources: resources, validation });
+  await assert.rejects(new FirmwareInbox({ directory: production.directory, accessControl: { protectAndVerify: async () => {} } }).prepare(binding), /manifest/);
+  for (const value of [false, null, "pending", "device-check-pending", { state: "device-check-pending" },
+    { state: "device-check-pending", requiredBuildId: "" }, { state: "device-check-pending", requiredBuildId: "build-old", extra: true }]) {
+    const invalid = await makeInbox(t, { purpose: "experimental-test", minimumResources: resources,
+      validation: { ...validation, runtimeBounds: value } });
+    await assert.rejects(new FirmwareInbox({ directory: invalid.directory, accessControl: { protectAndVerify: async () => {} } }).prepare(binding), /manifest/);
+  }
+});
+
+test("deferred experimental geometry does not relax identity or image integrity checks", async (t) => {
+  const pending = { purpose: "experimental-test", minimumResources: null,
+    validation: { combinedImage: true, modernCrc: true, runtimeBounds: { state: "device-check-pending", requiredBuildId: "build-old" }, recoveryIdentity: true } };
+  const wrongIdentity = await makeInbox(t, { ...pending, deviceId: "esp8266-other" });
+  await assert.rejects(new FirmwareInbox({ directory: wrongIdentity.directory, accessControl: { protectAndVerify: async () => {} } }).prepare(binding), /device identity/);
+  const badImage = await makeInbox(t, pending, Buffer.alloc(0x1030, 0xff));
+  await assert.rejects(new FirmwareInbox({ directory: badImage.directory, accessControl: { protectAndVerify: async () => {} } }).prepare(binding), /image/);
+});
+
 test("inbox validates complete image checksums and the exact linked 4m3m layout", async (t) => {
   for (const [name, mutate, overrides] of [
     ["boot segment checksum", (bytes: Buffer) => { bytes[16] = bytes[16]! ^ 1; return bytes; }, {}],

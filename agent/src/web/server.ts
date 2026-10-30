@@ -391,11 +391,12 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
             const item = payload as Record<string, unknown>;
             const keys = Object.keys(item);
             const experimentalTestConfirmed = item["experimentalTestConfirmed"] === true;
-            if ((!keys.every((key) => ["candidateId", "experimentalTestConfirmed"].includes(key)) ||
-                !(keys.length === 1 || (keys.length === 2 && experimentalTestConfirmed)) ||
+            const deviceGeometryConfirmed = item["deviceGeometryConfirmed"] === true;
+            if ((!keys.every((key) => ["candidateId", "experimentalTestConfirmed", "deviceGeometryConfirmed"].includes(key)) ||
                 (Object.hasOwn(item, "experimentalTestConfirmed") && !experimentalTestConfirmed) ||
+                (Object.hasOwn(item, "deviceGeometryConfirmed") && (!deviceGeometryConfirmed || !experimentalTestConfirmed)) ||
                 !/^[0-9a-f-]{36}$/.test(String(item["candidateId"])))) throw new Error();
-            sendJson(response, 200, await options.firmwareUpdate.confirm(item["candidateId"] as string, experimentalTestConfirmed));
+            sendJson(response, 200, await options.firmwareUpdate.confirm(item["candidateId"] as string, experimentalTestConfirmed, deviceGeometryConfirmed));
             return;
           }
           if (url.pathname === "/api/ota/address") {
@@ -426,7 +427,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           request.resume(); sendError(response, 404, "Local route not found.");
         } catch (error) {
           const message = error instanceof MaintenanceRequestError || error instanceof MaintenanceTransportError ||
-            (error instanceof Error && /^(Prepare firmware again|A firmware update operation|A firmware update|Explicit experimental authorization|There is no attempted firmware|Only verified firmware|Maintenance credentials required|Maintenance credentials could|Verify, explicitly start|Confirm the expected build|The device cannot be reconciled|The previous firmware transfer|The protected firmware update journal|The protected update history|The reconciled device|The enrolled recovery identity|The responding device|The device identity|The device does not|The device is not|The firmware target|This device build|The application did not|Running-firmware reconciliation failed)/.test(error.message))
+            (error instanceof Error && /^(Prepare firmware again|A firmware update operation|A firmware update|Explicit experimental authorization|Deferred device geometry confirmation|There is no attempted firmware|Only verified firmware|Maintenance credentials required|Maintenance credentials could|Verify, explicitly start|Confirm the expected build|The device cannot be reconciled|The previous firmware transfer|The protected firmware update journal|The protected update history|The reconciled device|The enrolled recovery identity|The responding device|The device identity|The device does not|The device is not|The firmware target|This device build|The application did not|Running-firmware reconciliation failed)/.test(error.message))
             ? error.message : "The maintenance operation was not completed. Check update status before taking another action.";
           sendError(response, 409, message);
         }

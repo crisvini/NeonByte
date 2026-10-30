@@ -200,6 +200,7 @@ test("dashboard OTA accepts only loopback-origin metadata actions and never rece
   let state: "idle" | "ready" | "rejected" | "transferFailed" | "started" | "manuallyReconciled" = "idle";
   let putAttempted = false;
   const confirmationAcknowledgements: boolean[] = [];
+  const geometryAcknowledgements: boolean[] = [];
   const candidate = { id: candidateId, fileName: "firmware.bin" as const, byteLength: 4096, sha256: "a".repeat(64),
     expectedBuildId: "build-20261027-a1b2", deviceId: "esp8266-a1b2c3", profile: "esp8266-dio40-4mb",
     purpose: "production" as const, sourceRevision: "1".repeat(40),
@@ -211,8 +212,9 @@ test("dashboard OTA accepts only loopback-origin metadata actions and never rece
       message: "Safe update state.", putAttempted, effectiveAddress: "http://192.168.1.20" }; },
     async getStatus() { return this.view; },
     async prepare() { prepareCalls++; state = "ready"; return this.view; },
-    async confirm(value, experimentalTestConfirmed = false) {
-      confirmCalls++; assert.equal(value, candidateId); confirmationAcknowledgements.push(experimentalTestConfirmed); return this.view;
+    async confirm(value, experimentalTestConfirmed = false, deviceGeometryConfirmed = false) {
+      confirmCalls++; assert.equal(value, candidateId); confirmationAcknowledgements.push(experimentalTestConfirmed);
+      geometryAcknowledgements.push(deviceGeometryConfirmed); return this.view;
     },
     async verify() { return this.view; }, async correctAddress() { return this.view; }, async runApplication() { return this.view; },
     async reconcileRunning() { return this.view; },
@@ -237,8 +239,12 @@ test("dashboard OTA accepts only loopback-origin metadata actions and never rece
     assert.equal(confirmCalls, 0);
     assert.equal((await post("/api/ota/confirm", JSON.stringify({ candidateId, experimentalTestConfirmed: true }))).status, 200);
     assert.deepEqual(confirmationAcknowledgements, [true]);
+    assert.equal((await post("/api/ota/confirm", JSON.stringify({ candidateId, deviceGeometryConfirmed: true }))).status, 409);
+    assert.equal((await post("/api/ota/confirm", JSON.stringify({ candidateId, experimentalTestConfirmed: true, deviceGeometryConfirmed: false }))).status, 409);
+    assert.equal((await post("/api/ota/confirm", JSON.stringify({ candidateId, experimentalTestConfirmed: true, deviceGeometryConfirmed: true }))).status, 200);
+    assert.deepEqual(geometryAcknowledgements, [false, true]);
     assert.equal((await post("/api/ota/confirm", JSON.stringify({ candidateId }))).status, 200);
-    assert.deepEqual(confirmationAcknowledgements, [true, false]);
+    assert.deepEqual(confirmationAcknowledgements, [true, true, false]);
     const blocked = await post("/api/mode", JSON.stringify({ mode: "spotify" }));
     assert.equal(blocked.status, 423);
     assert.equal((await post("/api/animation/prepared")).status, 423);
