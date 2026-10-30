@@ -28,6 +28,7 @@ public:
     void render(DisplayRenderer& display) const;
 
 private:
+    friend class ProtocolHandler;
     std::uint64_t currentProgressMs(std::uint64_t nowMs) const;
 
     Clock& clock_;

@@ -61,8 +61,6 @@ public:
 private:
     HttpResponse statusResponse(DeviceInfo deviceInfo) const;
 
-    // Transactional parsing workspace: retained outside the ESP8266 call stack.
-    NowPlaying pendingTrack_{};
     SceneManager& scenes_;
     Storage& storage_;
     RequestAuthenticator& authenticator_;

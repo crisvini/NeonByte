@@ -5,14 +5,47 @@
 #include "neonbyte/scene_manager.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <string>
 #include <string_view>
 #include <vector>
 
 using namespace neonbyte;
+
+namespace {
+bool countAllocations = false;
+bool failAllocations = false;
+std::size_t allocationCount = 0;
+}
+
+void* operator new(std::size_t size) {
+    if (countAllocations) ++allocationCount;
+    if (failAllocations) throw std::bad_alloc();
+    if (void* memory = std::malloc(size)) return memory;
+    throw std::bad_alloc();
+}
+void* operator new[](std::size_t size) {
+    if (countAllocations) ++allocationCount;
+    if (failAllocations) throw std::bad_alloc();
+    if (void* memory = std::malloc(size)) return memory;
+    throw std::bad_alloc();
+}
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new(size); } catch (...) { return nullptr; }
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new[](size); } catch (...) { return nullptr; }
+}
+void operator delete(void* memory) noexcept { std::free(memory); }
+void operator delete[](void* memory) noexcept { std::free(memory); }
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
+void operator delete(void* memory, const std::nothrow_t&) noexcept { std::free(memory); }
+void operator delete[](void* memory, const std::nothrow_t&) noexcept { std::free(memory); }
 
 namespace {
 
@@ -507,6 +540,117 @@ void testProtocolRejectsMalformedJsonWithoutChangingPlayback() {
     TEST_ASSERT_EQUAL(ActiveScene::gif, scenes.currentState().activeScene);
 }
 
+void testProtocolHandlerDoesNotRetainASecondTrack() {
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(4 * sizeof(void*), sizeof(ProtocolHandler));
+}
+
+void testSpotifyMaximumFieldsAndLateFailuresRemainAtomic() {
+    FakeClock clock;
+    clock.currentMillis = 1'000;
+    clock.currentUnixMillis = 1'790'000'000'000;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeAuthenticator authenticator;
+    ProtocolHandler protocol(scenes, storage, authenticator);
+    scenes.heartbeat();
+    std::string field;
+    for (unsigned i = 0; i < 256; ++i) field += R"(\ud83d\ude80)";
+    const std::string body = "{\"artist\":\"" + field + "\",\"trackId\":\"" + field +
+        "\",\"title\":\"" + field +
+        R"(","isPlaying":true,"durationMs":100000,"progressMs":100,"sampledAtUnixMs":1790000000000})";
+    TEST_ASSERT_EQUAL_UINT16(204, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", body), {}).statusCode);
+    TEST_ASSERT_EQUAL_UINT16(1024, scenes.nowPlaying()->trackId.length);
+    TEST_ASSERT_EQUAL_UINT16(1024, scenes.nowPlaying()->title.length);
+    TEST_ASSERT_EQUAL_UINT16(1024, scenes.nowPlaying()->artist.length);
+    const NowPlaying original = *scenes.nowPlaying();
+    clock.currentMillis = 3'000;
+    const std::string invalid[] = {
+        body.substr(0, body.size() - 1),
+        body.substr(0, body.size() - 1) + R"(,"isPlaying":false})",
+        body + " trailing",
+        body.substr(0, body.find(",\"sampledAtUnixMs\"")) + "}",
+        makeSpotifyJson(R"("\ud800")"),
+        makeSpotifyJson("\"title\"", "18446744073709551616")
+    };
+    for (const auto& value : invalid) {
+        TEST_ASSERT_EQUAL_UINT16(400, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", value), {}).statusCode);
+        const auto& actual = *scenes.nowPlaying();
+        TEST_ASSERT_TRUE(actual.trackId.view() == original.trackId.view());
+        TEST_ASSERT_TRUE(actual.title.view() == original.title.view());
+        TEST_ASSERT_TRUE(actual.artist.view() == original.artist.view());
+        TEST_ASSERT_EQUAL(original.isPlaying, actual.isPlaying);
+        TEST_ASSERT_EQUAL_UINT64(original.durationMs, actual.durationMs);
+        TEST_ASSERT_EQUAL_UINT64(original.progressMs, actual.progressMs);
+        TEST_ASSERT_EQUAL_UINT64(original.sampledAtUnixMs, actual.sampledAtUnixMs);
+        TEST_ASSERT_EQUAL_UINT64(2'100, scenes.currentState().progressMs);
+    }
+    clock.currentMillis = 46'001;
+    scenes.heartbeat();
+    TEST_ASSERT_EQUAL(ActiveScene::gif, scenes.currentState().activeScene);
+}
+
+void testSpotifyRequestCanAliasTheCurrentTrack() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeAuthenticator authenticator;
+    ProtocolHandler protocol(scenes, storage, authenticator);
+    auto previous = makeTrack();
+    const std::string body = makeSpotifyJson("\"updated title\"", "1234");
+    setText(previous.title, body);
+    scenes.updateNowPlaying(previous);
+    const auto aliasedBody = scenes.nowPlaying()->title.view();
+    TEST_ASSERT_EQUAL_UINT16(204, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", aliasedBody), {}).statusCode);
+    TEST_ASSERT_TRUE(scenes.nowPlaying()->trackId.view() == "id");
+    TEST_ASSERT_TRUE(scenes.nowPlaying()->title.view() == "updated title");
+    TEST_ASSERT_EQUAL_UINT64(1234, scenes.nowPlaying()->durationMs);
+}
+
+void testSpotifyNormalRequestsDoNotAllocateAndAliasedFailurePreservesTrack() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeAuthenticator authenticator;
+    ProtocolHandler protocol(scenes, storage, authenticator);
+    const std::string body = makeSpotifyJson("\"updated title\"", "1234");
+    allocationCount = 0; countAllocations = true;
+    const auto normal = protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", body), {});
+    countAllocations = false;
+    TEST_ASSERT_EQUAL_UINT16(204, normal.statusCode);
+    TEST_ASSERT_EQUAL_UINT32(0, allocationCount);
+
+    auto previous = makeTrack();
+    setText(previous.title, body);
+    scenes.updateNowPlaying(previous);
+    const auto aliasedBody = scenes.nowPlaying()->title.view();
+    failAllocations = true;
+    const auto rejected = protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", aliasedBody), {});
+    failAllocations = false;
+    TEST_ASSERT_EQUAL_UINT16(500, rejected.statusCode);
+    TEST_ASSERT_TRUE(scenes.nowPlaying()->title.view() == body);
+    TEST_ASSERT_TRUE(scenes.nowPlaying()->trackId.view() == "track-1");
+    TEST_ASSERT_EQUAL_UINT64(previous.durationMs, scenes.nowPlaying()->durationMs);
+}
+
+void testSpotifyMaximumBodyAndLongExponentRemainValid() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeAuthenticator authenticator;
+    ProtocolHandler protocol(scenes, storage, authenticator);
+    std::string number = "0e" + std::string(12'000, '9');
+    std::string body = makeSpotifyJson("\"title\"", number);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(12'288, body.size());
+    body.append(12'288 - body.size(), ' ');
+    TEST_ASSERT_EQUAL_UINT32(12'288, body.size());
+    TEST_ASSERT_EQUAL_UINT16(204, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", body), {}).statusCode);
+    TEST_ASSERT_EQUAL_UINT64(0, scenes.nowPlaying()->durationMs);
+    body.back() = 'x';
+    TEST_ASSERT_EQUAL_UINT16(400, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/spotify", body), {}).statusCode);
+    TEST_ASSERT_EQUAL_UINT64(0, scenes.nowPlaying()->durationMs);
+    TEST_ASSERT_TRUE(scenes.nowPlaying()->trackId.view() == "id");
+}
+
 void testProtocolValidatesUtf8EscapesAndCodePointLimits() {
     FakeClock clock;
     FakeStorage storage;
@@ -844,6 +988,11 @@ int main(int, char**) {
     RUN_TEST(testProtocolAcceptsJsonWhitespaceAroundEveryValueType);
     RUN_TEST(testProtocolSpotifyRouteValidatesFieldsAndClampsProgress);
     RUN_TEST(testProtocolRejectsMalformedJsonWithoutChangingPlayback);
+    RUN_TEST(testProtocolHandlerDoesNotRetainASecondTrack);
+    RUN_TEST(testSpotifyMaximumFieldsAndLateFailuresRemainAtomic);
+    RUN_TEST(testSpotifyRequestCanAliasTheCurrentTrack);
+    RUN_TEST(testSpotifyNormalRequestsDoNotAllocateAndAliasedFailurePreservesTrack);
+    RUN_TEST(testSpotifyMaximumBodyAndLongExponentRemainValid);
     RUN_TEST(testProtocolValidatesUtf8EscapesAndCodePointLimits);
     RUN_TEST(testProtocolAcceptsExactIntegerNotationAndRejectsOverflow);
     RUN_TEST(testEveryMutatingRouteAuthenticatesBeforeProcessing);

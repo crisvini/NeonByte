@@ -4,6 +4,8 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <new>
 #include <string_view>
 
 namespace neonbyte {
@@ -16,6 +18,13 @@ constexpr std::string_view V1_SPOTIFY_PATH = "/api/v1/spotify";
 constexpr std::string_view V1_HEARTBEAT_PATH = "/api/v1/heartbeat";
 constexpr std::string_view V1_COVER_PATH = "/api/v1/cover";
 constexpr std::string_view V1_ANIMATION_PATH = "/api/v1/animation";
+
+bool overlapsTrack(std::string_view body, const NowPlaying& track) {
+    if (body.empty()) return false;
+    const auto start = reinterpret_cast<std::uintptr_t>(body.data());
+    const auto trackStart = reinterpret_cast<std::uintptr_t>(&track);
+    return start <= trackStart ? trackStart - start < body.size() : start - trackStart < sizeof(track);
+}
 
 class JsonParser {
 public:
@@ -49,7 +58,7 @@ public:
         return seen == 1U && atEnd();
     }
 
-    bool parseNowPlaying(NowPlaying& track) {
+    bool parseNowPlaying(NowPlaying* track) {
         constexpr std::uint32_t requiredFields = 0x7f;
         std::uint32_t seen = 0;
         if (!beginObject()) {
@@ -75,19 +84,30 @@ public:
             seen |= field;
 
             if (field == (1U << 0)) {
-                if (!parseString(track.trackId) || track.trackId.length == 0) return false;
+                std::uint16_t length = 0;
+                if (!parseTrackText(track ? &track->trackId : nullptr, length) || length == 0) return false;
             } else if (field == (1U << 1)) {
-                if (!parseString(track.title)) return false;
+                std::uint16_t length = 0;
+                if (!parseTrackText(track ? &track->title : nullptr, length)) return false;
             } else if (field == (1U << 2)) {
-                if (!parseString(track.artist)) return false;
+                std::uint16_t length = 0;
+                if (!parseTrackText(track ? &track->artist : nullptr, length)) return false;
             } else if (field == (1U << 3)) {
-                if (!parseBoolean(track.isPlaying)) return false;
+                bool value = false;
+                if (!parseBoolean(value)) return false;
+                if (track) track->isPlaying = value;
             } else if (field == (1U << 4)) {
-                if (!parseUnsignedInteger(track.durationMs)) return false;
+                std::uint64_t value = 0;
+                if (!parseUnsignedInteger(value)) return false;
+                if (track) track->durationMs = value;
             } else if (field == (1U << 5)) {
-                if (!parseUnsignedInteger(track.progressMs)) return false;
+                std::uint64_t value = 0;
+                if (!parseUnsignedInteger(value)) return false;
+                if (track) track->progressMs = value;
             } else if (field == (1U << 6)) {
-                if (!parseUnsignedInteger(track.sampledAtUnixMs)) return false;
+                std::uint64_t value = 0;
+                if (!parseUnsignedInteger(value)) return false;
+                if (track) track->sampledAtUnixMs = value;
             }
         } while (nextProperty());
 
@@ -95,6 +115,21 @@ public:
     }
 
 private:
+    struct TextSink {
+        char* bytes = nullptr;
+        std::size_t capacity = 0;
+        std::uint16_t length = 0;
+    };
+
+    bool parseTrackText(FixedText* output, std::uint16_t& length) {
+        TextSink sink{output ? output->bytes.data() : nullptr, MAX_TEXT_UTF8_BYTES, 0};
+        if (output) output->bytes.fill(0);
+        const bool valid = parseString(sink);
+        length = sink.length;
+        if (output) output->length = sink.length;
+        return valid;
+    }
+
     bool beginObject() {
         skipWhitespace();
         if (!consume('{')) {
@@ -155,8 +190,7 @@ private:
         return true;
     }
 
-    template<std::size_t Capacity>
-    bool appendCodePoint(BoundedText<Capacity>& target, std::uint32_t codePoint, std::size_t& codePointCount) {
+    bool appendCodePoint(TextSink& target, std::uint32_t codePoint, std::size_t& codePointCount) {
         if (++codePointCount > MAX_TEXT_CODE_POINTS) {
             return false;
         }
@@ -179,11 +213,12 @@ private:
         } else {
             return false;
         }
-        if (target.length + count > target.bytes.size()) {
+        if (target.length + count > target.capacity) {
             return false;
         }
         for (std::size_t index = 0; index < count; ++index) {
-            target.bytes[target.length++] = encoded[index];
+            if (target.bytes) target.bytes[target.length] = encoded[index];
+            ++target.length;
         }
         return true;
     }
@@ -206,7 +241,13 @@ private:
 
     template<std::size_t Capacity>
     bool parseString(BoundedText<Capacity>& output) {
-        output.length = 0;
+        TextSink sink{output.bytes.data(), Capacity, 0};
+        const bool valid = parseString(sink);
+        output.length = sink.length;
+        return valid;
+    }
+
+    bool parseString(TextSink& output) {
         if (!consume('"')) {
             return false;
         }
@@ -288,9 +329,10 @@ private:
                 return false;
             }
             position_ += byteCount;
-            if (++codePointCount > MAX_TEXT_CODE_POINTS || output.length + byteCount > output.bytes.size()) return false;
+            if (++codePointCount > MAX_TEXT_CODE_POINTS || output.length + byteCount > output.capacity) return false;
             for (std::size_t index = 0; index < byteCount; ++index) {
-                output.bytes[output.length++] = input_[start + index];
+                if (output.bytes) output.bytes[output.length] = input_[start + index];
+                ++output.length;
             }
         }
         return false;
@@ -654,12 +696,27 @@ HttpResponse ProtocolHandler::handle(const HttpRequest& request, DeviceInfo devi
         if (!isJsonContentType(request.contentType)) {
             return errorResponse(415, "unsupported_media_type", "The Spotify route requires application/json.");
         }
-        pendingTrack_ = {};
         JsonParser parser(request.body);
-        if (!parser.parseNowPlaying(pendingTrack_)) {
+        if (!parser.parseNowPlaying(nullptr)) {
             return errorResponse(400, "invalid_request", "The Spotify request does not match its v1 schema.");
         }
-        scenes_.updateNowPlaying(pendingTrack_);
+        // The HTTP adapter owns the immutable body separately from the scene.
+        // Other synchronous callers may supply a view into the current track;
+        // preserve that input with a temporary only for this unusual case.
+        std::unique_ptr<NowPlaying> aliasedTrack;
+        NowPlaying* target = &scenes_.nowPlaying_;
+        if (overlapsTrack(request.body, *target)) {
+            aliasedTrack.reset(new (std::nothrow) NowPlaying{});
+            if (!aliasedTrack) return errorResponse(500, "internal_error", "The Spotify update could not be prepared.");
+            target = aliasedTrack.get();
+        }
+        // Both passes use the same parser, capacity and immutable input. Parsing
+        // is synchronous and makes no callbacks, allocations or cooperative yields.
+        JsonParser commitParser(request.body);
+        if (!commitParser.parseNowPlaying(target)) {
+            return errorResponse(500, "internal_error", "The Spotify update could not be prepared.");
+        }
+        scenes_.updateNowPlaying(*target);
         return noContent(204);
     }
 
