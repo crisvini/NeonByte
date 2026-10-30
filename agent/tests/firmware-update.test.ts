@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { FirmwareUpdateService, SystemFirmwareUpdateJournal, type FirmwareUpdateJournal, type FirmwareUpdateRecord } from "../src/device/firmware-update.js";
-import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { broadenWindowsAcl, restrictWindowsAcl } from "./windows-acl.js";
@@ -23,8 +23,10 @@ const candidate: PreparedFirmwareCandidate = { id: "candidate-1", fileName: "fir
 
 class MemoryJournal implements FirmwareUpdateJournal {
   value: FirmwareUpdateRecord | null = null;
+  archived: FirmwareUpdateRecord[] = [];
   async load() { return this.value; }
   async save(value: FirmwareUpdateRecord) { this.value = structuredClone(value); }
+  async archive(entries: FirmwareUpdateRecord[]) { this.archived.push(...structuredClone(entries)); }
 }
 
 function fixture(options: { lostPut?: boolean; bootId?: string; buildId?: string; candidateTtlMs?: number; bootSequence?: string[]; automaticStartup?: boolean; experimental?: boolean; geometryPending?: boolean; experimentalFloors?: boolean;
@@ -337,9 +339,10 @@ test("manual recovery never drops protected journal history or retries an unreac
   reloaded.journal.value = full.journal.value;
   reloaded.setInfo(await full.client.info());
   await reloaded.service.restore();
-  await assert.rejects(reloaded.service.reconcileRunning("build-new", true), /history is full/i);
+  await reloaded.service.reconcileRunning("build-new", true);
   assert.equal(reloaded.journal.value?.history?.length, 8);
-  assert.equal(reloaded.resumed, false);
+  assert.equal(reloaded.journal.archived.length, 1);
+  assert.equal(reloaded.resumed, true);
 
   const offline = await runningAttempt();
   let calls = 0;
@@ -351,6 +354,129 @@ test("manual recovery never drops protected journal history or retries an unreac
   await assert.rejects(offline.service.reconcileRunning("build-new", true));
   assert.equal(calls, 1);
   assert.equal(offline.resumed, false);
+});
+
+test("persistent archives preserve full history through reconciliation and another preparation", async (t) => {
+  const attempt = await runningAttempt();
+  const f = fixture({ candidateBuildId: "build-next" });
+  f.setInfo(await attempt.client.info());
+  const directory = await mkdtemp(join(tmpdir(), "neonbyte-update-archive-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  restrictWindowsAcl(directory);
+  const path = join(directory, "NeonByte", "firmware-update.json");
+  const journal = new SystemFirmwareUpdateJournal(path);
+  const history = Array.from({ length: 8 }, (_, index) => ({ ...attempt.originalRecord, expectedBuildId: `historic-${index}` }));
+  f.journal.value = { ...attempt.originalRecord, history };
+  await journal.save(f.journal.value);
+  f.journal.archive = journal.archive.bind(journal);
+  await f.service.reconcileRunning("build-new", true);
+  assert.deepEqual(await journal.listArchived(), [history[0]]);
+  assert.deepEqual(f.journal.value?.history?.slice(0, 7), history.slice(1));
+  assert.deepEqual(f.journal.value?.history?.at(-1), attempt.originalRecord);
+  await journal.save(f.journal.value!);
+  await f.service.prepare();
+  assert.equal(f.service.view.state, "ready");
+  assert.equal(f.journal.value?.history?.length, 8);
+  assert.deepEqual((await journal.listArchived()).map((entry) => entry.expectedBuildId).sort(), ["historic-0", "historic-1"]);
+  const names = (await readdir(join(directory, "NeonByte"))).filter((name) => name.startsWith("firmware-update-history-"));
+  assert.equal(names.length, 2);
+  for (const name of names) {
+    const archivePath = join(directory, "NeonByte", name, "history.json");
+    assert.equal((await readFile(archivePath, "utf8")).includes(credential.token), false);
+    if (process.platform !== "win32") {
+      assert.equal((await stat(archivePath)).mode & 0o077, 0);
+      assert.equal((await stat(join(directory, "NeonByte", name))).mode & 0o077, 0);
+    }
+  }
+});
+
+test("interrupted archive writes leave the journal intact and can be retried", async (t) => {
+  const f = await runningAttempt();
+  const directory = await mkdtemp(join(tmpdir(), "neonbyte-interrupted-archive-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  restrictWindowsAcl(directory);
+  const base = join(directory, "NeonByte");
+  const journal = new SystemFirmwareUpdateJournal(join(base, "firmware-update.json"));
+  const original = { ...f.originalRecord, history: Array.from({ length: 8 }, () => ({ ...f.originalRecord })) };
+  await journal.save(original);
+  const interrupted = join(base, "firmware-update-history-00000000-0000-0000-0000-000000000000");
+  await mkdir(interrupted, { mode: 0o700 });
+  await writeFile(join(interrupted, ".history-incomplete.tmp"), "{", { mode: 0o600 });
+  assert.deepEqual(await journal.listArchived(), []);
+  assert.deepEqual(await journal.load(), original);
+  await journal.archive([original.history[0]!]);
+  assert.deepEqual(await journal.load(), original);
+  assert.deepEqual(await journal.listArchived(), [original.history[0]]);
+});
+
+test("archive failures block preparation and reconciliation without changing the journal or sending firmware", async () => {
+  for (const operation of ["prepare", "reconcile"] as const) {
+    const f = await runningAttempt();
+    f.journal.value = { ...f.originalRecord, state: operation === "prepare" ? "started" : "verificationFailed",
+      history: Array.from({ length: 8 }, () => ({ ...f.originalRecord })) };
+    const restarted = fixture({ candidateBuildId: "build-next" });
+    restarted.journal.value = structuredClone(f.journal.value);
+    restarted.setInfo(await f.client.info());
+    const original = structuredClone(restarted.journal.value);
+    restarted.journal.archive = async () => { throw new Error("The protected update history could not be archived safely."); };
+    await assert.rejects(operation === "prepare" ? restarted.service.prepare() : restarted.service.reconcileRunning("build-new", true), /history/i);
+    assert.deepEqual(restarted.journal.value, original);
+    assert.equal(restarted.calls.includes("suspend"), false);
+    assert.equal(restarted.calls.includes("pause"), false);
+    assert.equal(restarted.calls.includes("put"), false);
+  }
+});
+
+test("archive validation and unsafe permissions fail without replacing the journal", async (t) => {
+  const f = await runningAttempt();
+  const directory = await mkdtemp(join(tmpdir(), "neonbyte-archive-invalid-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  restrictWindowsAcl(directory);
+  const base = join(directory, "NeonByte");
+  const path = join(base, "firmware-update.json");
+  const journal = new SystemFirmwareUpdateJournal(path);
+  await journal.save(f.originalRecord);
+  const original = await readFile(path, "utf8");
+  await assert.rejects(journal.archive([{ ...f.originalRecord, token: credential.token } as FirmwareUpdateRecord]), /invalid/i);
+  const bad = join(base, "firmware-update-history-00000000-0000-0000-0000-000000000000");
+  await mkdir(bad, { mode: 0o700 });
+  await writeFile(join(bad, "history.json"), "invalid", { mode: 0o600 });
+  await assert.rejects(journal.listArchived());
+  if (process.platform === "win32") await broadenWindowsAcl(base);
+  else await chmod(base, 0o755);
+  await assert.rejects(journal.archive([f.originalRecord]), /history/i);
+  assert.equal(await readFile(path, "utf8"), original);
+});
+
+test("archive write, sync, read and readback validation failures preserve the original journal", async (t) => {
+  for (const failure of ["write", "sync", "read", "validation"] as const) {
+    const attempt = await runningAttempt();
+    const f = fixture({ candidateBuildId: "build-next" });
+    f.setInfo(await attempt.client.info());
+    const directory = await mkdtemp(join(tmpdir(), "neonbyte-archive-fault-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    restrictWindowsAcl(directory);
+    const path = join(directory, "NeonByte", "firmware-update.json");
+    const journal = new SystemFirmwareUpdateJournal(path);
+    const original = { ...attempt.originalRecord, state: "started" as const,
+      history: Array.from({ length: 8 }, () => ({ ...attempt.originalRecord })) };
+    await journal.save(original);
+    f.journal.value = original;
+    f.journal.archive = journal.archive.bind(journal);
+    const probe = await open(path, "r");
+    const prototype = Object.getPrototypeOf(probe) as object;
+    await probe.close();
+    const method = failure === "write" ? "writeFile" : failure === "sync" ? "sync" : "readFile";
+    const saved = Reflect.get(prototype, method) as unknown;
+    Reflect.set(prototype, method, failure === "validation" ? async () => "invalid" : async () => { throw new Error("injected disk failure"); });
+    try { await assert.rejects(f.service.prepare(), /history/i, failure); }
+    finally { Reflect.set(prototype, method, saved); }
+    assert.deepEqual(await journal.load(), original, failure);
+    assert.deepEqual(f.journal.value, original, failure);
+    assert.equal(f.calls.includes("suspend"), false, failure);
+    assert.equal(f.calls.includes("pause"), false, failure);
+    assert.equal(f.calls.includes("put"), false, failure);
+  }
 });
 
 test("protected journal retains reconciliation evidence and the previous attempt after another preparation", async (t) => {

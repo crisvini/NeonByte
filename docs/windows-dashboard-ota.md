@@ -167,8 +167,27 @@ Successful reconciliation records a distinct `manuallyReconciled` result and
 both observations' memory evidence; it does **not** mark the previous OTA as
 verified or prove flashed bytes match the original hash. The protected journal
 retains the earlier attempt and the manual result when the next candidate is
-prepared. History is bounded to eight snapshots; if full, preparation or
-reconciliation fails rather than silently discarding an entry. The scheduler
+prepared. The active journal retains at most eight snapshots. When full, the
+agent writes the oldest snapshot to a new, uniquely named
+`firmware-update-history-<uuid>/history.json` directory beside the journal,
+then retains the seven newer snapshots and appends the current attempt. The
+latest snapshot stays in the journal for reconciliation validation. Each
+archive uses the same protected-access checks as the journal, a private
+temporary file, file synchronization, atomic rename, and validated readback;
+on POSIX the archive and parent directories are synchronized as well. Windows
+directory synchronization is not available through this implementation. An
+archive failure blocks the operation before scheduler drain, pause, or firmware
+transfer and leaves the original journal intact. An interruption can leave an
+incomplete temporary file or a duplicate snapshot; neither replaces the journal.
+Never delete the archive directories as a way to clear the active journal.
+
+Inspect the `history.json` files in the protected NeonByte data directory with
+the same user account, or use `SystemFirmwareUpdateJournal.listArchived()` to
+read and validate all completed archives. The returned entries are not ordered
+chronologically; an incomplete temporary archive is ignored, while an invalid
+completed archive causes inspection to fail. Archive records use the existing
+strict journal schema and contain no token, password, binary, or file path.
+The scheduler
 resumes only after the reconciliation record is saved. The panel then permits a
 new candidate to be prepared, subject to all normal identity, preflight, OTA,
 and post-boot checks.

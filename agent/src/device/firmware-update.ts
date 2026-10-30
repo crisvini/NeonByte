@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { rename, mkdir, open, lstat, unlink } from "node:fs/promises";
+import { rename, mkdir, open, lstat, unlink, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { MAINTENANCE_HTTP_TIMEOUT_MS, MaintenanceRequestError, MaintenanceTransportError, type MaintenanceClient, type MaintenanceDiagnostics, type MaintenanceInfo, type MaintenanceStatus, validateMaintenanceOrigin } from "./maintenance-client.js";
 import { FirmwareInbox, isDeferredRuntimeBounds, verifyLocalProtectedAccess, type PreparedFirmwareCandidate, type RuntimeBoundsValidation } from "./firmware-inbox.js";
@@ -49,6 +49,7 @@ export interface FirmwareUpdateRecord {
 export interface FirmwareUpdateJournal {
   load(): Promise<FirmwareUpdateRecord | null>;
   save(value: FirmwareUpdateRecord): Promise<void>;
+  archive?(entries: FirmwareUpdateHistoryEntry[]): Promise<void>;
 }
 
 export class SystemFirmwareUpdateJournal implements FirmwareUpdateJournal {
@@ -100,6 +101,70 @@ export class SystemFirmwareUpdateJournal implements FirmwareUpdateJournal {
       try { await unlink(temporaryPath); } catch { /* The fixed journal remains protected and is revalidated before use. */ }
       throw new Error("Unable to save the protected firmware update journal.");
     }
+  }
+
+  async archive(entries: FirmwareUpdateHistoryEntry[]): Promise<void> {
+    if (entries.length !== 1 || !entries.every((entry) => validRecord(entry, false))) throw new Error("The protected update history is invalid.");
+    try {
+      await verifyLocalProtectedAccess(this.directory, [this.path]);
+      const archiveDirectory = join(this.directory, `firmware-update-history-${randomUUID()}`);
+      await mkdir(archiveDirectory, { mode: 0o700 });
+      await verifyLocalProtectedAccess(archiveDirectory, []);
+      const temporaryPath = join(archiveDirectory, `.history-${randomUUID()}.tmp`);
+      const finalPath = join(archiveDirectory, "history.json");
+      const serialized = JSON.stringify({ version: 1, entries });
+      const handle = await open(temporaryPath, "wx", 0o600);
+      try { await handle.writeFile(serialized, "utf8"); await handle.sync(); }
+      finally { await handle.close(); }
+      await verifyLocalProtectedAccess(archiveDirectory, [temporaryPath]);
+      await rename(temporaryPath, finalPath);
+      if (process.platform !== "win32") {
+        for (const path of [archiveDirectory, this.directory]) {
+          const directoryHandle = await open(path, "r");
+          try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
+        }
+      }
+      const recovered = await this.readArchive(archiveDirectory);
+      if (JSON.stringify(recovered) !== JSON.stringify(entries)) throw new Error();
+    } catch { throw new Error("The protected update history could not be archived safely."); }
+  }
+
+  async listArchived(): Promise<FirmwareUpdateHistoryEntry[]> {
+    await verifyLocalProtectedAccess(this.directory, []);
+    const names = (await readdir(this.directory)).filter((name) => /^firmware-update-history-[0-9a-f-]{36}$/.test(name)).sort();
+    const entries: FirmwareUpdateHistoryEntry[] = [];
+    for (const name of names) {
+      const directory = join(this.directory, name);
+      await verifyLocalProtectedAccess(directory, []);
+      // An interrupted write leaves the original journal intact; incomplete archives contain no committed entries.
+      try { await lstat(join(directory, "history.json")); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+      entries.push(...await this.readArchive(directory));
+    }
+    return entries;
+  }
+
+  private async readArchive(directory: string): Promise<FirmwareUpdateHistoryEntry[]> {
+    const path = join(directory, "history.json");
+    const beforePath = await lstat(path, { bigint: true });
+    await verifyLocalProtectedAccess(this.directory, []);
+    await verifyLocalProtectedAccess(directory, [path]);
+    const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const before = await handle.stat({ bigint: true });
+      if (!before.isFile() || before.dev !== beforePath.dev || before.ino !== beforePath.ino || before.size > 16_384n) throw new Error();
+      const serialized = await handle.readFile("utf8");
+      const after = await handle.stat({ bigint: true });
+      const pathAfter = await lstat(path, { bigint: true });
+      if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size || after.mtimeNs !== before.mtimeNs ||
+          after.ctimeNs !== before.ctimeNs || pathAfter.dev !== before.dev || pathAfter.ino !== before.ino || pathAfter.isSymbolicLink()) throw new Error();
+      const parsed: unknown = JSON.parse(serialized);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+      const value = parsed as Record<string, unknown>;
+      if (Object.keys(value).length !== 2 || value["version"] !== 1 || !Array.isArray(value["entries"]) ||
+          value["entries"].length !== 1 || !value["entries"].every((entry: unknown) => validRecord(entry, false))) throw new Error();
+      return value["entries"] as FirmwareUpdateHistoryEntry[];
+    } finally { await handle.close(); }
   }
 }
 
@@ -346,8 +411,9 @@ export class FirmwareUpdateService {
       const credential = await this.requiredCredential();
       const invalidateReconciliation = async (): Promise<never> => {
         if (!previousRecord || previousRecord.state !== "manuallyReconciled") throw new Error("No reconciliation is available.");
+        const history = await archiveAttempt(previousRecord, this.options.journal);
         await this.options.device.suspendAndDrain();
-        previousRecord = { ...previousRecord, state: "verificationFailed", history: (previousRecord.history?.length ?? 0) < 8 ? archiveAttempt(previousRecord) : (previousRecord.history ?? []) };
+        previousRecord = { ...previousRecord, state: "verificationFailed", history };
         this.record = previousRecord;
         await this.persist();
         throw new Error("The reconciled device changed; reconcile the running firmware again before preparing another update.");
@@ -368,7 +434,7 @@ export class FirmwareUpdateService {
       this.assertBoundInfo(info, credential);
       this.assertCapacity(info, candidate);
       this.candidate = candidate;
-      const history = previousRecord?.putAttempted ? archiveAttempt(previousRecord) : previousRecord?.history;
+      const history = previousRecord?.putAttempted ? await archiveAttempt(previousRecord, this.options.journal) : previousRecord?.history;
       this.record = { ...this.recordFor(candidate, credential, info, "ready", false), ...(history ? { history } : {}) };
       this.candidatePreparedAt = this.now();
       await this.persist();
@@ -594,6 +660,7 @@ export class FirmwareUpdateService {
       }
       const credential = await this.requiredCredential();
       if (!sameBinding(record, credential)) throw new Error("The enrolled recovery identity changed; this update cannot be reconciled.");
+      const history = await archiveAttempt(record, this.options.journal);
       await this.options.device.suspendAndDrain();
       this.state = "reconciling";
       this.detailMessage = null;
@@ -627,7 +694,7 @@ export class FirmwareUpdateService {
       if (intervalMs < 2_000 || this.now() >= deadline || first.info.bootId !== second.info.bootId) {
         throw new Error("The device cannot be reconciled: two stable boot observations were not obtained.");
       }
-      const next: FirmwareUpdateRecord = { ...record, state: "manuallyReconciled", history: archiveAttempt(record),
+      const next: FirmwareUpdateRecord = { ...record, state: "manuallyReconciled", history,
         manualReconciliation: { bootId: second.info.bootId, observations: 2, intervalMs,
           firstFreeHeapBytes: first.diagnostics.freeHeapBytes, firstLargestBlockBytes: first.diagnostics.maxFreeBlockBytes,
           secondFreeHeapBytes: second.diagnostics.freeHeapBytes, secondLargestBlockBytes: second.diagnostics.maxFreeBlockBytes } };
@@ -801,10 +868,14 @@ export class FirmwareUpdateService {
   }
 }
 
-function archiveAttempt(record: FirmwareUpdateRecord): FirmwareUpdateHistoryEntry[] {
+async function archiveAttempt(record: FirmwareUpdateRecord, journal: FirmwareUpdateJournal): Promise<FirmwareUpdateHistoryEntry[]> {
   const { history, ...snapshot } = record;
   const previous = history ?? [];
-  if (previous.length >= 8) throw new Error("The protected update history is full; preserve it before preparing another update.");
+  if (previous.length >= 8) {
+    if (!journal.archive) throw new Error("The protected update history cannot be archived safely.");
+    await journal.archive([previous[0]!]);
+    return [...previous.slice(1), snapshot];
+  }
   return [...previous, snapshot];
 }
 
