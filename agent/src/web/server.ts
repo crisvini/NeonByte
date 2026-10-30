@@ -471,7 +471,7 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           await options.device.configure({ address: item["address"], enabled: item["enabled"] });
           response.writeHead(204, securityHeaders()); response.end();
         } catch (error) {
-          const message = error instanceof Error && /pairing token|credential manager|valid device HTTP|stopping/.test(error.message)
+          const message = error instanceof Error && /pairing token|credential manager|valid device HTTP|stopping|maintenance is in progress/.test(error.message)
             ? error.message : "Unable to update device configuration.";
           sendError(response, error instanceof PayloadTooLargeError ? 413 : 400, message);
         }

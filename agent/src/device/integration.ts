@@ -284,16 +284,32 @@ export class DeviceIntegration {
           (settings.token !== undefined && typeof settings.token !== "string")) throw new Error("Invalid device configuration.");
       const address = settings.address.trim();
       const previous = this.config;
-      const token = settings.token || (previous?.address === address ? previous.token : "");
-      if (!token) throw new Error("Provide the device pairing token for this address.");
+      let saved: DeviceConfig | null = null;
+      if (!settings.token) {
+        try { saved = await this.options.store.get(); }
+        catch { throw new Error("Unable to read device configuration from the system credential manager."); }
+      }
+      const token = settings.token || saved?.token || "";
+      if (!token) throw new Error("The stored device pairing token is missing. Configure the device pairing token first.");
       const config = { address, token, enabled: settings.enabled };
-      this.createClient(config);
+      const client = this.createClient(config);
+      const addressChanged = Boolean(previous && previous.address !== address);
+      if (addressChanged && this.maintenanceHeld) throw new Error("Device settings cannot change while maintenance is in progress.");
       await this.scheduler?.stop();
       this.scheduler = null;
-      try { await this.options.store.set(config); }
-      catch { this.config = previous ? { ...previous, enabled: false } : null; throw new Error("Unable to save device configuration in the system credential manager."); }
+      try {
+        if (addressChanged) {
+          try { await client.heartbeat(); }
+          catch { throw new Error("Device authentication or communication failed; check the pairing token and connectivity."); }
+        }
+        try { await this.options.store.set(config); }
+        catch { throw new Error("Unable to save device configuration in the system credential manager."); }
+      } catch (error) {
+        if (previous?.enabled && !this.closed && !this.maintenanceHeld) this.startScheduler(previous);
+        throw error;
+      }
       this.config = config;
-      if (previous?.token !== config.token) {
+      if (previous?.token !== config.token || addressChanged) {
         this.deviceMode = null;
         this.deviceScene = null;
         this.deviceModeObservedAtUnixMs = null;

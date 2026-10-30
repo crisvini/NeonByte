@@ -39,6 +39,6 @@ This procedure configures a device that already runs compatible NeonByte firmwar
 
 4. Restart the agent, open [the local dashboard](http://localhost:8787), and check **Device connection settings**. The panel can change the address and enable or disable an existing connection; it does not accept the pairing token in the browser.
 
-Use the device's current private IPv4 address. The agent does not discover devices automatically. Its local HTTP traffic is unencrypted, so use a trusted network. Public addresses, host names, and IPv4 link-local addresses are rejected. A changed address may require updating the device credential entry with the foreground command.
+Use the device's current private IPv4 address. When the address changes, enter it in **Device connection settings** and save. The agent checks communication and pairing with the stored token before saving the new address. If this fails, the previous configuration remains in place. The agent does not discover devices automatically. Its local HTTP traffic is unencrypted, so use a trusted network. Public addresses, host names, and IPv4 link-local addresses are rejected.
 
 The device must already have the correct private credentials for its maintenance routes. Those credentials are distinct from the application pairing token. See the [hardware evidence](../hardware.md), [recovery limits](../recovery.md), and [maintenance implementation](../windows-dashboard-ota.md) before attempting any firmware or provisioning operation.

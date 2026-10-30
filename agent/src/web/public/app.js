@@ -855,8 +855,9 @@ async function cancelAnimationTransfer() {
 document.querySelector("#device-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
+    const address = document.querySelector("#device-address").value.trim();
     await postJson("/api/device", {
-      address: document.querySelector("#device-address").value,
+      address: /^\d+\.\d+\.\d+\.\d+$/.test(address) ? `http://${address}` : address,
       enabled: document.querySelector("#device-enabled").checked,
     });
     await refreshStatus();

@@ -49,9 +49,8 @@ test("dashboard configuration drives the native firmware through restart, outage
   await waitFor(() => device.status.connection === "disconnected");
   first.offline = false;
   await waitFor(() => device.status.connection === "connected");
-  assert.equal((await post({ address: second.url, enabled: true })).status, 400);
+  assert.equal((await post({ address: second.url, enabled: true })).status, 204);
   assert.equal((await post({ address: second.url, token: second.token, enabled: true })).status, 400);
-  await device.configure({ address: second.url, token: second.token, enabled: true });
   await waitFor(() => device.status.connection === "connected");
   assert.equal((await second.state()).trackId, "lifecycle-track");
   await device.stop();

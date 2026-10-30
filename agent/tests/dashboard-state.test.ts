@@ -11,6 +11,24 @@ function element() {
     querySelector: () => ({ textContent: "" }) };
 }
 
+test("device settings accept the IPv4 address shown on the device", async () => {
+  const source = await sourcePromise;
+  const start = source.indexOf('document.querySelector("#device-form").addEventListener');
+  const end = source.indexOf("\nasync function runOtaAction", start);
+  let submit!: (event: { preventDefault(): void }) => Promise<void>;
+  let sent: unknown;
+  const sandbox = vm.createContext({
+    document: { querySelector: (selector: string) => selector === "#device-form"
+      ? { addEventListener: (_type: string, handler: typeof submit) => { submit = handler; } }
+      : selector === "#device-address" ? { value: "192.168.68.65" } : { checked: true } },
+    postJson: async (_path: string, body: unknown) => { sent = JSON.parse(JSON.stringify(body)); },
+    refreshStatus: async () => {}, notify() {},
+  });
+  vm.runInContext(source.slice(start, end), sandbox);
+  await submit({ preventDefault() {} });
+  assert.deepEqual(sent, { address: "http://192.168.68.65", enabled: true });
+});
+
 test("reloading a dashboard never posts a mode from stale browser storage", async () => {
   const source = await sourcePromise;
   const start = source.indexOf("async function initialize()");

@@ -248,16 +248,141 @@ test("Spotify refreshes, GIF preparation, and reconnects never write the device 
   } finally { await device.stop(); }
 });
 
-test("address changes require a new token and storage failures cannot leak secrets", async () => {
+test("dashboard verifies a saved token at a new address and resumes synchronization", async () => {
   const store = new MemoryStore();
-  const device = new DeviceIntegration({ modeController: await createTestModeController(), store, poller: poller(), intervalMs: 10 });
+  store.value = { address: "http://192.168.68.72", token: "test-secret", enabled: true };
+  const addresses: string[] = [];
+  const fetchDevice: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/api/v1/status") return new Response(JSON.stringify({ protocolVersion: "v1", firmwareVersion: "test",
+      ip: url.hostname, freeStorageBytes: 65536, mode: "auto", activeScene: "gif" }));
+    if (url.pathname === "/api/v1/heartbeat" && new Headers(init?.headers).get("Authorization") === "Bearer test-secret") {
+      addresses.push(url.hostname);
+      return new Response(null, { status: 204 });
+    }
+    return new Response(null, { status: 401 });
+  };
+  const modeController = await createTestModeController();
+  const device = new DeviceIntegration({ modeController, store, poller: poller(), intervalMs: 20, fetchDevice });
   await device.start();
-  await device.configure({ address: "http://127.0.0.1:1", token: "test-secret", enabled: false });
-  await assert.rejects(device.configure({ address: "http://127.0.0.1:2", enabled: true }), /pairing token/i);
-  assert.equal(store.value?.address, "http://127.0.0.1:1");
-  await assert.rejects(device.configure({ address: "http://user:password@example.com", token: "test-secret", enabled: true }));
-  assert.equal(JSON.stringify(device.status).includes("test-secret"), false);
-  await device.stop();
+  const app = await startLocalWebApp({ poller: poller(), modeController, oauth: null, spotifyConfigured: false, port: 0, device });
+  const origin = `http://127.0.0.1:${app.port}`;
+  try {
+    const response = await fetch(`${origin}/api/device`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" },
+      body: JSON.stringify({ address: "http://192.168.68.65", enabled: true }) });
+    assert.equal(response.status, 204);
+    assert.deepEqual(store.value, { address: "http://192.168.68.65", token: "test-secret", enabled: true });
+    const deadline = Date.now() + 2000;
+    while (device.status.connection !== "connected" || addresses.filter((address) => address === "192.168.68.65").length < 2) {
+      if (Date.now() >= deadline) throw new Error("Device did not synchronize at the new address.");
+      await delay(10);
+    }
+    assert.equal((await fetch(`${origin}/api/status`).then((result) => result.text())).includes("test-secret"), false);
+  } finally { await app.close(); await device.stop(); }
+});
+
+test("failed address validation preserves the saved configuration and never exposes the token", async () => {
+  const initial = { address: "http://192.168.68.72", token: "test-secret", enabled: true };
+  const store = new MemoryStore(); store.value = { ...initial };
+  let failure: "reject" | "offline" | "none" = "reject";
+  const fetchDevice: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === "192.168.68.65" && failure === "offline") throw new Error("test-secret");
+    if (url.pathname === "/api/v1/status") return new Response(JSON.stringify({ protocolVersion: "v1", firmwareVersion: "test",
+      ip: url.hostname, freeStorageBytes: 65536, mode: "auto", activeScene: "gif" }));
+    if (url.hostname === "192.168.68.65" && failure === "reject") return new Response("test-secret", { status: 401 });
+    assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer test-secret");
+    return new Response(null, { status: 204 });
+  };
+  const modeController = await createTestModeController();
+  const device = new DeviceIntegration({ modeController, store, poller: poller(), intervalMs: 20, fetchDevice });
+  await device.start();
+  const app = await startLocalWebApp({ poller: poller(), modeController, oauth: null, spotifyConfigured: false, port: 0, device });
+  const origin = `http://127.0.0.1:${app.port}`;
+  const post = (address: string) => fetch(`${origin}/api/device`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" },
+    body: JSON.stringify({ address, enabled: true }) });
+  try {
+    for (const scenario of ["reject", "offline"] as const) {
+      failure = scenario;
+      const response = await post("http://192.168.68.65");
+      assert.equal(response.status, 400);
+      const body = await response.text();
+      assert.match(body, /pairing|communication|connectivity/i);
+      assert.equal(body.includes("test-secret"), false);
+      assert.deepEqual(store.value, initial);
+      assert.equal(device.status.address, initial.address);
+    }
+    const invalid = await post("http://user:password@example.com");
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(store.value, initial);
+    assert.equal(JSON.stringify(device.status).includes("test-secret"), false);
+    const deadline = Date.now() + 2000;
+    while (device.status.connection !== "connected") {
+      if (Date.now() >= deadline) throw new Error("Previous connection did not resume.");
+      await delay(10);
+    }
+  } finally { await app.close(); await device.stop(); }
+});
+
+test("a missing stored token rejects an address change without replacing the previous configuration", async () => {
+  const store = new MemoryStore();
+  store.value = { address: "http://192.168.68.72", token: "test-secret", enabled: false };
+  const device = new DeviceIntegration({ modeController: await createTestModeController(), store, poller: poller(), intervalMs: 20 });
+  await device.start();
+  store.value = null;
+  try {
+    await assert.rejects(device.configure({ address: "http://192.168.68.65", enabled: true }), /pairing token/i);
+    assert.equal(store.value, null);
+    assert.equal(device.status.address, "http://192.168.68.72");
+  } finally { await device.stop(); }
+});
+
+test("a failed credential write keeps the previous connection active", async () => {
+  const initial = { address: "http://192.168.68.72", token: "test-secret", enabled: true };
+  const store: DeviceConfigStore = { get: async () => ({ ...initial }), set: async () => { throw new Error("test-secret"); } };
+  const fetchDevice: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    return url.pathname === "/api/v1/status"
+      ? new Response(JSON.stringify({ protocolVersion: "v1", firmwareVersion: "test", ip: url.hostname,
+        freeStorageBytes: 65536, mode: "auto", activeScene: "gif" }))
+      : new Response(null, { status: 204 });
+  };
+  const device = new DeviceIntegration({ modeController: await createTestModeController(), store, poller: poller(), intervalMs: 20, fetchDevice });
+  await device.start();
+  try {
+    await assert.rejects(device.configure({ address: "http://192.168.68.65", enabled: true }),
+      (error: Error) => /credential manager/.test(error.message) && !error.message.includes("test-secret"));
+    assert.equal(device.status.address, initial.address);
+    const deadline = Date.now() + 2000;
+    while (device.status.connection !== "connected") {
+      if (Date.now() >= deadline) throw new Error("Previous connection did not resume.");
+      await delay(10);
+    }
+  } finally { await device.stop(); }
+});
+
+test("credential read errors are sanitized when updating an address", async () => {
+  let failRead = false;
+  const store: DeviceConfigStore = {
+    get: async () => { if (failRead) throw new Error("credential manager: test-secret");
+      return { address: "http://192.168.68.72", token: "test-secret", enabled: false }; },
+    set: async () => { throw new Error("Unexpected write."); },
+  };
+  const modeController = await createTestModeController();
+  const device = new DeviceIntegration({ modeController, store, poller: poller(), intervalMs: 20 });
+  await device.start();
+  failRead = true;
+  const app = await startLocalWebApp({ poller: poller(), modeController, oauth: null, spotifyConfigured: false, port: 0, device });
+  const origin = `http://127.0.0.1:${app.port}`;
+  try {
+    const response = await fetch(`${origin}/api/device`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" },
+      body: JSON.stringify({ address: "http://192.168.68.65", enabled: true }) });
+    assert.equal(response.status, 400);
+    const body = await response.text();
+    assert.match(body, /credential manager/i);
+    assert.equal(body.includes("test-secret"), false);
+    assert.equal(device.status.address, "http://192.168.68.72");
+  } finally { await app.close(); await device.stop(); }
 });
 
 test("dashboard protects configuration and never returns pairing credentials", async () => {
