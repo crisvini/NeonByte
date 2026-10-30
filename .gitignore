@@ -29,3 +29,5 @@ firmware/compile_commands.json
 
 # Per-device recovery identity; never include it in public artifacts
 /firmware/private/
+
+/gifs
