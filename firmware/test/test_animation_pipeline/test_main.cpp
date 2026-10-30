@@ -254,7 +254,13 @@ void testV2UploadValidationAtomicReplacementAndPlaybackPipeline() {
     const auto clearCount = panel.screenClears;
     for (unsigned tick = 0; tick < 240; ++tick) display.tick(scenes, 0);
     TEST_ASSERT_EQUAL_UINT32(240, panel.rows.size());
+    TEST_ASSERT_EQUAL_UINT32(0, storage.animationRevision);
+    display.tick(scenes, 99);
+    TEST_ASSERT_EQUAL_UINT32(240, panel.rows.size());
+    TEST_ASSERT_EQUAL_UINT32(0, storage.animationRevision);
+    display.tick(scenes, 100);
     TEST_ASSERT_EQUAL_UINT32(1, storage.animationRevision);
+    TEST_ASSERT_EQUAL_UINT32(248, panel.rows.size());
     session.markInstalled(clock.now); // The authenticated status route observes the new storage generation.
     TEST_ASSERT_EQUAL_INT(AnimationUploadState::Installed, session.state());
     TEST_ASSERT_EQUAL_UINT32(clearCount, panel.screenClears);
@@ -268,9 +274,9 @@ void testV2UploadValidationAtomicReplacementAndPlaybackPipeline() {
         TEST_ASSERT_EQUAL_HEX16(0xf800, panel.rows[240 + y].firstPixel);
     }
     display.tick(scenes, 0); // Finish the keyframe record without clearing the panel.
-    display.tick(scenes, 39);
+    display.tick(scenes, 139);
     TEST_ASSERT_EQUAL_UINT32(480, panel.rows.size());
-    for (unsigned tick = 0; tick < 10 && panel.rows.size() < 481; ++tick) display.tick(scenes, 40);
+    for (unsigned tick = 0; tick < 10 && panel.rows.size() < 481; ++tick) display.tick(scenes, 140);
     TEST_ASSERT_EQUAL_UINT32(481, panel.rows.size());
     TEST_ASSERT_EQUAL_INT(20, panel.rows.back().x);
     TEST_ASSERT_EQUAL_INT(10, panel.rows.back().y);

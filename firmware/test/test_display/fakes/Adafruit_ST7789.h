@@ -6,6 +6,8 @@
 #include <vector>
 #include <string>
 
+#include "neonbyte/esp8266/fake_clock.h"
+
 constexpr std::uint8_t SPI_MODE3 = 3;
 constexpr std::uint8_t ST77XX_MADCTL = 0x36;
 constexpr std::uint16_t ST77XX_BLACK = 0x0000;
@@ -34,6 +36,7 @@ struct RowWrite {
     std::uint16_t firstPixel = 0;
     std::size_t pixelCount = 0;
     std::vector<std::uint16_t> pixels;
+    std::uint32_t completedAtMicros = 0;
 };
 
 struct Rectangle { int x, y, width, height; std::uint16_t color; };
@@ -45,7 +48,14 @@ struct PanelState {
     std::vector<Rectangle> rectangles;
     std::vector<TextWrite> texts;
     std::size_t totalRowWrites = 0;
+    std::size_t spiByteCalls = 0, spiBytes = 0, spiWordWrites = 0;
+    std::size_t transactionStarts = 0, transactionEnds = 0;
+    std::uint32_t lastSourceReadCountAtSpiWrite = 0;
+    int windowX = 0, windowY = 0, windowWidth = 0, windowHeight = 0;
+    std::size_t windowPixelCount = 0;
     bool captureRowHistory = true;
+    bool windowActive = false, transactionActive = false, spiAlignmentFault = false;
+    bool spiWriteOutsideTransaction = false;
     unsigned screenClears = 0;
     std::uint32_t initializationFrequency = 0;
     std::uint32_t drawingFrequency = 0;
@@ -54,6 +64,57 @@ struct PanelState {
 };
 
 inline PanelState panelState;
+
+inline void writePanelPixel(std::uint16_t color) {
+    auto& panel = panelState;
+    if (!panel.transactionActive) panel.spiWriteOutsideTransaction = true;
+    if (!panel.windowActive || panel.windowPixelCount >=
+        static_cast<std::size_t>(panel.windowWidth) * panel.windowHeight) return;
+
+    const auto rowOffset = panel.windowPixelCount / static_cast<std::size_t>(panel.windowWidth);
+    const auto pixelOffset = panel.windowPixelCount % static_cast<std::size_t>(panel.windowWidth);
+    const auto x = panel.windowX + static_cast<int>(pixelOffset);
+    const auto y = panel.windowY + static_cast<int>(rowOffset);
+    panel.pixels[y * 240 + x] = color;
+    if (panel.captureRowHistory) {
+        if (pixelOffset == 0) {
+            panel.rows.push_back({x, panel.windowWidth, y, color, 0, {}, 0});
+            panel.rows.back().pixels.reserve(static_cast<std::size_t>(panel.windowWidth));
+        }
+        auto& row = panel.rows.back();
+        if (row.pixelCount == 0) row.firstPixel = color;
+        row.pixels.push_back(color);
+        ++row.pixelCount;
+        if (row.pixelCount == static_cast<std::size_t>(panel.windowWidth)) {
+            row.completedAtMicros = micros();
+            ++displayTestCompletedAnimationRows;
+        }
+    }
+    ++panel.windowPixelCount;
+}
+
+class RecordingDisplaySpi {
+public:
+    void write16(std::uint16_t pixel) {
+        ++panelState.spiWordWrites;
+        writePanelPixel(pixel);
+        advanceDisplayTestClockForPixels(1);
+    }
+
+    void writeBytes(const std::uint8_t* bytes, std::uint32_t length) {
+        ++panelState.spiByteCalls;
+        panelState.spiBytes += length;
+        panelState.lastSourceReadCountAtSpiWrite = displayTestAnimationReadCount;
+        if ((reinterpret_cast<std::uintptr_t>(bytes) & 3u) != 0 || length > 480)
+            panelState.spiAlignmentFault = true;
+        for (std::uint32_t offset = 0; offset + 1 < length; offset += 2) {
+            writePanelPixel(static_cast<std::uint16_t>(bytes[offset]) << 8 | bytes[offset + 1]);
+            advanceDisplayTestClockForPixels(1);
+        }
+    }
+};
+
+inline RecordingDisplaySpi recordingDisplaySpi;
 
 } // namespace neonbyte::display_test
 
@@ -104,43 +165,42 @@ public:
             if (col >= 0 && col < 240 && row >= 0 && row < 240)
                 neonbyte::display_test::panelState.pixels[row * 240 + col] = color;
     }
-    void startWrite() {}
+    void startWrite() {
+        ++neonbyte::display_test::panelState.transactionStarts;
+        neonbyte::display_test::panelState.transactionActive = true;
+        displayTestSpiTransactionActive = true;
+    }
     void setAddrWindow(int x, int y, int width, int height) {
-        activeRow_ = -1;
-        if (x >= 0 && y >= 0 && y < 240 && x + width <= 240 && height == 1) {
-            auto& panel = neonbyte::display_test::panelState;
-            ++panel.totalRowWrites;
-            activeX_ = x;
-            activeY_ = y;
-            activeWidth_ = width;
-            activePixelCount_ = 0;
-            if (panel.captureRowHistory) {
-                panel.rows.push_back({x, width, y, 0, 0, {}});
-                activeRow_ = static_cast<int>(panel.rows.size() - 1);
-            } else {
-                activeRow_ = -2;
-            }
+        auto& panel = neonbyte::display_test::panelState;
+        ++panel.totalRowWrites;
+        if (!panel.transactionActive) panel.spiWriteOutsideTransaction = true;
+        panel.windowActive = x >= 0 && y >= 0 && width > 0 && height > 0 &&
+            x + width <= 240 && y + height <= 240;
+        if (panel.windowActive) {
+            panel.windowX = x;
+            panel.windowY = y;
+            panel.windowWidth = width;
+            panel.windowHeight = height;
+            panel.windowPixelCount = 0;
         }
     }
     void SPI_WRITE16(std::uint16_t pixel) {
-        if (activeRow_ == -1) return;
-        auto& panel = neonbyte::display_test::panelState;
-        if (activePixelCount_ < static_cast<std::size_t>(activeWidth_))
-            panel.pixels[activeY_ * 240 + activeX_ + activePixelCount_] = pixel;
-        if (activeRow_ >= 0) {
-            auto& row = panel.rows[static_cast<std::size_t>(activeRow_)];
-            if (row.pixelCount == 0) row.firstPixel = pixel;
-            row.pixels.push_back(pixel);
-            ++row.pixelCount;
-        }
-        ++activePixelCount_;
+        neonbyte::display_test::recordingDisplaySpi.write16(pixel);
     }
-    void endWrite() {}
+    void writePixelBytes(const std::uint8_t* bytes, std::size_t length) {
+        neonbyte::display_test::recordingDisplaySpi.writeBytes(bytes, static_cast<std::uint32_t>(length));
+    }
+    void endWrite() {
+        ++neonbyte::display_test::panelState.transactionEnds;
+        neonbyte::display_test::panelState.transactionActive = false;
+        displayTestSpiTransactionActive = false;
+    }
+
+protected:
+    struct HardwareSpiState { neonbyte::display_test::RecordingDisplaySpi* _spi; };
+    HardwareSpiState hwspi{&neonbyte::display_test::recordingDisplaySpi};
 
 private:
-    int activeRow_ = -1;
-    int activeX_ = 0, activeY_ = 0, activeWidth_ = 0;
-    std::size_t activePixelCount_ = 0;
     std::uint32_t frequency_ = 0;
     int cursorX_ = 0, cursorY_ = 0;
     std::uint8_t textSize_ = 1;

@@ -4,10 +4,14 @@
 #include <ESP8266WiFi.h>
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 namespace neonbyte {
 namespace {
 constexpr unsigned ANIMATION_REOPEN_RETRY_MS = 1000;
 constexpr unsigned SPOTIFY_TEXT_ROWS_PER_TICK = 2;
+constexpr std::uint32_t ANIMATION_TICK_BUDGET_US = 4000;
+constexpr unsigned ANIMATION_ROWS_PER_TICK = 8;
+constexpr unsigned ANIMATION_STEPS_PER_TICK = 32;
 
 bool metadataMatches(std::string_view text, const SpotifyMarquee& result, const std::uint8_t* cachedText) {
     unsigned index = 0;
@@ -214,15 +218,34 @@ void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t) {
 }
 void DeviceDisplay::beginAnimationFrame(std::uint16_t, std::uint16_t) {}
 void DeviceDisplay::writeAnimationPixels(std::uint32_t offset, const std::uint8_t* pixels, std::size_t length) {
+    AnimationWindowState window{};
+    writeAnimationPixels(offset,pixels,length,window);
+}
+void DeviceDisplay::writeAnimationPixels(std::uint32_t offset, const std::uint8_t* pixels,
+                                         std::size_t length, AnimationWindowState& window) {
     if (!initialized_ || pixels == nullptr || (offset & 1) || (length & 1) || length == 0 || length > 480) return;
     const auto pixelOffset = offset / 2;
     const auto x = pixelOffset % 240;
     const auto y = pixelOffset / 240;
     const auto width = length / 2;
     if (y >= 240 || x + width > 240) return;
-    panel_.startWrite(); panel_.setAddrWindow(x,y,width,1);
-    for (std::size_t i=0;i<length;i+=2) panel_.SPI_WRITE16(pixels[i] | (std::uint16_t(pixels[i+1])<<8));
+    auto* output = pixels_.data();
+    if (pixels != output) std::memmove(output,pixels,length);
+    for (std::size_t i = 0; i < length; i += 2) std::swap(output[i],output[i+1]);
+
+    const bool continuesWindow = window.valid && window.x == x && window.width == width &&
+        static_cast<std::uint32_t>(window.lastY) + 1 == y;
+    panel_.startWrite();
+    if (!continuesWindow) {
+        panel_.setAddrWindow(x,y,width,240-y);
+        window = {static_cast<std::uint16_t>(x),static_cast<std::uint16_t>(width),
+                  static_cast<std::uint16_t>(y),true};
+    } else {
+        window.lastY = static_cast<std::uint16_t>(y);
+    }
+    panel_.writePixelBytes(output,length);
     panel_.endWrite();
+    for (std::size_t i = 0; i < length; i += 2) std::swap(output[i],output[i+1]);
 }
 void DeviceDisplay::endAnimationFrame(std::uint16_t) {}
 void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
@@ -289,6 +312,11 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
         showGif();
         if (animationNeedsReopen_) { nextFrame_ = now + ANIMATION_REOPEN_RETRY_MS; return; }
     }
+    // Consume the deadline once before promoting a staged asset or decoding its successor.
+    if (nextFrame_ && now >= nextFrame_) {
+        nextFrame_ = 0;
+        storage_.promoteAnimationCandidateAtBoundary();
+    }
     if (!metadata_.frameCount && !metadataV2_.frameCount) storage_.promoteAnimationCandidateAtBoundary();
     if (animationNeedsReopen_ || animationRevision_ != storage_.animationRevision) {
         // Reuse the inactive frame deadline for failed-open backoff. A new asset bypasses it.
@@ -300,42 +328,65 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
     }
     if (animationV2Active_) {
         if (!metadataV2_.frameCount || now < nextFrame_) return;
-        auto status = animationV2_.step();
-        if (status == AnimationDecodeStatus::Error) { metadataV2_ = {}; animationNeedsReopen_ = true; return; }
-        if (status == AnimationDecodeStatus::AnimationComplete) {
-            animationV2_.restart(); animationFrameNeedsStart_ = true; nextFrame_ = now;
-            status = animationV2_.step();
-            if (status == AnimationDecodeStatus::Error) { metadataV2_ = {}; animationNeedsReopen_ = true; return; }
-        }
-        if (animationFrameNeedsStart_) {
-            beginAnimationFrame(240,240); frameStarted_ = now; animationFrameNeedsStart_ = false;
-        }
-        if (status == AnimationDecodeStatus::RowReady) {
-            const auto decoded = animationV2_.row();
-            const auto pixelByteOffset = (static_cast<std::uint32_t>(decoded.y) * 240 + decoded.x) * 2;
-            writeAnimationPixels(pixelByteOffset,decoded.pixels,decoded.byteCount);
-            animationV2_.consumeRow();
-        } else if (status == AnimationDecodeStatus::FrameComplete) {
-            const auto info = animationV2_.frameInfo();
-            endAnimationFrame(info.delayMs);
-            storage_.promoteAnimationCandidateAtBoundary();
-            if (info.kind == AnimationFrameKind::Hold) frameStarted_ = now;
-            nextFrame_ = frameStarted_ + info.delayMs;
-            animationFrameNeedsStart_ = true;
+        const auto tickStarted = micros();
+        AnimationWindowState window{};
+        unsigned steps = 0;
+        unsigned rows = 0;
+        while (steps < ANIMATION_STEPS_PER_TICK && rows < ANIMATION_ROWS_PER_TICK) {
+            if (static_cast<std::uint32_t>(micros() - tickStarted) >= ANIMATION_TICK_BUDGET_US) return;
+            const auto status = animationV2_.step();
+            ++steps;
+            if (status == AnimationDecodeStatus::Error) {
+                metadataV2_ = {}; animationNeedsReopen_ = true; return;
+            }
+            if (status == AnimationDecodeStatus::AnimationComplete) {
+                animationV2_.restart(); animationFrameNeedsStart_ = true;
+                continue;
+            }
+            if (animationFrameNeedsStart_) {
+                beginAnimationFrame(240,240); frameStarted_ = now; animationFrameNeedsStart_ = false;
+            }
+            if (status == AnimationDecodeStatus::RowReady) {
+                const auto decoded = animationV2_.row();
+                const auto pixelByteOffset = (static_cast<std::uint32_t>(decoded.y) * 240 + decoded.x) * 2;
+                writeAnimationPixels(pixelByteOffset,decoded.pixels,decoded.byteCount,window);
+                animationV2_.consumeRow();
+                ++rows;
+                continue;
+            }
+            if (status == AnimationDecodeStatus::FrameComplete) {
+                const auto info = animationV2_.frameInfo();
+                endAnimationFrame(info.delayMs);
+                if (info.kind == AnimationFrameKind::Hold) frameStarted_ = now;
+                nextFrame_ = frameStarted_ + info.delayMs;
+                animationFrameNeedsStart_ = true;
+                return;
+            }
         }
         return;
     }
     if (!metadata_.frameCount) return;
-    if (!metadata_.frameCount || now < nextFrame_) return;
-    if (!offset_) { beginAnimationFrame(240,240); frameStarted_ = now; }
-    std::size_t count = 0;
-    if (!animation_.readFrameChunk(frame_,offset_,pixels_.data(),pixels_.size(),count)) { metadata_ = {}; animationNeedsReopen_ = true; return; }
-    writeAnimationPixels(offset_,pixels_.data(),count); offset_ += count;
-    if (offset_ == ANIMATION_FRAME_PIXEL_BYTES) {
-        std::uint16_t delayMs = 0;
-        if (!animation_.frameDelayMs(frame_,delayMs)) { metadata_ = {}; animationNeedsReopen_ = true; return; }
-        endAnimationFrame(delayMs); nextFrame_ = frameStarted_+delayMs; offset_ = 0; frame_ = (frame_+1)%metadata_.frameCount;
-        storage_.promoteAnimationCandidateAtBoundary();
+    if (now < nextFrame_) return;
+    const auto tickStarted = micros();
+    AnimationWindowState window{};
+    unsigned rows = 0;
+    while (rows < ANIMATION_ROWS_PER_TICK) {
+        if (static_cast<std::uint32_t>(micros() - tickStarted) >= ANIMATION_TICK_BUDGET_US) return;
+        if (!offset_) { beginAnimationFrame(240,240); frameStarted_ = now; }
+        std::size_t count = 0;
+        if (!animation_.readFrameChunk(frame_,offset_,pixels_.data(),pixels_.size(),count)) {
+            metadata_ = {}; animationNeedsReopen_ = true; return;
+        }
+        writeAnimationPixels(offset_,pixels_.data(),count,window);
+        offset_ += count;
+        rows += static_cast<unsigned>(count / (240 * 2));
+        if (offset_ == ANIMATION_FRAME_PIXEL_BYTES) {
+            std::uint16_t delayMs = 0;
+            if (!animation_.frameDelayMs(frame_,delayMs)) { metadata_ = {}; animationNeedsReopen_ = true; return; }
+            endAnimationFrame(delayMs); nextFrame_ = frameStarted_ + delayMs; offset_ = 0;
+            frame_ = (frame_ + 1) % metadata_.frameCount;
+            return;
+        }
     }
 }
 } // namespace neonbyte

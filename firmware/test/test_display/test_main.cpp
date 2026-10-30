@@ -209,6 +209,69 @@ void testV2PlayerDrawsChangedSpansWithoutClearingAndRestartsAtKeyframe() {
     TEST_ASSERT_EQUAL_UINT32(initialClears, panel.screenClears);
 }
 
+void testAdjacentPartialDeltaRowsRetainSpiAddressWindowAcrossReads() {
+    display_test::panelState = {};
+    PersistentStorage storage;
+    installV2Animation(storage);
+    auto& bytes = storage.animationBytes;
+    const auto deltaBytes = static_cast<std::uint32_t>(bytes[48]) |
+        (static_cast<std::uint32_t>(bytes[49]) << 8) |
+        (static_cast<std::uint32_t>(bytes[50]) << 16) |
+        (static_cast<std::uint32_t>(bytes[51]) << 24);
+    const auto holdOffset = static_cast<std::uint32_t>(bytes[64]) |
+        (static_cast<std::uint32_t>(bytes[65]) << 8) |
+        (static_cast<std::uint32_t>(bytes[66]) << 16) |
+        (static_cast<std::uint32_t>(bytes[67]) << 24);
+    appendV2Row(bytes, 11, 20, 2, 3, {0x81, 0});
+    appendV2Row(bytes, 12, 20, 2, 3, {0x81, 0});
+    auto write16 = [&](std::size_t offset, std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1] = static_cast<std::uint8_t>(value >> 8);
+    };
+    auto write32 = [&](std::size_t offset, std::uint32_t value) {
+        for (unsigned index = 0; index < 4; ++index)
+            bytes[offset + index] = static_cast<std::uint8_t>(value >> (index * 8));
+    };
+    write32(48, deltaBytes + 16);
+    write16(58, 3);
+    write32(64, holdOffset + 16);
+    write32(16, static_cast<std::uint32_t>(bytes.size()));
+
+    TestClock clock;
+    SceneManager scenes(clock, storage);
+    scenes.heartbeat();
+    TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
+    storage.simulatedReadTimeMicros = 100;
+    DeviceDisplay display(storage);
+    display.begin();
+    auto& panel = display_test::panelState;
+    for (unsigned tick = 0; tick < 300 && panel.rows.size() < 240; ++tick) display.tick(scenes, 0);
+    TEST_ASSERT_EQUAL_UINT32(240, panel.rows.size());
+    display.tick(scenes, 0); // Finish the keyframe before its 50 ms delay expires.
+    display.tick(scenes, 49);
+    TEST_ASSERT_EQUAL_UINT32(240, panel.rows.size());
+    display.tick(scenes, 50);
+
+    TEST_ASSERT_EQUAL_UINT32(243, panel.rows.size());
+    TEST_ASSERT_EQUAL_UINT(31, panel.totalRowWrites);
+    TEST_ASSERT_EQUAL_UINT(243, panel.transactionStarts);
+    TEST_ASSERT_EQUAL_UINT(243, panel.transactionEnds);
+    TEST_ASSERT_EQUAL_UINT(115200 + 12, panel.spiBytes);
+    for (unsigned row = 0; row < 3; ++row) {
+        const auto& written = panel.rows[240 + row];
+        TEST_ASSERT_EQUAL_INT(20, written.x);
+        TEST_ASSERT_EQUAL_INT(10 + row, written.y);
+        TEST_ASSERT_EQUAL_UINT(2, written.pixelCount);
+        TEST_ASSERT_EQUAL_HEX16(0x07e0, written.firstPixel);
+        TEST_ASSERT_EQUAL_HEX16(0xf800, panel.pixels[(10 + row) * 240 + 19]);
+        TEST_ASSERT_EQUAL_HEX16(0xf800, panel.pixels[(10 + row) * 240 + 22]);
+    }
+    TEST_ASSERT_TRUE(displayTestAnimationReadsBetweenRows > 0);
+    TEST_ASSERT_EQUAL_UINT(0, displayTestReadsDuringSpiTransaction);
+    TEST_ASSERT_EQUAL_UINT(0, panel.spiWriteOutsideTransaction);
+    TEST_ASSERT_EQUAL_UINT(0, panel.spiAlignmentFault);
+}
+
 void testV2CandidatePromotionWaitsForFrameBoundaryAndRestartsAtKeyframe() {
     display_test::panelState = {};
     PersistentStorage storage; installV2Animation(storage);
@@ -225,16 +288,19 @@ void testV2CandidatePromotionWaitsForFrameBoundaryAndRestartsAtKeyframe() {
     TEST_ASSERT_TRUE(storage.promotionPending);
     TEST_ASSERT_EQUAL_UINT32(240, panel.rows.size());
     for (unsigned tick = 0; tick < 10 && panel.rows.size() < 241; ++tick) display.tick(scenes, 50);
-    TEST_ASSERT_EQUAL_UINT32(241, panel.rows.size());
-    TEST_ASSERT_TRUE(storage.promotionPending);
-    display.tick(scenes, 100); // Finish the delta, then promote at this frame boundary.
+    TEST_ASSERT_EQUAL_UINT32(248, panel.rows.size());
     TEST_ASSERT_FALSE(storage.promotionPending);
     TEST_ASSERT_EQUAL_UINT32(1, storage.animationRevision);
-    for (unsigned tick = 0; tick < 320 && panel.rows.size() < 481; ++tick) display.tick(scenes, 100);
-    TEST_ASSERT_EQUAL_UINT32(481, panel.rows.size());
-    TEST_ASSERT_EQUAL_INT(0, panel.rows[241].x);
-    TEST_ASSERT_EQUAL_INT(0, panel.rows[241].y);
-    TEST_ASSERT_EQUAL_HEX16(0xf800, panel.rows[241].firstPixel);
+    for (unsigned y = 0; y < 8; ++y) {
+        TEST_ASSERT_EQUAL_INT(y, panel.rows[240 + y].y);
+        TEST_ASSERT_EQUAL_HEX16(0xf800, panel.rows[240 + y].firstPixel);
+    }
+    for (unsigned tick = 0; tick < 320 && panel.rows.size() < 480; ++tick) display.tick(scenes, 50);
+    TEST_ASSERT_EQUAL_UINT32(480, panel.rows.size());
+    for (unsigned y = 0; y < 240; ++y) {
+        TEST_ASSERT_EQUAL_INT(y, panel.rows[240 + y].y);
+        TEST_ASSERT_EQUAL_HEX16(0xf800, panel.rows[240 + y].firstPixel);
+    }
     TEST_ASSERT_EQUAL_UINT32(1, panel.screenClears);
 }
 
@@ -307,12 +373,20 @@ void testSlowFrameRenderingDoesNotAddASecondFullDelay() {
     DeviceDisplay display(storage);
     display.begin();
 
-    for (std::uint16_t row = 0; row < 240; ++row) display.tick(scenes, row);
-    TEST_ASSERT_EQUAL_UINT32(240, display_test::panelState.rows.size());
+    unsigned maximumRowsPerTick = 0;
+    for (std::uint16_t row = 0; row < 240; ++row) {
+        const auto previousRows = display_test::panelState.rows.size();
+        display.tick(scenes, row);
+        maximumRowsPerTick = std::max(maximumRowsPerTick,static_cast<unsigned>(
+            display_test::panelState.rows.size() - previousRows));
+    }
+    TEST_ASSERT_TRUE(maximumRowsPerTick > 1);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT(8, maximumRowsPerTick);
+    TEST_ASSERT_EQUAL_UINT32(960, display_test::panelState.rows.size());
     display.tick(scenes, 240);
-    TEST_ASSERT_EQUAL_UINT32(241, display_test::panelState.rows.size());
-    TEST_ASSERT_EQUAL_INT(0, display_test::panelState.rows.back().y);
-    TEST_ASSERT_EQUAL_UINT16(0xabcd, display_test::panelState.rows.back().firstPixel);
+    TEST_ASSERT_EQUAL_UINT32(968, display_test::panelState.rows.size());
+    TEST_ASSERT_EQUAL_INT(7, display_test::panelState.rows.back().y);
+    TEST_ASSERT_EQUAL_UINT16(0x1234, display_test::panelState.rows.back().firstPixel);
 }
 
 void testDisplayInitializationUsesBoundedSpiAndRetainsProvisionalProfile() {
@@ -702,8 +776,9 @@ void testFullLengthMarqueesAndGifReentryPreserveTheSharedWorkspace() {
     // Interrupt frame zero while its encoded workspace retains a row header.
     for (unsigned tick = 0; tick < 20 && panel.rows.size() == rowsBeforeGif; ++tick)
         display.tick(scenes, now++);
-    TEST_ASSERT_EQUAL_UINT32(rowsBeforeGif + 1, panel.rows.size());
-    TEST_ASSERT_EQUAL_INT(0, panel.rows.back().y);
+    TEST_ASSERT_EQUAL_UINT32(rowsBeforeGif + 8, panel.rows.size());
+    TEST_ASSERT_EQUAL_INT(0, panel.rows[rowsBeforeGif].y);
+    TEST_ASSERT_EQUAL_INT(7, panel.rows.back().y);
     TEST_ASSERT_EQUAL_HEX16(0xf800, panel.rows.back().firstPixel);
 
     TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::spotify));
@@ -822,7 +897,8 @@ void testSpotifyGifTransitionsCancelAndRebuildPartialTextComposition() {
     for (unsigned tick = 0; tick < 300 && panel.rows.size() == rowsBeforeGif; ++tick)
         display.tick(scenes, 1686 + tick);
     TEST_ASSERT_GREATER_THAN_UINT32(rowsBeforeGif, panel.rows.size());
-    TEST_ASSERT_EQUAL_INT(0, panel.rows.back().y);
+    TEST_ASSERT_EQUAL_INT(0, panel.rows[rowsBeforeGif].y);
+    TEST_ASSERT_EQUAL_INT(7, panel.rows.back().y);
 
     TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::spotify));
     const auto newCoverStart = panel.rows.size();
@@ -1022,7 +1098,7 @@ void testDiagnosticPriorityAndHeartbeatRecoveryInAllModes() {
         auto& panel = display_test::panelState;
         panel.texts.clear(); scenes.heartbeat(); display.tick(scenes, 0);
         if (mode == DisplayMode::spotify) TEST_ASSERT_TRUE(hasDisplayedText("Waiting for playback"));
-        else TEST_ASSERT_EQUAL_UINT32(1, panel.rows.size());
+        else TEST_ASSERT_EQUAL_UINT32(8, panel.rows.size());
         TEST_ASSERT_TRUE(scenes.mode() == mode);
         clock.now = 45000; display.tick(scenes, clock.now);
         TEST_ASSERT_FALSE(hasDisplayedText("Agent disconnected"));
@@ -1103,6 +1179,7 @@ int main() {
     RUN_TEST(testDiagnosticAllowsPendingAnimationPromotionWhileIdle);
     RUN_TEST(testGifFrameDelayAndLoopingUseDeviceDisplayTick);
     RUN_TEST(testV2PlayerDrawsChangedSpansWithoutClearingAndRestartsAtKeyframe);
+    RUN_TEST(testAdjacentPartialDeltaRowsRetainSpiAddressWindowAcrossReads);
     RUN_TEST(testV2CandidatePromotionWaitsForFrameBoundaryAndRestartsAtKeyframe);
     RUN_TEST(testV2PlayerReopensFromKeyframeAfterAStorageReadFailure);
     RUN_TEST(testV2PlaybackPreservesFrameOrderAcrossLoopsWithSlowReadsAndServiceGaps);

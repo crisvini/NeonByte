@@ -112,6 +112,74 @@ void drawFrame(DeviceDisplay& display, SceneManager& scenes, unsigned frame, uns
     assertCanvas(frame + 1 == frames ? frames - 2 : frame);
 }
 
+void testKeyframeReconstructionUsesBoundedMultiRowDisplayTicks() {
+    display_test::panelState = {};
+    displayTestClockTenthsOfMicrosecond = 0;
+    displayTestAnimationReadCount = 0;
+    displayTestCompletedAnimationRows = 0;
+    displayTestAnimationReadsBetweenRows = 0;
+    displayTestReadsDuringSpiTransaction = 0;
+    PersistentStorage storage;
+    installAnimation(storage, 3);
+    TestClock clock;
+    SceneManager scenes(clock, storage);
+    scenes.heartbeat();
+    TEST_ASSERT_TRUE(scenes.setMode(DisplayMode::gif));
+    storage.simulatedReadTimeMicros = 100;
+    DeviceDisplay display(storage);
+    display.begin();
+
+    auto& rows = display_test::panelState.rows;
+    unsigned ticks = 0;
+    unsigned maximumRowsPerTick = 0;
+    std::uint32_t maximumTickWorkUs = 0;
+#ifdef NEONBYTE_LOOP_MEASUREMENT_ONLY
+    constexpr unsigned maximumTicks = 260;
+#else
+    constexpr unsigned maximumTicks = 32;
+#endif
+    while (rows.size() < 240 && ticks < maximumTicks) {
+        const auto previousRows = rows.size();
+        const auto tickStarted = micros();
+        display.tick(scenes, 0);
+        maximumTickWorkUs = std::max(maximumTickWorkUs,static_cast<std::uint32_t>(micros() - tickStarted));
+        const auto rowsThisTick = static_cast<unsigned>(rows.size() - previousRows);
+        maximumRowsPerTick = std::max(maximumRowsPerTick, rowsThisTick);
+        TEST_ASSERT_LESS_OR_EQUAL_UINT(8, rowsThisTick);
+        // Model one millisecond of main-loop Wi-Fi/HTTP service between display ticks.
+        advanceDisplayTestClockMicroseconds(1000);
+        ++ticks;
+    }
+
+    TEST_ASSERT_EQUAL_UINT(240, rows.size());
+#ifndef NEONBYTE_LOOP_MEASUREMENT_ONLY
+    TEST_ASSERT_TRUE(maximumRowsPerTick > 1);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT(32, ticks);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT(4000, maximumTickWorkUs);
+#endif
+    const auto firstToLastMicros = rows.back().completedAtMicros - rows.front().completedAtMicros;
+    std::printf("DISPLAY_FRAME_METRIC rows=%zu ticks=%u max_rows_per_tick=%u max_tick_work_us=%u simulated_loop_gap_us=1000 first_to_last_us=%u reads=%u spi_bytes=%zu windows=%zu\n",
+        rows.size(),ticks,maximumRowsPerTick,maximumTickWorkUs,firstToLastMicros,storage.animationReadCalls,
+        display_test::panelState.spiBytes,display_test::panelState.totalRowWrites);
+    TEST_ASSERT_EQUAL_UINT(240, display_test::panelState.transactionStarts);
+    TEST_ASSERT_EQUAL_UINT(240, display_test::panelState.transactionEnds);
+#ifndef NEONBYTE_LOOP_MEASUREMENT_ONLY
+    TEST_ASSERT_TRUE(display_test::panelState.totalRowWrites < rows.size());
+    TEST_ASSERT_EQUAL_UINT(240, display_test::panelState.spiByteCalls);
+    TEST_ASSERT_EQUAL_UINT(240 * 480, display_test::panelState.spiBytes);
+    TEST_ASSERT_EQUAL_UINT(0, display_test::panelState.spiWordWrites);
+    TEST_ASSERT_EQUAL_UINT(0, display_test::panelState.spiWriteOutsideTransaction);
+    TEST_ASSERT_EQUAL_UINT(0, display_test::panelState.spiAlignmentFault);
+#else
+    std::printf("DISPLAY_BASELINE_TRANSPORT windows=%zu spi_bytes=%zu spi_words=%zu\n",
+        display_test::panelState.totalRowWrites,display_test::panelState.spiBytes,
+        display_test::panelState.spiWordWrites);
+#endif
+    TEST_ASSERT_TRUE(displayTestAnimationReadsBetweenRows > 0);
+    TEST_ASSERT_EQUAL_UINT(0, displayTestReadsDuringSpiTransaction);
+    assertCanvas(0);
+}
+
 void testRepeatedLoopTransitionsPreserveAllPixelsAndFinalDelay() {
     for (const unsigned frames : {14u, 20u, 48u, 60u}) {
         for (const std::uint16_t finalDelay : {std::uint16_t(20), std::uint16_t(1000)}) {
@@ -148,7 +216,7 @@ void testRepeatedLoopTransitionsPreserveAllPixelsAndFinalDelay() {
                     clock.now = simulatedNow;
                     const auto previousRows = rows.size();
                     display.tick(scenes, simulatedNow);
-                    TEST_ASSERT_LESS_OR_EQUAL_UINT(previousRows + 1, rows.size());
+                    TEST_ASSERT_LESS_OR_EQUAL_UINT(previousRows + 8, rows.size());
                     ++ticks; ++simulatedNow;
                     if (!firstRowTicks && !rows.empty()) firstRowTicks = ticks;
                 }
@@ -344,7 +412,7 @@ void testOptionalRealAnimationLoopsMatchEveryOraclePixel() {
         while (rows.size() < 240 && ticks < 270) {
             const auto previousRows = rows.size();
             display.tick(scenes, simulatedNow);
-            TEST_ASSERT_LESS_OR_EQUAL_UINT(previousRows + 1, rows.size());
+            TEST_ASSERT_LESS_OR_EQUAL_UINT(previousRows + 8, rows.size());
             ++ticks; ++simulatedNow;
             if (!firstRowTicks && !rows.empty()) firstRowTicks = ticks;
         }
@@ -370,6 +438,7 @@ void testOptionalRealAnimationLoopsMatchEveryOraclePixel() {
 
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(testKeyframeReconstructionUsesBoundedMultiRowDisplayTicks);
     RUN_TEST(testRepeatedLoopTransitionsPreserveAllPixelsAndFinalDelay);
     RUN_TEST(testDecoderRestartPreservesEveryDelayAndDiscardsPendingRows);
     RUN_TEST(testEveryKeyframeReadFailureCanReopenWithoutStalePrefetchedPixels);

@@ -226,7 +226,7 @@ void loop() {
         afterHttp = millis();
         startup.tick(now);
         afterStartup = millis();
-        if (startup.applicationRunning() && scenes) display.tick(*scenes,now);
+        if (startup.applicationRunning() && scenes) display.tick(*scenes,deviceClock.monotonicMillis());
         afterDisplay = millis();
     }
     delay(0);

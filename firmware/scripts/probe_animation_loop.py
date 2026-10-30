@@ -24,7 +24,8 @@ def main():
         production = repository
         if arguments.source_ref:
             production = build / "baseline"
-            files = ["firmware/src/animation_decoder.cpp", "firmware/src/esp8266/display.cpp"]
+            files = ["firmware/src/animation_decoder.cpp", "firmware/src/esp8266/display.cpp",
+                     "firmware/src/spotify_text.cpp"]
             files.extend(str(path.relative_to(repository)) for path in
                          (repository / "firmware/include").rglob("*.h"))
             for filename in files:

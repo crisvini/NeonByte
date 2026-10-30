@@ -18,12 +18,14 @@ class DecoderStorage final : public Storage {
 public:
     std::vector<std::uint8_t> bytes;
     mutable std::size_t largestRead = 0;
+    mutable std::size_t readCalls = 0;
 
     bool loadMode(DisplayMode&) const override { return false; }
     bool saveMode(DisplayMode) override { return false; }
     std::uint64_t freeBytes() const override { return 0; }
     std::uint32_t animationSize() const override { return static_cast<std::uint32_t>(bytes.size()); }
     bool readAnimationAt(std::uint32_t offset, std::uint8_t* destination, std::size_t length) const override {
+        ++readCalls;
         largestRead = std::max(largestRead, length);
         if (length > NBIF_V2_ROW_BUFFER_BYTES) return false;
         if (offset > bytes.size() || length > bytes.size() - offset) return false;
@@ -332,6 +334,54 @@ void testV2DecoderStreamsAllRowCodecsDeltasAndHolds() {
     TEST_ASSERT_TRUE(storage.largestRead <= NBIF_V2_ROW_BUFFER_BYTES);
 }
 
+void testPlaybackPrefetchesDeltaRowHeadersWithoutGrowingItsWorkspace() {
+    DecoderStorage storage;
+    auto deltaFrame = delta();
+    deltaFrame.rowCount = 3;
+    appendRow(deltaFrame.bytes, 11, 20, 2, 3, {0x81, 0});
+    appendRow(deltaFrame.bytes, 12, 20, 2, 3, {0x81, 0});
+    writeAnimation(storage, {keyframe(), deltaFrame, hold()});
+
+    std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> output{};
+    std::array<std::uint8_t, NBIF_V2_ROW_BUFFER_BYTES> encoded{};
+    AnimationDecoder decoder(storage, output.data(), output.size(), encoded.data(), encoded.size());
+    AnimationV2Metadata metadata{};
+    TEST_ASSERT_TRUE(decoder.open(metadata));
+
+    unsigned keyframeRows = 0;
+    while (true) {
+        const auto status = decoder.step();
+        if (status == AnimationDecodeStatus::FrameComplete) break;
+        TEST_ASSERT_NOT_EQUAL(AnimationDecodeStatus::Error, status);
+        if (status == AnimationDecodeStatus::RowReady) {
+            TEST_ASSERT_EQUAL_UINT16(keyframeRows, decoder.row().y);
+            decoder.consumeRow();
+            ++keyframeRows;
+        }
+    }
+    TEST_ASSERT_EQUAL_UINT(240, keyframeRows);
+    TEST_ASSERT_EQUAL_INT(AnimationDecodeStatus::Progress, decoder.step());
+
+    const auto readsBeforeDeltaRow = storage.readCalls;
+    AnimationDecodeStatus status = AnimationDecodeStatus::Progress;
+    while (status == AnimationDecodeStatus::Progress) status = decoder.step();
+    TEST_ASSERT_EQUAL_INT(AnimationDecodeStatus::RowReady, status);
+
+    for (std::uint8_t y = 10; y <= 12; ++y) {
+        const auto row = decoder.row();
+        TEST_ASSERT_EQUAL_UINT16(y, row.y);
+        TEST_ASSERT_EQUAL_UINT16(20, row.x);
+        TEST_ASSERT_EQUAL_UINT16(2, row.width);
+        TEST_ASSERT_EQUAL_HEX16(0x07e0, row.pixels[0] | (row.pixels[1] << 8));
+        decoder.consumeRow();
+        if (y < 12) TEST_ASSERT_EQUAL_INT(AnimationDecodeStatus::RowReady, decoder.step());
+    }
+    TEST_ASSERT_EQUAL_INT(AnimationDecodeStatus::FrameComplete, decoder.step());
+    TEST_ASSERT_EQUAL_UINT16(80, decoder.frameInfo().delayMs);
+    TEST_ASSERT_EQUAL_UINT(6, storage.readCalls - readsBeforeDeltaRow);
+    TEST_ASSERT_TRUE(storage.largestRead <= NBIF_V2_ROW_BUFFER_BYTES);
+}
+
 void testV2DecoderRejectsBadDirectoryAndRowPayloads() {
     DecoderStorage storage;
     writeTestAnimation(storage);
@@ -370,6 +420,7 @@ void testV2DecoderRejectsBadDirectoryAndRowPayloads() {
 int main() {
     UNITY_BEGIN();
     RUN_TEST(testV2DecoderStreamsAllRowCodecsDeltasAndHolds);
+    RUN_TEST(testPlaybackPrefetchesDeltaRowHeadersWithoutGrowingItsWorkspace);
     RUN_TEST(testV2DecoderRejectsBadDirectoryAndRowPayloads);
     RUN_TEST(testV2DecoderHandlesMaximumDirectoryAndRestart);
     RUN_TEST(testV2DecoderStreamsSixtyEntriesThroughBoundedReadsInPlaybackAndValidation);

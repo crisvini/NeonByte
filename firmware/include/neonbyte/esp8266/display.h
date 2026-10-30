@@ -36,6 +36,9 @@ static_assert(sizeof(SpotifyTextRender) <= 24);
 class BoundedDisplayPanel final : public Adafruit_ST7789 {
 public:
     using Adafruit_ST7789::Adafruit_ST7789;
+    void writePixelBytes(const std::uint8_t* bytes, std::size_t length) {
+        hwspi._spi->writeBytes(bytes, static_cast<std::uint32_t>(length));
+    }
 protected:
     void begin(std::uint32_t) override { Adafruit_ST77xx::begin(20'000'000); }
 };
@@ -55,13 +58,20 @@ public:
     void writeAnimationPixels(std::uint32_t offset, const std::uint8_t* pixels, std::size_t length) override;
     void endAnimationFrame(std::uint16_t delayMs) override;
 private:
+    struct AnimationWindowState {
+        std::uint16_t x = 0, width = 0, lastY = 0;
+        bool valid = false;
+    };
+
     bool openAnimation();
+    void writeAnimationPixels(std::uint32_t offset, const std::uint8_t* pixels,
+                              std::size_t length, AnimationWindowState& window);
     void textLine(std::string_view text, int x, int y, unsigned limit, std::uint16_t color,
                   unsigned size = 1);
     bool startSpotifyTextRender(std::uint64_t now);
     void renderSpotifyTextRows(std::uint64_t now);
     PersistentStorage& storage_;
-    std::array<std::uint8_t,480> pixels_{};
+    alignas(4) std::array<std::uint8_t,480> pixels_{};
     // GIF: dedicated encoded row (including its prefetched header). Spotify:
     // two ASCII text caches. Each scene entry rebuilds its workspace contents.
     // Cover output stays separate in pixels_; the decoder sees only 480 bytes.

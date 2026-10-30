@@ -348,9 +348,9 @@ AnimationDecodeStatus AnimationDecoder::step() {
         fail("row bounds or order are invalid");
         return AnimationDecodeStatus::Error;
     }
-    // Frame zero is rebuilt at every loop. Fold the next header into this read
-    // when it fits, retaining the existing row workspace and one row per step.
-    const bool prefetchHeader = outputRow_ != nullptr && frameIndex_ == 0 &&
+    // Fold the next playback header into this read when it fits, retaining the
+    // caller-owned row workspace. Validation-only callers keep independent reads.
+    const bool prefetchHeader = outputRow_ != nullptr &&
         rowCountRead_ + 1 < entry.rowCount &&
         encodedBytes <= NBIF_V2_ROW_BUFFER_BYTES - NBIF_V2_ROW_HEADER_BYTES &&
         entry.recordOffset + entry.recordBytes - rowCursor_ - encodedBytes >= NBIF_V2_ROW_HEADER_BYTES;
