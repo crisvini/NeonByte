@@ -61,6 +61,10 @@ def routeHeadersComplete(adapter):
     function = function[:start] + auth + function[end:]
     start = function.index("    if (!headers_.query.empty())")
     function = function[:start] + "    return;\n}"
+    usd_declaration = '    const bool usdStateRoute = headers_.path == "/api/v1/usd-state";\n'
+    if function.count(usd_declaration) != 1:
+        raise ValueError("Expected one USD route declaration in the extracted headers")
+    function = function.replace(usd_declaration, "", 1)
     return function
 
 
