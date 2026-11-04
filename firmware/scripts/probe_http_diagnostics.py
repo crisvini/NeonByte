@@ -18,7 +18,7 @@ def extractDiagnosticHeaders(adapter):
     query_start = function.index("    if (!headers_.query.empty())", animation_start)
     function = function[:animation_start] + function[query_start:]
     binary_start = function.index("    binary_ =")
-    json_start = function.index("        const auto limit = maintenance_", binary_start)
+    json_start = function.index("        const auto limit = usdStateRoute ?", binary_start)
     json_end = function.index("\n    }\n    readingBody_", json_start)
     return function[:binary_start] + function[json_start:json_end] + function[json_end + len("\n    }"):]
 
