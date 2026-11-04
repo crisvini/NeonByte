@@ -65,7 +65,11 @@
               <button type="button" data-mode="gif" aria-pressed="false">GIF</button>
             </div>
             <p class="mode-help" id="mode-help">Spotify while playing; GIF otherwise.</p>
-            <label class="checkbox-row usd-toggle" for="usd-enabled"><input id="usd-enabled" type="checkbox">Mostrar cotação do dólar</label>
+            <label class="usd-toggle" for="usd-enabled">
+              <input id="usd-enabled" type="checkbox" role="switch">
+              <span class="usd-switch" aria-hidden="true"><span class="usd-switch-on">ON</span><span class="usd-switch-off">OFF</span></span>
+              <span>Mostrar cotação do dólar</span>
+            </label>
             <p class="mode-sync" id="usd-status" aria-live="polite">Dollar quote is disabled.</p>
             <p class="mode-sync" id="mode-sync" aria-live="polite">Loading the selected mode…</p>
           </article>

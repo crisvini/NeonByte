@@ -111,6 +111,21 @@ h2 { margin: 0; font-size: 16px; letter-spacing: -.02em; }
 .mode-switch button[aria-pressed="true"] { border-color: rgba(255, 74, 171, .48); background: linear-gradient(135deg, rgba(255, 34, 161, .23), rgba(138, 20, 104, .2)); color: white; box-shadow: inset 0 0 14px rgba(255, 34, 161, .12), 0 0 12px rgba(255, 34, 161, .1); }
 .mode-switch button:disabled { cursor: wait; opacity: .62; }
 .mode-sync { min-height: 14px; margin-top: 8px; color: var(--pink-soft); font-size: 10px; }
+.usd-toggle { display: inline-flex; align-items: center; gap: 10px; margin-top: 12px; color: var(--text); font-size: 11px; cursor: pointer; }
+.usd-toggle input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.usd-switch { position: relative; display: inline-flex; align-items: center; width: 62px; height: 30px; flex: 0 0 auto; border: 1px solid #80647c; border-radius: 999px; background: #352538; color: #fff0f8; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; font-weight: 700; transition: background .15s ease, border-color .15s ease, box-shadow .15s ease; }
+.usd-switch::after { position: absolute; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff0f8; box-shadow: 0 1px 4px rgba(0, 0, 0, .45); content: ""; transition: transform .15s ease; }
+.usd-switch-on, .usd-switch-off { position: absolute; }
+.usd-switch-on { left: 9px; visibility: hidden; }
+.usd-switch-off { right: 7px; }
+.usd-toggle input:checked + .usd-switch { border-color: #ff9bce; background: linear-gradient(105deg, #8a155e, #ad176b); box-shadow: 0 0 13px rgba(255, 34, 161, .28); }
+.usd-toggle input:checked + .usd-switch::after { transform: translateX(32px); }
+.usd-toggle input:checked + .usd-switch .usd-switch-on { visibility: visible; }
+.usd-toggle input:checked + .usd-switch .usd-switch-off { visibility: hidden; }
+.usd-toggle input:focus-visible + .usd-switch { outline: 2px solid var(--cyan); outline-offset: 3px; }
+.usd-toggle input:disabled + .usd-switch { opacity: .56; }
+.usd-toggle:has(input:disabled) { cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { .usd-switch, .usd-switch::after { transition: none; } }
 .button { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 39px; width: 100%; margin-top: 12px; border: 1px solid rgba(255, 74, 171, .45); border-radius: 9px; color: white; font-size: 11px; font-weight: 700; cursor: pointer; transition: filter .15s ease, transform .15s ease, box-shadow .15s ease; }
 .button:hover:not(:disabled) { filter: brightness(1.12); transform: translateY(-1px); }
 .button:disabled { opacity: .56; cursor: wait; }
