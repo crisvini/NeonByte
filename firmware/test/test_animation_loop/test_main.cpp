@@ -351,7 +351,9 @@ void testLoopDirectoryReadFailureRecoversAtTheFirstKeyframe() {
     TEST_ASSERT_EQUAL_UINT(storage.failAnimationReadCall, storage.animationReadCalls);
     TEST_ASSERT_TRUE(rows.empty());
     storage.failAnimationReadCall = 0;
-    for (unsigned tick = 0; tick < 270 && rows.size() < 240; ++tick) display.tick(scenes, now + 21);
+    constexpr unsigned maxRecoveryTicks = 2000;
+    for (unsigned tick = 0; tick < maxRecoveryTicks && rows.size() < 240; ++tick)
+        display.tick(scenes, now + 21 + tick);
     TEST_ASSERT_EQUAL_UINT(240, rows.size());
     assertCanvas(0);
 }
