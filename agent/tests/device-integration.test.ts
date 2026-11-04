@@ -13,6 +13,8 @@ class MemoryStore implements DeviceConfigStore {
 }
 const poller = () => new PlaybackPoller({ provider: { getCurrentPlayback: async () => null }, pollIntervalMs: 15000 });
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const deviceStatus = { protocolVersion: "v1", firmwareVersion: "test", ip: "127.0.0.1", freeStorageBytes: 65536,
+  mode: "auto", activeScene: "gif" };
 
 test("GIF preparation never uploads automatically and an explicit replacement retries after removing the old animation", async () => {
   const asset = convertGifToAnimationV2(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64"));
@@ -424,6 +426,88 @@ test("credential-manager failures are safe and do not start a connection", async
   assert.equal(calls, 0);
   assert.equal(device.status.connection, "disabled");
   await device.stop();
+});
+
+test("USD transport failures leave the successful main synchronization connected and retry on the next cycle", async () => {
+  const modeController = await createTestModeController();
+  await modeController.setUsdEnabled(true);
+  const state = { enabled: true, priceCents: 525, changeBasisPoints: 42, validForMs: 300_000 };
+  const requests: Array<{ path: string; method: string }> = [];
+  let usdAttempts = 0;
+  const device = new DeviceIntegration({ modeController, store: new MemoryStore(), poller: poller(), intervalMs: 1000,
+    usdQuoteService: { deviceState: () => state },
+    fetchDevice: async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      requests.push({ path: url.pathname, method });
+      if (url.pathname === "/api/v1/status") return new Response(JSON.stringify(deviceStatus));
+      if (url.pathname === "/api/v1/usd-state") {
+        usdAttempts += 1;
+        return usdAttempts === 1 ? new Response("ignored", { status: 500 }) : new Response(null, { status: 204 });
+      }
+      return new Response(null, { status: 204 });
+    } });
+  const waitFor = async (predicate: () => boolean) => {
+    const deadline = Date.now() + 2000;
+    while (!predicate()) {
+      if (Date.now() >= deadline) throw new Error("USD synchronization did not settle.");
+      await delay(5);
+    }
+  };
+
+  await device.configure({ address: "http://127.0.0.1:1", token: "test-pairing", enabled: true });
+  try {
+    await waitFor(() => usdAttempts === 1 && device.status.connection === "connected");
+    await delay(30);
+    assert.equal(usdAttempts, 1, "the isolated USD error must not schedule an immediate retry");
+    assert.equal(device.status.connection, "connected");
+    assert.ok(requests.filter((request) => request.path === "/api/v1/status").length >= 2);
+
+    device.requestModeSynchronization();
+    await waitFor(() => usdAttempts === 2);
+    assert.equal(device.status.connection, "connected");
+    assert.equal(requests.at(-1)?.path, "/api/v1/usd-state");
+  } finally { await device.stop(); }
+});
+
+test("USD 404 compatibility survives scheduler recreation and safe abort, then resets after update or pairing change", async () => {
+  const modeController = await createTestModeController();
+  await modeController.setUsdEnabled(true);
+  let usdAttempts = 0;
+  const device = new DeviceIntegration({ modeController, store: new MemoryStore(), poller: poller(), intervalMs: 1000,
+    usdQuoteService: { deviceState: () => ({ enabled: true, priceCents: 525, changeBasisPoints: 42, validForMs: 300_000 }) },
+    fetchDevice: async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/v1/status") return new Response(JSON.stringify(deviceStatus));
+      if (path === "/api/v1/usd-state") { usdAttempts += 1; return new Response("ignored", { status: 404 }); }
+      return new Response(null, { status: 204 });
+    } });
+  const waitForAttempts = async (expected: number) => {
+    const deadline = Date.now() + 2000;
+    while (usdAttempts < expected) {
+      if (Date.now() >= deadline) throw new Error("USD compatibility state did not settle.");
+      await delay(5);
+    }
+  };
+  const address = "http://127.0.0.1:1";
+
+  await device.configure({ address, token: "first-pairing", enabled: true });
+  try {
+    await waitForAttempts(1);
+    await device.configure({ address, enabled: false });
+    await device.configure({ address, enabled: true });
+    device.resumeAfterSafePreflightAbort();
+    device.requestModeSynchronization();
+    await delay(30);
+    assert.equal(usdAttempts, 1, "a safe abort and recreated scheduler retain the 404 classification");
+
+    device.resumeAfterExplicitRun();
+    device.requestModeSynchronization();
+    await waitForAttempts(2);
+    await device.configure({ address, token: "second-pairing", enabled: true });
+    await waitForAttempts(3);
+    assert.equal(usdAttempts, 3, "a verified firmware release and a real pairing change each permit a new attempt");
+  } finally { await device.stop(); }
 });
 
 test("shutdown during a configuration write never starts a new scheduler", async () => {

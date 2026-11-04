@@ -4,6 +4,7 @@ import test from "node:test";
 import { DeviceClient } from "../src/device/client.js";
 import { convertGifToAnimation } from "../src/media/animation.js";
 import type { PlaybackSnapshot } from "../src/spotify/types.js";
+import type { UsdDeviceState } from "../src/exchange/usd-quote.js";
 
 const status = { protocolVersion: "v1", firmwareVersion: "host", ip: "127.0.0.1", freeStorageBytes: 4_000_000, mode: "auto", activeScene: "gif" };
 
@@ -59,6 +60,58 @@ test("device request deadlines and rejected remote responses produce safe errors
   const rejected = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token,
     fetchDevice: async (_input, init) => init?.method === "GET" ? new Response(JSON.stringify(status)) : new Response(token, { status: 401 }) });
   await assert.rejects(rejected.heartbeat(), (error: Error) => !error.message.includes(token) && /communication failed/.test(error.message));
+});
+
+test("USD state uses one direct authenticated request with a one-second timeout", async (context) => {
+  const deadlines: number[] = [];
+  context.mock.method(AbortSignal, "timeout", (milliseconds: number) => {
+    deadlines.push(milliseconds);
+    return new AbortController().signal;
+  });
+  const requests: Array<{ url: string; init: RequestInit }> = [];
+  const client = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret",
+    fetchDevice: async (input, init) => {
+      requests.push({ url: String(input), init: init! });
+      return new Response(null, { status: 204 });
+    } });
+  const state: UsdDeviceState = { enabled: true, priceCents: 525, changeBasisPoints: 42, validForMs: 300_000 };
+
+  const result = await client.sendUsdState(state);
+
+  assert.equal(result, "accepted");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]!.url, "http://127.0.0.1:1/api/v1/usd-state");
+  assert.equal(requests[0]!.init.method, "PUT");
+  assert.deepEqual(JSON.parse(String(requests[0]!.init.body)), state);
+  assert.equal(new Headers(requests[0]!.init.headers).get("Authorization"), "Bearer test-secret");
+  assert.deepEqual(deadlines, [1000]);
+});
+
+test("only a USD-route 404 marks firmware unsupported and response bodies are discarded", async () => {
+  let cancelled = false;
+  const legacy = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret",
+    fetchDevice: async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode("ignored")); },
+      cancel() { cancelled = true; },
+    }), { status: 404 }) });
+  const state: UsdDeviceState = { enabled: false, priceCents: 0, changeBasisPoints: 0, validForMs: 0 };
+  assert.equal(await legacy.sendUsdState(state), "unsupported");
+  assert.equal(cancelled, true);
+
+  for (const statusCode of [401, 403, 409, 500]) {
+    const client = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret",
+      fetchDevice: async () => new Response("ignored", { status: statusCode }) });
+    await assert.rejects(client.sendUsdState(state), /communication failed/i);
+  }
+});
+
+test("USD state is validated before sending and rejects a body over the wire limit", async () => {
+  let requests = 0;
+  const client = new DeviceClient({ baseUrl: "http://127.0.0.1:1", token: "test-secret",
+    fetchDevice: async () => { requests += 1; return new Response(null, { status: 204 }); } });
+  const invalid = { enabled: true, priceCents: 1, changeBasisPoints: 0, validForMs: 900_001 } as UsdDeviceState;
+  await assert.rejects(client.sendUsdState(invalid), /USD state/i);
+  assert.equal(requests, 0);
 });
 
 test("device client rejects public and hostname destinations before sending credentials", () => {

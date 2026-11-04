@@ -15,6 +15,7 @@ import { SystemRefreshTokenStore } from "./spotify/token-store.js";
 import type { CurrentPlaybackProvider, SafeLogger } from "./spotify/types.js";
 import { startLocalWebApp } from "./web/server.js";
 import { DisplayModeController, FileDisplayModeStore } from "./device/mode-controller.js";
+import { UsdQuoteService } from "./exchange/usd-quote.js";
 
 const logger: SafeLogger = {
   info: (message) => console.info(`[NeonByte] ${message}`),
@@ -159,7 +160,9 @@ async function runAgent(): Promise<void> {
   const modeController = new DisplayModeController(new FileDisplayModeStore(), "auto");
   await modeController.initialize();
   if (modeController.view.syncState === "failed") logger.warn(modeController.view.message);
-  const device = new DeviceIntegration({ store: new SystemDeviceConfigStore(), recoveryStore, poller,
+  const usdQuoteService = new UsdQuoteService();
+  void usdQuoteService.setEnabled(modeController.view.usdEnabled);
+  const device = new DeviceIntegration({ store: new SystemDeviceConfigStore(), recoveryStore, poller, usdQuoteService,
     modeController, intervalMs: 15_000 });
   const firmwareUpdate = new FirmwareUpdateService({ recoveryStore, journal: new SystemFirmwareUpdateJournal(), device,
     createClient: (address, token) => new MaintenanceClient({ baseUrl: address, token }) });
@@ -170,6 +173,7 @@ async function runAgent(): Promise<void> {
     device,
     modeController,
     firmwareUpdate,
+    usdQuoteService,
     oauth,
     spotifyConfigured: Boolean(oauth),
     port: configuredWebPort(),
@@ -186,6 +190,7 @@ async function runAgent(): Promise<void> {
       process.off("SIGINT", stop);
       process.off("SIGTERM", stop);
       poller.stop();
+      usdQuoteService.stop();
       void Promise.all([device.stop(), webApp.close()]).then(() => resolve(), () => {
         logger.error("Unable to shut down the local agent cleanly.");
         resolve();

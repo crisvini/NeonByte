@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -97,6 +97,59 @@ test("failed persistence does not acknowledge a mode selection", async () => {
   await assert.rejects(controller.selectManual("gif", "paired-device"));
   assert.equal(controller.selectedMode, "auto");
   assert.equal(controller.view.syncState, "failed");
+});
+
+test("older mode records default USD display to disabled", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "neonbyte-old-mode-"));
+  const path = join(directory, "display-mode.json");
+  try {
+    await writeFile(path, JSON.stringify({ version: 1, mode: "gif", revision: 3, pendingCommand: null }));
+    const store = new FileDisplayModeStore(path);
+    const controller = new DisplayModeController(store, "auto");
+    await controller.initialize();
+    assert.equal(controller.view.mode, "gif");
+    assert.equal(controller.view.usdEnabled, false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("USD preference writes preserve mode, pending command, and revision", async () => {
+  await withStore(async (store) => {
+    const controller = new DisplayModeController(store, "auto");
+    await controller.initialize();
+    await controller.selectManual("gif", firstPairing);
+    const before = await store.load();
+    assert.ok(before);
+
+    await controller.setUsdEnabled(true);
+    const enabled = await store.load();
+    assert.ok(enabled);
+    assert.equal(enabled.usdEnabled, true);
+    assert.equal(enabled.mode, before.mode);
+    assert.equal(enabled.revision, before.revision);
+    assert.deepEqual(enabled.pendingCommand, before.pendingCommand);
+
+    await controller.selectManual("spotify", firstPairing);
+    assert.equal((await store.load())?.usdEnabled, true);
+    await controller.setUsdEnabled(false);
+    assert.equal((await store.load())?.usdEnabled, false);
+  });
+});
+
+test("a present non-boolean USD preference invalidates the settings record", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "neonbyte-invalid-mode-"));
+  const path = join(directory, "display-mode.json");
+  try {
+    await writeFile(path, JSON.stringify({ version: 1, mode: "auto", revision: 0, pendingCommand: null, usdEnabled: "true" }));
+    await assert.rejects(new FileDisplayModeStore(path).load(), /settings are invalid/i);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("failed USD preference persistence retains the previous value", async () => {
+  const store = new FileDisplayModeStore("/dev/null/neonbyte-mode/display-mode.json");
+  const controller = new DisplayModeController(store, "auto");
+  await controller.initialize();
+  await assert.rejects(controller.setUsdEnabled(true));
+  assert.equal(controller.view.usdEnabled, false);
 });
 
 test("device target identifiers are stable hashes and do not expose the pairing credential", () => {

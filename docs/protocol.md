@@ -13,7 +13,7 @@
 
 ## Authentication
 
-All mutating routes require `Authorization: Bearer {token}`: mode, Spotify, cover, animation, and heartbeat. `GET /api/v1/status` is read-only and does not require a token. Tokens must not appear in logs, URLs, or responses.
+All mutating routes require `Authorization: Bearer {token}`: mode, USD state, Spotify, cover, animation, and heartbeat. `GET /api/v1/status` is read-only and does not require a token. Tokens must not appear in logs, URLs, or responses.
 
 A future private per-device recovery identity supplies first-boot access independently of storage and display. New namespaced configuration uses that token for initial pairing; existing valid pairing tokens remain unchanged. Recovery AP and bearer credentials are independent, privately supplied random secrets with no defaults. Public compilation profiles have no usable identity and are not installations. See [safe first-boot preparation](safe-first-boot.md) for secret delivery, staged provisioning, authenticated maintenance, and limitations. Tokens remain plaintext in device flash; physical validation remains PENDING.
 
@@ -40,6 +40,16 @@ The agent polls Spotify every 15 seconds by default; configure this with `SPOTIF
 | gif | Fullscreen GIF | Fullscreen GIF |
 
 `activeScene` represents one of the two screens, `spotify` or `gif`; the waiting state belongs to the Spotify screen and does not create a third screen.
+
+In `auto` mode only, the device may alternate a valid USD quote with an available GIF. It displays the GIF for 15 seconds and the quote for 5 seconds. Without a playable GIF, a valid quote is shown continuously. Spotify and the disconnected-agent diagnostic keep priority. Manual `gif` and `spotify` modes do not show the quote. USD never becomes a new mode or logical scene; `GET /api/v1/status` continues to report `gif` while the quote is visible. The received quote is held in RAM and expires using the device monotonic clock; it is not stored in flash and has no readback route.
+
+## USD Quote State
+
+The local Node.js agent retrieves the commercial USD/BRL purchase price and source percentage change from the fixed [AwesomeAPI currency endpoint](https://docs.awesomeapi.com.br/api-de-moedas). It refreshes every five minutes while enabled and accepts only Unix-second timestamps at or after 2000-01-01 that are no more than 60 seconds ahead of the agent's wall clock. Each sample expires 15 minutes after its source timestamp. The browser dashboard reads the agent's shared cache; it does not call the provider. The device itself has no external provider connection.
+
+`PUT /api/v1/usd-state` sends one complete snapshot defined by [usd-state.schema.json](../contracts/v1/usd-state.schema.json). The request is authenticated JSON and is limited to 128 bytes. `priceCents` represents the BRL price to two decimal places. `changeBasisPoints` represents the source `pctChange` to two decimal percentage places: 42 means +0.42%. `validForMs` is the remaining lifetime, capped at 900,000 ms. Disabled and enabled-without-quote snapshots use zero for all numeric fields. Invalid combinations, duplicate or unknown fields, non-integer numeric notation, and values outside the contract are rejected without replacing the previous state. A 204 response confirms only that the complete state was accepted in RAM.
+
+The agent sends the preference at startup, after reconnect, and after a local preference change. While enabled, it resends a full snapshot in each normal device synchronization cycle so the device can recover from an unobserved restart. These snapshots do not extend a quote's original expiration or restart the display phase.
 
 ## Spotify Model
 
@@ -69,6 +79,7 @@ There is no clear-playback operation in v1, and `trackId` must be nonempty. The 
 |---|---|---|---|
 | GET | /api/v1/status | No body | 200 and an object matching [status.schema.json](../contracts/v1/status.schema.json). |
 | PUT | /api/v1/mode | JSON matching [mode.schema.json](../contracts/v1/mode.schema.json) | 204; mode persisted. |
+| PUT | /api/v1/usd-state | Authenticated JSON matching [usd-state.schema.json](../contracts/v1/usd-state.schema.json); maximum 128 bytes | 204; complete quote preference and snapshot accepted in RAM. |
 | PUT | /api/v1/spotify | JSON matching [now-playing.schema.json](../contracts/v1/now-playing.schema.json) | 204; state updated. |
 | PUT | /api/v1/cover | Binary bytes, X-Track-Id, and X-Content-SHA256 | 204 after validation and storage. NBIC v1, exactly 115,209 bytes. |
 | PUT | /api/v1/animation | Binary bytes and X-Content-SHA256 | 204 after validation and storage. NBIF v1, at most 2,304,051 bytes and available atomic staging space. |
@@ -157,7 +168,7 @@ JSON errors follow [error.schema.json](../contracts/v1/error.schema.json). The `
 | 401 | unauthorized | Missing or invalid token on a mutating route. |
 | 404 | not_found | Unknown route or resource. |
 | 409 | conflict | Conflict with current state or concurrent upload. |
-| 413 | payload_too_large | Body exceeds the configured limit; 12,288 bytes for JSON, 512 bytes for configuration, and the binary limits above; headers have a separate 4,096-byte cap. |
+| 413 | payload_too_large | Body exceeds the configured limit; 128 bytes for USD state, 12,288 bytes for other JSON, 512 bytes for configuration, and the binary limits above; headers have a separate 4,096-byte cap. |
 | 415 | unsupported_media_type | Unsupported media type or format. |
 | 422 | invalid_content | Invalid content, checksum, or semantics. |
 | 500 | internal_error | Internal failure without sensitive details. |

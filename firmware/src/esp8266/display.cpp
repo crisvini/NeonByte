@@ -12,6 +12,7 @@ constexpr unsigned SPOTIFY_TEXT_ROWS_PER_TICK = 2;
 constexpr std::uint32_t ANIMATION_TICK_BUDGET_US = 4000;
 constexpr unsigned ANIMATION_ROWS_PER_TICK = 8;
 constexpr unsigned ANIMATION_STEPS_PER_TICK = 32;
+constexpr unsigned USD_SCREEN_CLEAR_ROWS_PER_TICK = 8;
 
 bool metadataMatches(std::string_view text, const SpotifyMarquee& result, const std::uint8_t* cachedText) {
     unsigned index = 0;
@@ -21,6 +22,12 @@ bool metadataMatches(std::string_view text, const SpotifyMarquee& result, const 
             (character >= 32 && character < 127 ? character : '?')) return false;
     }
     return index == result.length;
+}
+bool isStructuralNbifError(const char* error) {
+    return error != nullptr && (std::strcmp(error, "duplicate palette color") == 0 ||
+        std::strcmp(error, "frame record has trailing or missing bytes") == 0 ||
+        std::strcmp(error, "row bounds or order are invalid") == 0 ||
+        std::strcmp(error, "row payload is malformed") == 0);
 }
 void metadataText(std::string_view text, SpotifyMarquee& result, std::uint8_t* cachedText, std::uint64_t now) {
     result.length = 0;
@@ -55,6 +62,68 @@ void DeviceDisplay::textLine(std::string_view text, int x, int y, unsigned limit
         panel_.write(c >= 32 && c < 127 ? c : '?');
     }
 }
+void DeviceDisplay::beginScreenClear() {
+    screenClearNextRow_ = 0;
+    screenClearPending_ = true;
+}
+bool DeviceDisplay::clearScreenStep() {
+    if (!screenClearPending_) return true;
+    const auto rows = std::min<unsigned>(USD_SCREEN_CLEAR_ROWS_PER_TICK, 240U - screenClearNextRow_);
+    panel_.fillRect(0, screenClearNextRow_, 240, rows, ST77XX_BLACK);
+    screenClearNextRow_ = static_cast<std::uint16_t>(screenClearNextRow_ + rows);
+    if (screenClearNextRow_ == 240) screenClearPending_ = false;
+    return !screenClearPending_;
+}
+void DeviceDisplay::beginUsdScreen() {
+    usdScreenVisible_ = true;
+    usdContentRendered_ = false;
+    beginScreenClear();
+}
+void DeviceDisplay::showUsd(const UsdDeviceState& state, std::uint64_t now) {
+    if (!usdScreenVisible_) beginUsdScreen();
+    if (usdContentRendered_ && usdRenderedPriceCents_ == state.priceCents &&
+        usdRenderedChangeBasisPoints_ == state.changeBasisPoints) return;
+    if (usdContentRendered_) {
+        usdContentRendered_ = false;
+        beginScreenClear();
+    }
+    if (!clearScreenStep()) return;
+
+    char price[20];
+    char change[16];
+    const auto whole = static_cast<unsigned long>(state.priceCents / 100U);
+    const auto cents = static_cast<unsigned long>(state.priceCents % 100U);
+    std::snprintf(price, sizeof(price), "R$ %lu,%02lu", whole, cents);
+    const auto magnitude = static_cast<unsigned long>(state.changeBasisPoints < 0
+        ? -static_cast<std::int64_t>(state.changeBasisPoints) : state.changeBasisPoints);
+    if (state.changeBasisPoints == 0) {
+        std::snprintf(change, sizeof(change), "%lu.%02lu%%", magnitude / 100U, magnitude % 100U);
+    } else {
+        std::snprintf(change, sizeof(change), "%c%lu.%02lu%%", state.changeBasisPoints > 0 ? '+' : '-',
+            magnitude / 100U, magnitude % 100U);
+    }
+    const char* direction = state.changeBasisPoints > 0 ? "UP" : state.changeBasisPoints < 0 ? "DOWN" : "UNCHANGED";
+    const std::uint16_t changeColor = state.changeBasisPoints > 0 ? 0x07e0
+        : state.changeBasisPoints < 0 ? 0xf800 : 0xd69a;
+    const auto centerText = [](std::string_view text, unsigned size) {
+        return static_cast<int>((240U - static_cast<unsigned>(text.size()) * 6U * size) / 2U);
+    };
+
+    panel_.fillRect(0, 0, 240, 3, 0xf81f);
+    panel_.fillRect(0, 237, 240, 3, 0x07ff);
+    textLine("DOLAR COMERCIAL", centerText("DOLAR COMERCIAL", 1), 40, 20, 0xd69a);
+    panel_.fillRect(84, 37, 1, 1, 0xd69a);
+    panel_.fillRect(85, 36, 1, 1, 0xd69a);
+    textLine("USD/BRL", centerText("USD/BRL", 1), 68, 10, 0x07ff);
+    textLine(price, centerText(price, 2), 104, 12, ST77XX_WHITE, 2);
+    textLine(change, centerText(change, 2), 150, 12, changeColor, 2);
+    textLine(direction, centerText(direction, 1), 184, 12, changeColor);
+    usdScreenVisible_ = true;
+    usdContentRendered_ = true;
+    usdRenderedPriceCents_ = state.priceCents;
+    usdRenderedChangeBasisPoints_ = state.changeBasisPoints;
+    usdPhaseStartedAt_ = now;
+}
 void DeviceDisplay::setupCredentials(const DeviceConfiguration& configuration) {
     if (!initialized_) return;
     panel_.fillScreen(ST77XX_BLACK);
@@ -66,12 +135,15 @@ void DeviceDisplay::setupCredentials(const DeviceConfiguration& configuration) {
 }
 void DeviceDisplay::showGif() {
     if (!initialized_) return;
-    if (scene_ != 0) {
+    if (scene_ != 0 || usdScreenVisible_) {
         if (scene_ == 3) panel_.fillScreen(ST77XX_BLACK);
+        if (usdScreenVisible_) beginScreenClear();
+        usdScreenVisible_ = false;
         textRender_ = {};
         scene_ = 0; offset_ = 0; frame_ = 0; nextFrame_ = 0; animationFrameNeedsStart_ = true;
         animationRevision_ = storage_.animationRevision;
         animationNeedsReopen_ = !openAnimation();
+        if (!animationNeedsReopen_) screenClearPending_ = false;
     }
 }
 bool DeviceDisplay::openAnimation() {
@@ -87,7 +159,9 @@ void DeviceDisplay::showSpotifyWaiting() {
     if (!initialized_) return;
     if (scene_ != 1) {
         textRender_ = {};
-        panel_.fillScreen(ST77XX_BLACK); textLine("Waiting for playback",20,116,32,ST77XX_WHITE); scene_ = 1;
+        panel_.fillScreen(ST77XX_BLACK); usdScreenVisible_ = false;
+        screenClearPending_ = false;
+        textLine("Waiting for playback",20,116,32,ST77XX_WHITE); scene_ = 1;
     }
 }
 
@@ -182,7 +256,7 @@ void DeviceDisplay::renderSpotifyTextRows(std::uint64_t now) {
 void DeviceDisplay::showSpotify(const NowPlaying& track, std::uint64_t) {
     if (!initialized_) return;
     const bool entering = scene_ != 2;
-    if (entering) { panel_.fillScreen(ST77XX_BLACK); textRender_ = {}; }
+    if (entering) { panel_.fillScreen(ST77XX_BLACK); usdScreenVisible_ = false; screenClearPending_ = false; textRender_ = {}; }
     const bool trackChanged = displayedTrack_.view() != track.trackId.view();
     if (trackChanged && !entering) panel_.fillRect(32,4,SPOTIFY_COVER_SIZE,SPOTIFY_COVER_SIZE,ST77XX_BLACK);
     const bool coverChanged = entering || trackChanged || coverRevision_ != storage_.assetRevision;
@@ -252,7 +326,14 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
     if (!initialized_) return;
     displayNowMs_ = now;
     const auto state = scenes.currentState();
+    const bool usdEligible = scenes.mode() == DisplayMode::automatic && state.usd.enabled &&
+        state.usd.priceCents > 0 && state.usd.validForMs > 0;
+    bool promotionChecked = false;
     if (!state.agentAvailable) {
+        usdPhaseStarted_ = false;
+        usdScreenVisible_ = false;
+        usdContentRendered_ = false;
+        screenClearPending_ = false;
         std::array<std::uint8_t,4> address{};
         if (WiFi.status() == WL_CONNECTED) {
             const auto ip = WiFi.localIP();
@@ -283,6 +364,10 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
         return;
     }
     if (state.activeScene == ActiveScene::spotify) {
+        usdPhaseStarted_ = false;
+        usdScreenVisible_ = false;
+        usdContentRendered_ = false;
+        screenClearPending_ = false;
         storage_.promoteAnimationCandidateAtBoundary();
         if (state.waiting) showSpotifyWaiting();
         else {
@@ -308,23 +393,164 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
         }
         return;
     }
+    if (screenClearPending_ && !usdEligible) clearScreenStep();
+
+    if (usdStructuralFailure_ && usdStructuralFailureRevision_ != storage_.animationRevision) {
+        usdStructuralFailure_ = false;
+    }
+    if (usdScreenVisible_) {
+        if (!usdEligible) {
+            beginScreenClear();
+            usdScreenVisible_ = false;
+            usdContentRendered_ = false;
+            usdPhaseStarted_ = false;
+            usdStructuralFailure_ = false;
+            scene_ = -1;
+        } else {
+            const auto previousRevision = storage_.animationRevision;
+            storage_.promoteAnimationCandidateAtBoundary();
+            promotionChecked = true;
+            if (storage_.animationRevision != previousRevision) {
+                beginScreenClear();
+                usdScreenVisible_ = false;
+                usdContentRendered_ = false;
+                usdPhaseStarted_ = false;
+                usdStructuralFailure_ = false;
+                scene_ = -1;
+            } else if (usdStructuralFailure_ && usdStructuralFailureRevision_ == storage_.animationRevision) {
+                showUsd(state.usd, now);
+                return;
+            } else if ((metadata_.frameCount || metadataV2_.frameCount) && !animationNeedsReopen_) {
+                if (!usdContentRendered_) {
+                    showUsd(state.usd, now);
+                    return;
+                }
+                if (now >= usdPhaseStartedAt_ && now - usdPhaseStartedAt_ >= USD_DISPLAY_PHASE_MS) {
+                    usdScreenVisible_ = false;
+                    usdContentRendered_ = false;
+                    usdPhaseStarted_ = false;
+                    if (animationV2Active_) animationV2_.restart();
+                    frame_ = 0;
+                    offset_ = 0;
+                    nextFrame_ = 0;
+                    animationFrameNeedsStart_ = true;
+                } else {
+                    showUsd(state.usd, now);
+                    return;
+                }
+            } else if (animationNeedsReopen_) {
+                if (animationRevision_ == storage_.animationRevision && now < nextFrame_) {
+                    showUsd(state.usd, now);
+                    return;
+                }
+                animationRevision_ = storage_.animationRevision;
+                frame_ = 0;
+                offset_ = 0;
+                nextFrame_ = 0;
+                animationFrameNeedsStart_ = true;
+                if (!openAnimation()) {
+                    animationNeedsReopen_ = true;
+                    nextFrame_ = now + ANIMATION_REOPEN_RETRY_MS;
+                    showUsd(state.usd, now);
+                    return;
+                }
+                animationNeedsReopen_ = false;
+                usdScreenVisible_ = false;
+                usdContentRendered_ = false;
+                usdPhaseStarted_ = false;
+                screenClearPending_ = false;
+            } else {
+                showUsd(state.usd, now);
+                return;
+            }
+        }
+    }
+    if (!usdEligible) {
+        usdPhaseStarted_ = false;
+        usdStructuralFailure_ = false;
+        if (usdScreenVisible_) {
+            beginScreenClear();
+            usdScreenVisible_ = false;
+            usdContentRendered_ = false;
+            scene_ = -1;
+        }
+    }
     if (scene_ != 0) {
         showGif();
-        if (animationNeedsReopen_) { nextFrame_ = now + ANIMATION_REOPEN_RETRY_MS; return; }
+        if (animationNeedsReopen_) {
+            nextFrame_ = now + ANIMATION_REOPEN_RETRY_MS;
+            if (usdEligible) {
+                usdPhaseStarted_ = true;
+                usdPhaseStartedAt_ = now;
+                showUsd(state.usd, now);
+            }
+            return;
+        }
     }
     // Consume the deadline once before promoting a staged asset or decoding its successor.
     if (nextFrame_ && now >= nextFrame_) {
         nextFrame_ = 0;
-        storage_.promoteAnimationCandidateAtBoundary();
+        if (!promotionChecked) storage_.promoteAnimationCandidateAtBoundary();
+        promotionChecked = true;
     }
-    if (!metadata_.frameCount && !metadataV2_.frameCount) storage_.promoteAnimationCandidateAtBoundary();
+    if (!metadata_.frameCount && !metadataV2_.frameCount && !promotionChecked) {
+        storage_.promoteAnimationCandidateAtBoundary();
+        promotionChecked = true;
+    }
+    if (usdEligible && usdStructuralFailure_ && usdStructuralFailureRevision_ == storage_.animationRevision) {
+        usdPhaseStarted_ = true;
+        usdPhaseStartedAt_ = now;
+        showUsd(state.usd, now);
+        return;
+    }
     if (animationNeedsReopen_ || animationRevision_ != storage_.animationRevision) {
+        if (animationRevision_ != storage_.animationRevision) {
+            usdPhaseStarted_ = false;
+            usdStructuralFailure_ = false;
+        }
         // Reuse the inactive frame deadline for failed-open backoff. A new asset bypasses it.
-        if (animationNeedsReopen_ && animationRevision_ == storage_.animationRevision && now < nextFrame_) return;
+        if (animationNeedsReopen_ && animationRevision_ == storage_.animationRevision && now < nextFrame_) {
+            if (usdEligible) {
+                if (!usdPhaseStarted_) { usdPhaseStarted_ = true; usdPhaseStartedAt_ = now; }
+                showUsd(state.usd, now);
+            }
+            return;
+        }
         animationRevision_ = storage_.animationRevision; frame_ = 0; offset_ = 0; nextFrame_ = 0;
         animationFrameNeedsStart_ = true;
-        if (!openAnimation()) { animationNeedsReopen_ = true; nextFrame_ = now + ANIMATION_REOPEN_RETRY_MS; return; }
+        if (!openAnimation()) {
+            animationNeedsReopen_ = true;
+            nextFrame_ = now + ANIMATION_REOPEN_RETRY_MS;
+            if (usdEligible) {
+                if (!usdPhaseStarted_) { usdPhaseStarted_ = true; usdPhaseStartedAt_ = now; }
+                showUsd(state.usd, now);
+            }
+            return;
+        }
         animationNeedsReopen_ = false;
+        screenClearPending_ = false;
+    }
+    const bool hasPlayableAnimation = (metadata_.frameCount || metadataV2_.frameCount) && !animationNeedsReopen_;
+    if (usdEligible && !hasPlayableAnimation) {
+        if (!usdPhaseStarted_) { usdPhaseStarted_ = true; usdPhaseStartedAt_ = now; }
+        showUsd(state.usd, now);
+        return;
+    }
+    if (usdEligible && hasPlayableAnimation && !usdPhaseStarted_) {
+        usdPhaseStarted_ = true;
+        usdPhaseStartedAt_ = now;
+    }
+    if (usdEligible && hasPlayableAnimation && animationV2Active_ && animationFrameNeedsStart_ &&
+        now >= usdPhaseStartedAt_ && now - usdPhaseStartedAt_ >= USD_GIF_PHASE_MS) {
+        beginUsdScreen();
+        showUsd(state.usd, now);
+        return;
+    }
+    if (usdEligible && hasPlayableAnimation && !animationV2Active_ && offset_ == 0 &&
+        now >= usdPhaseStartedAt_ && now - usdPhaseStartedAt_ >= USD_GIF_PHASE_MS) {
+        beginUsdScreen();
+        showUsd(state.usd, now);
+        return;
     }
     if (animationV2Active_) {
         if (!metadataV2_.frameCount || now < nextFrame_) return;
@@ -337,7 +563,17 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
             const auto status = animationV2_.step();
             ++steps;
             if (status == AnimationDecodeStatus::Error) {
-                metadataV2_ = {}; animationNeedsReopen_ = true; return;
+                if (isStructuralNbifError(animationV2_.error())) {
+                    usdStructuralFailure_ = true;
+                    usdStructuralFailureRevision_ = storage_.animationRevision;
+                }
+                metadataV2_ = {}; animationNeedsReopen_ = true;
+                nextFrame_ = now + ANIMATION_REOPEN_RETRY_MS;
+                if (usdEligible) {
+                    if (!usdPhaseStarted_) { usdPhaseStarted_ = true; usdPhaseStartedAt_ = now; }
+                    showUsd(state.usd, now);
+                }
+                return;
             }
             if (status == AnimationDecodeStatus::AnimationComplete) {
                 animationV2_.restart(); animationFrameNeedsStart_ = true;
@@ -375,14 +611,20 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
         if (!offset_) { beginAnimationFrame(240,240); frameStarted_ = now; }
         std::size_t count = 0;
         if (!animation_.readFrameChunk(frame_,offset_,pixels_.data(),pixels_.size(),count)) {
-            metadata_ = {}; animationNeedsReopen_ = true; return;
+            metadata_ = {}; animationNeedsReopen_ = true; nextFrame_ = now + ANIMATION_REOPEN_RETRY_MS;
+            if (usdEligible) { if (!usdPhaseStarted_) { usdPhaseStarted_ = true; usdPhaseStartedAt_ = now; } showUsd(state.usd, now); }
+            return;
         }
         writeAnimationPixels(offset_,pixels_.data(),count,window);
         offset_ += count;
         rows += static_cast<unsigned>(count / (240 * 2));
         if (offset_ == ANIMATION_FRAME_PIXEL_BYTES) {
             std::uint16_t delayMs = 0;
-            if (!animation_.frameDelayMs(frame_,delayMs)) { metadata_ = {}; animationNeedsReopen_ = true; return; }
+            if (!animation_.frameDelayMs(frame_,delayMs)) {
+                metadata_ = {}; animationNeedsReopen_ = true; nextFrame_ = now + ANIMATION_REOPEN_RETRY_MS;
+                if (usdEligible) { if (!usdPhaseStarted_) { usdPhaseStarted_ = true; usdPhaseStartedAt_ = now; } showUsd(state.usd, now); }
+                return;
+            }
             endAnimationFrame(delayMs); nextFrame_ = frameStarted_ + delayMs; offset_ = 0;
             frame_ = (frame_ + 1) % metadata_.frameCount;
             return;

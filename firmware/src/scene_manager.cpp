@@ -1,6 +1,7 @@
 #include "neonbyte/scene_manager.h"
 
 #include <algorithm>
+#include <limits>
 
 namespace neonbyte {
 
@@ -22,6 +23,49 @@ bool SceneManager::setMode(DisplayMode mode) {
     }
     mode_ = mode;
     return true;
+}
+
+bool SceneManager::setUsdState(const UsdDeviceState& state) {
+    if (state.priceCents > USD_PRICE_CENTS_MAX ||
+        state.changeBasisPoints < -USD_CHANGE_BASIS_POINTS_MAX ||
+        state.changeBasisPoints > USD_CHANGE_BASIS_POINTS_MAX ||
+        state.validForMs > USD_VALID_FOR_MS_MAX ||
+        (!state.enabled && (state.priceCents != 0 || state.changeBasisPoints != 0 || state.validForMs != 0)) ||
+        (state.enabled && state.priceCents == 0 &&
+            (state.changeBasisPoints != 0 || state.validForMs != 0)) ||
+        (state.enabled && state.priceCents > 0 && state.validForMs == 0)) {
+        return false;
+    }
+
+    if (!state.enabled || state.priceCents == 0) {
+        usdState_ = state;
+        usdExpiresAtMs_ = 0;
+        return true;
+    }
+
+    const auto now = clock_.monotonicMillis();
+    const bool sameQuote = usdState_.enabled && usdState_.priceCents == state.priceCents &&
+        usdState_.changeBasisPoints == state.changeBasisPoints;
+    const auto currentRemaining = usdExpiresAtMs_ > now ? usdExpiresAtMs_ - now : 0;
+    if (sameQuote && state.validForMs <= currentRemaining) return true;
+
+    usdState_ = state;
+    usdExpiresAtMs_ = state.validForMs > std::numeric_limits<std::uint64_t>::max() - now
+        ? std::numeric_limits<std::uint64_t>::max() : now + state.validForMs;
+    return true;
+}
+
+UsdDeviceState SceneManager::usdState() const {
+    UsdDeviceState current = usdState_;
+    const auto now = clock_.monotonicMillis();
+    if (!current.enabled || current.priceCents == 0 || usdExpiresAtMs_ <= now) {
+        current.priceCents = 0;
+        current.changeBasisPoints = 0;
+        current.validForMs = 0;
+        return current;
+    }
+    current.validForMs = static_cast<std::uint32_t>(usdExpiresAtMs_ - now);
+    return current;
 }
 
 void SceneManager::updateNowPlaying(const NowPlaying& nowPlaying) {
@@ -68,15 +112,15 @@ SceneState SceneManager::currentState() const {
     const bool playing = agentAvailable && playbackFresh && nowPlaying_.isPlaying;
 
     if (mode_ == DisplayMode::gif) {
-        return {ActiveScene::gif, false, agentAvailable, currentProgressMs(nowMs), hasNowPlaying_ ? &nowPlaying_ : nullptr};
+        return {ActiveScene::gif, false, agentAvailable, currentProgressMs(nowMs), hasNowPlaying_ ? &nowPlaying_ : nullptr, usdState()};
     }
     if (mode_ == DisplayMode::spotify) {
-        return {ActiveScene::spotify, !playing, agentAvailable, currentProgressMs(nowMs), hasNowPlaying_ ? &nowPlaying_ : nullptr};
+        return {ActiveScene::spotify, !playing, agentAvailable, currentProgressMs(nowMs), hasNowPlaying_ ? &nowPlaying_ : nullptr, usdState()};
     }
     if (playing) {
-        return {ActiveScene::spotify, false, true, currentProgressMs(nowMs), &nowPlaying_};
+        return {ActiveScene::spotify, false, true, currentProgressMs(nowMs), &nowPlaying_, usdState()};
     }
-    return {ActiveScene::gif, false, agentAvailable, currentProgressMs(nowMs), hasNowPlaying_ ? &nowPlaying_ : nullptr};
+    return {ActiveScene::gif, false, agentAvailable, currentProgressMs(nowMs), hasNowPlaying_ ? &nowPlaying_ : nullptr, usdState()};
 }
 
 const NowPlaying* SceneManager::nowPlaying() const {

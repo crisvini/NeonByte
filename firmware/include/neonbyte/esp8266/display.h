@@ -20,6 +20,8 @@ constexpr unsigned SPOTIFY_TEXT_LINE_HEIGHT = 20;
 constexpr unsigned SPOTIFY_MARQUEE_PAUSE_MS = 1500;
 constexpr unsigned SPOTIFY_MARQUEE_INTERVAL_MS = 40;
 constexpr unsigned SPOTIFY_MARQUEE_STEP_PIXELS = 1;
+constexpr std::uint64_t USD_GIF_PHASE_MS = 15'000;
+constexpr std::uint64_t USD_DISPLAY_PHASE_MS = 5'000;
 struct SpotifyMarquee {
     std::uint64_t lastStepMs = 0;
     std::uint16_t offset = 0, length = 0;
@@ -68,6 +70,10 @@ private:
                               std::size_t length, AnimationWindowState& window);
     void textLine(std::string_view text, int x, int y, unsigned limit, std::uint16_t color,
                   unsigned size = 1);
+    void beginScreenClear();
+    bool clearScreenStep();
+    void beginUsdScreen();
+    void showUsd(const UsdDeviceState& state, std::uint64_t now);
     bool startSpotifyTextRender(std::uint64_t now);
     void renderSpotifyTextRows(std::uint64_t now);
     PersistentStorage& storage_;
@@ -88,10 +94,17 @@ private:
     SpotifyMarquee titleText_{}, artistText_{};
     SpotifyTextRender textRender_{};
     std::uint64_t nextFrame_ = 0, frameStarted_ = 0, displayNowMs_ = 0;
+    std::uint64_t usdPhaseStartedAt_ = 0;
+    std::uint16_t screenClearNextRow_ = 0;
+    std::uint32_t usdRenderedPriceCents_ = 0;
+    std::int32_t usdRenderedChangeBasisPoints_ = 0;
+    std::uint32_t usdStructuralFailureRevision_ = 0;
     std::array<std::uint8_t,4> diagnosticIp_{};
     int scene_ = -1;
     bool initialized_ = false, animationV2Active_ = false, animationFrameNeedsStart_ = true;
-    bool animationNeedsReopen_ = false;
+    bool screenClearPending_ = false;
+    bool animationNeedsReopen_ = false, usdScreenVisible_ = false, usdPhaseStarted_ = false;
+    bool usdStructuralFailure_ = false, usdContentRendered_ = false;
 };
 } // namespace neonbyte
 #endif

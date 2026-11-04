@@ -12,6 +12,7 @@ import type { DisplayModeController } from "../device/mode-controller.js";
 import { resolveActiveScene, type DisplayMode } from "./scene.js";
 import type { FirmwareUpdateService, FirmwareUpdateState, FirmwareUpdateView } from "../device/firmware-update.js";
 import { MaintenanceRequestError, MaintenanceTransportError } from "../device/maintenance-client.js";
+import type { UsdQuoteService } from "../exchange/usd-quote.js";
 
 export type FirmwareUpdateControl = Pick<FirmwareUpdateService, "view" | "getStatus" | "prepare" | "confirm" | "verify" | "correctAddress" | "runApplication" | "reconcileRunning">;
 
@@ -33,6 +34,7 @@ export interface LocalWebAppOptions {
   poller: PlaybackPoller;
   modeController: DisplayModeController;
   device?: DeviceIntegration;
+  usdQuoteService?: Pick<UsdQuoteService, "view" | "setEnabled">;
   firmwareUpdate?: FirmwareUpdateControl;
   oauth: Pick<SpotifyOAuthClient, "createAuthorizationRequest" | "exchangeAuthorizationCode"> | null;
   spotifyConfigured: boolean;
@@ -272,10 +274,13 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
       if (request.method === "GET" && url.pathname === "/api/status") {
         const snapshot = options.poller.currentSnapshot;
         const modeControl = options.modeController.view;
+        const usdQuote = options.usdQuoteService?.view;
         const spotifyState = spotifyConnectionState(snapshot, options.spotifyConfigured, Date.now(), options.agentTimeoutMs ?? 45_000);
         sendJson(response, 200, {
           mode: modeControl.mode,
           modeControl,
+          usd: { enabled: modeControl.usdEnabled, quote: usdQuote?.quote ?? null,
+            validForMs: usdQuote?.validForMs ?? 0 },
           snapshot,
           activeScene: resolveActiveScene({
             mode: modeControl.mode,
@@ -518,6 +523,27 @@ export async function startLocalWebApp(options: LocalWebAppOptions): Promise<Loc
           response.end();
         } catch (error) {
           sendError(response, error instanceof PayloadTooLargeError ? 413 : 400, error instanceof Error ? error.message : "Unable to change the mode.");
+        }
+        return;
+      }
+
+      if (url.pathname === "/api/usd") {
+        if (!options.usdQuoteService) { request.resume(); sendError(response, 503, "USD quote display is unavailable."); return; }
+        try {
+          const payload = await readJson(request);
+          if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
+              Object.keys(payload).length !== 1 || typeof (payload as Record<string, unknown>)["enabled"] !== "boolean") {
+            throw new Error("Send exactly one boolean USD display preference.");
+          }
+          const enabled = (payload as { enabled: boolean }).enabled;
+          await options.modeController.setUsdEnabled(enabled);
+          void options.usdQuoteService.setEnabled(enabled).catch(() => undefined);
+          options.device?.requestModeSynchronization();
+          response.writeHead(204, securityHeaders());
+          response.end();
+        } catch (error) {
+          sendError(response, error instanceof PayloadTooLargeError ? 413 : 400,
+            error instanceof Error ? error.message : "Unable to change the USD display preference.");
         }
         return;
       }

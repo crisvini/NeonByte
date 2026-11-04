@@ -9,6 +9,7 @@ import type { PlaybackPoller } from "../spotify/poller.js";
 import { MaintenanceClient } from "./maintenance-client.js";
 import type { RecoveryCredential, RecoveryCredentialStore } from "./recovery-store.js";
 import { DisplayModeController, modeTargetId } from "./mode-controller.js";
+import type { UsdQuoteService } from "../exchange/usd-quote.js";
 
 export interface DeviceConfig { address: string; token: string; enabled: boolean }
 export interface DeviceConfigStore {
@@ -76,10 +77,13 @@ export class DeviceIntegration {
   private animationState: DeviceAnimationView = { state: "none", attempts: 0, previousAnimation: "unchanged", freeStorageBytes: null, message: "" };
   private animationReplacementController: AbortController | null = null;
   private coverJob: { url: string; promise: Promise<MediaAsset> } | null = null;
+  private unsupportedUsdPairingFingerprint: string | null = null;
+  private lastAcceptedUsdState: { pairingFingerprint: string; enabled: boolean } | null = null;
 
   constructor(private readonly options: { store: DeviceConfigStore; poller: PlaybackPoller; intervalMs: number; fetchDevice?: typeof fetch;
     fetchCover?: typeof fetch; recoveryStore?: RecoveryCredentialStore;
     modeController: DisplayModeController;
+    usdQuoteService?: Pick<UsdQuoteService, "deviceState">;
     createMaintenanceClient?: (address: string, token: string) => Pick<MaintenanceClient, "info"> }) {}
 
   get status(): DeviceView {
@@ -261,15 +265,23 @@ export class DeviceIntegration {
   }
 
   resumeAfterExplicitRun(): void {
+    this.resetUsdCompatibilityAfterFirmwareUpdate();
     this.releaseMaintenanceHold();
   }
 
   resumeAfterManualReconciliation(): void {
+    this.resetUsdCompatibilityAfterFirmwareUpdate();
     this.releaseMaintenanceHold();
   }
 
   resumeAfterSafePreflightAbort(): void {
+    this.lastAcceptedUsdState = null;
     this.releaseMaintenanceHold();
+  }
+
+  private resetUsdCompatibilityAfterFirmwareUpdate(): void {
+    this.unsupportedUsdPairingFingerprint = null;
+    this.lastAcceptedUsdState = null;
   }
 
   private releaseMaintenanceHold(): void {
@@ -292,6 +304,8 @@ export class DeviceIntegration {
       const token = settings.token || saved?.token || "";
       if (!token) throw new Error("The stored device pairing token is missing. Configure the device pairing token first.");
       const config = { address, token, enabled: settings.enabled };
+      const previousPairingFingerprint = previous?.token ? modeTargetId(previous.token) : null;
+      const nextPairingFingerprint = modeTargetId(config.token);
       const client = this.createClient(config);
       const addressChanged = Boolean(previous && previous.address !== address);
       if (addressChanged && this.maintenanceHeld) throw new Error("Device settings cannot change while maintenance is in progress.");
@@ -309,6 +323,10 @@ export class DeviceIntegration {
         throw error;
       }
       this.config = config;
+      if (previousPairingFingerprint !== nextPairingFingerprint) {
+        this.unsupportedUsdPairingFingerprint = null;
+        this.lastAcceptedUsdState = null;
+      }
       if (previous?.token !== config.token || addressChanged) {
         this.deviceMode = null;
         this.deviceScene = null;
@@ -335,10 +353,14 @@ export class DeviceIntegration {
 
   private startScheduler(config: DeviceConfig): void {
     const client = this.createClient(config);
+    const pairingFingerprint = modeTargetId(config.token);
     const synchronizer = new DeviceSynchronizer({ client, poller: this.options.poller, loadCover: (url) => this.loadCover(url),
       onCoverPrepared: () => scheduler.requestSynchronization() });
     const scheduler = new DeviceScheduler({ intervalMs: this.options.intervalMs, synchronize: async () => {
-      if (!await synchronizer.synchronize()) return false;
+      if (!await synchronizer.synchronize()) {
+        this.lastAcceptedUsdState = null;
+        return false;
+      }
       try {
         let status = await client.status();
         const observedAt = Date.now();
@@ -355,8 +377,31 @@ export class DeviceIntegration {
           this.deviceModeObservedAtUnixMs = Date.now();
         }
         await this.options.modeController.observeDeviceMode(status.mode, targetFingerprint, this.deviceModeObservedAtUnixMs);
-        return true;
-      } catch { return false; }
+      } catch {
+        this.lastAcceptedUsdState = null;
+        return false;
+      }
+
+      const quoteService = this.options.usdQuoteService;
+      const currentFingerprint = this.config?.token ? modeTargetId(this.config.token) : null;
+      if (!quoteService || currentFingerprint !== pairingFingerprint ||
+          this.unsupportedUsdPairingFingerprint === pairingFingerprint) return true;
+      const enabled = this.options.modeController.view.usdEnabled;
+      if (!enabled && this.lastAcceptedUsdState?.pairingFingerprint === pairingFingerprint &&
+          !this.lastAcceptedUsdState.enabled) return true;
+      try {
+        const result = await client.sendUsdState(quoteService.deviceState());
+        if (!this.config?.token || modeTargetId(this.config.token) !== pairingFingerprint) return true;
+        if (result === "unsupported") {
+          this.unsupportedUsdPairingFingerprint = pairingFingerprint;
+          this.lastAcceptedUsdState = null;
+        } else {
+          this.lastAcceptedUsdState = { pairingFingerprint, enabled };
+        }
+      } catch {
+        // USD is a secondary presentation; the successful main cycle remains connected.
+      }
+      return true;
     } });
     this.scheduler = scheduler;
     scheduler.start();

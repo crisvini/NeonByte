@@ -14,6 +14,7 @@ namespace {
 constexpr std::string_view JSON_CONTENT_TYPE = "application/json";
 constexpr std::string_view V1_STATUS_PATH = "/api/v1/status";
 constexpr std::string_view V1_MODE_PATH = "/api/v1/mode";
+constexpr std::string_view V1_USD_STATE_PATH = "/api/v1/usd-state";
 constexpr std::string_view V1_SPOTIFY_PATH = "/api/v1/spotify";
 constexpr std::string_view V1_HEARTBEAT_PATH = "/api/v1/heartbeat";
 constexpr std::string_view V1_COVER_PATH = "/api/v1/cover";
@@ -453,6 +454,179 @@ private:
     bool failed_ = false;
 };
 
+class UsdJsonParser {
+public:
+    explicit UsdJsonParser(std::string_view input) : input_(input) {}
+
+    bool parse(UsdDeviceState& output) {
+        UsdDeviceState candidate{};
+        std::uint8_t seen = 0;
+        whitespace();
+        if (!consume('{')) return false;
+        whitespace();
+        if (position_ == input_.size() || input_[position_] == '}') return false;
+        while (true) {
+            std::string_view key;
+            if (!readKey(key)) return false;
+            std::uint8_t field = 0;
+            if (key == "enabled") field = 1U << 0;
+            else if (key == "priceCents") field = 1U << 1;
+            else if (key == "changeBasisPoints") field = 1U << 2;
+            else if (key == "validForMs") field = 1U << 3;
+            else return false;
+            if ((seen & field) != 0) return false;
+            seen = static_cast<std::uint8_t>(seen | field);
+            if (field == (1U << 0)) {
+                if (!boolean(candidate.enabled)) return false;
+            } else if (field == (1U << 1)) {
+                if (!unsignedInteger(candidate.priceCents)) return false;
+            } else if (field == (1U << 2)) {
+                if (!signedInteger(candidate.changeBasisPoints)) return false;
+            } else if (!unsignedInteger(candidate.validForMs)) {
+                return false;
+            }
+            whitespace();
+            if (consume('}')) break;
+            if (!consume(',')) return false;
+            whitespace();
+        }
+        whitespace();
+        if (position_ != input_.size() || seen != 0x0f || !valid(candidate)) return false;
+        output = candidate;
+        return true;
+    }
+
+private:
+    void whitespace() {
+        while (position_ < input_.size() && (input_[position_] == ' ' || input_[position_] == '\t' ||
+               input_[position_] == '\r' || input_[position_] == '\n')) ++position_;
+    }
+
+    bool consume(char value) {
+        if (position_ >= input_.size() || input_[position_] != value) return false;
+        ++position_;
+        return true;
+    }
+
+    bool readKey(std::string_view& key) {
+        whitespace();
+        if (!consume('"')) return false;
+        keyLength_ = 0;
+        while (position_ < input_.size() && input_[position_] != '"') {
+            std::uint8_t value = static_cast<std::uint8_t>(input_[position_++]);
+            if (value == '\\') {
+                if (position_ >= input_.size()) return false;
+                const char escape = input_[position_++];
+                if (escape == '"' || escape == '\\' || escape == '/') value = static_cast<std::uint8_t>(escape);
+                else if (escape == 'b') value = '\b';
+                else if (escape == 'f') value = '\f';
+                else if (escape == 'n') value = '\n';
+                else if (escape == 'r') value = '\r';
+                else if (escape == 't') value = '\t';
+                else if (escape == 'u') {
+                    std::uint32_t codePoint = 0;
+                    if (!hexadecimalCodeUnit(codePoint) || codePoint > 0x7f) return false;
+                    value = static_cast<std::uint8_t>(codePoint);
+                } else return false;
+            }
+            if (value < 0x20 || value >= 0x80 || keyLength_ == keyBuffer_.size()) return false;
+            keyBuffer_[keyLength_++] = static_cast<char>(value);
+        }
+        if (position_ >= input_.size()) return false;
+        key = {keyBuffer_.data(), keyLength_};
+        ++position_;
+        whitespace();
+        if (!consume(':')) return false;
+        whitespace();
+        return true;
+    }
+
+    bool hexadecimalCodeUnit(std::uint32_t& output) {
+        if (position_ + 4 > input_.size()) return false;
+        output = 0;
+        for (unsigned index = 0; index < 4; ++index) {
+            const char digit = input_[position_++];
+            output <<= 4;
+            if (digit >= '0' && digit <= '9') output |= static_cast<std::uint32_t>(digit - '0');
+            else if (digit >= 'a' && digit <= 'f') output |= static_cast<std::uint32_t>(digit - 'a' + 10);
+            else if (digit >= 'A' && digit <= 'F') output |= static_cast<std::uint32_t>(digit - 'A' + 10);
+            else return false;
+        }
+        return true;
+    }
+
+    bool boolean(bool& value) {
+        if (input_.substr(position_, 4) == "true") {
+            position_ += 4;
+            value = true;
+        } else if (input_.substr(position_, 5) == "false") {
+            position_ += 5;
+            value = false;
+        } else {
+            return false;
+        }
+        return numberEnd();
+    }
+
+    bool unsignedInteger(std::uint32_t& output) {
+        const std::size_t start = position_;
+        if (position_ >= input_.size() || input_[position_] < '0' || input_[position_] > '9') return false;
+        if (input_[position_] == '0') ++position_;
+        else while (position_ < input_.size() && input_[position_] >= '0' && input_[position_] <= '9') ++position_;
+        if (!numberEnd()) return false;
+        std::uint32_t value = 0;
+        for (std::size_t index = start; index < position_; ++index) {
+            const auto digit = static_cast<std::uint32_t>(input_[index] - '0');
+            if (value > (std::numeric_limits<std::uint32_t>::max() - digit) / 10U) return false;
+            value = value * 10U + digit;
+        }
+        output = value;
+        return true;
+    }
+
+    bool signedInteger(std::int32_t& output) {
+        bool negative = false;
+        if (position_ < input_.size() && input_[position_] == '-') {
+            negative = true;
+            ++position_;
+        }
+        const std::size_t start = position_;
+        if (position_ >= input_.size() || input_[position_] < '0' || input_[position_] > '9') return false;
+        if (input_[position_] == '0') ++position_;
+        else while (position_ < input_.size() && input_[position_] >= '0' && input_[position_] <= '9') ++position_;
+        if (!numberEnd()) return false;
+        std::uint32_t magnitude = 0;
+        for (std::size_t index = start; index < position_; ++index) {
+            const auto digit = static_cast<std::uint32_t>(input_[index] - '0');
+            if (magnitude > (static_cast<std::uint32_t>(USD_CHANGE_BASIS_POINTS_MAX) - digit) / 10U) return false;
+            magnitude = magnitude * 10U + digit;
+        }
+        output = negative && magnitude != 0 ? -static_cast<std::int32_t>(magnitude) : static_cast<std::int32_t>(magnitude);
+        return true;
+    }
+
+    bool numberEnd() const {
+        if (position_ >= input_.size()) return true;
+        const char next = input_[position_];
+        return next == ',' || next == '}' || next == ' ' || next == '\t' || next == '\r' || next == '\n';
+    }
+
+    static bool valid(const UsdDeviceState& value) {
+        if (value.priceCents > USD_PRICE_CENTS_MAX ||
+            value.changeBasisPoints < -USD_CHANGE_BASIS_POINTS_MAX ||
+            value.changeBasisPoints > USD_CHANGE_BASIS_POINTS_MAX ||
+            value.validForMs > USD_VALID_FOR_MS_MAX) return false;
+        if (!value.enabled) return value.priceCents == 0 && value.changeBasisPoints == 0 && value.validForMs == 0;
+        if (value.priceCents == 0) return value.changeBasisPoints == 0 && value.validForMs == 0;
+        return value.validForMs > 0;
+    }
+
+    std::string_view input_;
+    std::array<char, 32> keyBuffer_{};
+    std::size_t keyLength_ = 0;
+    std::size_t position_ = 0;
+};
+
 class ResponseWriter {
 public:
     explicit ResponseWriter(HttpResponse& response) : response_(response) {}
@@ -662,13 +836,34 @@ HttpResponse ProtocolHandler::handle(const HttpRequest& request, DeviceInfo devi
     }
 
     const bool binaryRoute = request.path == V1_COVER_PATH || request.path == V1_ANIMATION_PATH;
-    const bool knownRoute = request.path == V1_MODE_PATH || request.path == V1_SPOTIFY_PATH ||
+    const bool knownRoute = request.path == V1_MODE_PATH || request.path == V1_USD_STATE_PATH || request.path == V1_SPOTIFY_PATH ||
         request.path == V1_HEARTBEAT_PATH || binaryRoute;
     if (!knownRoute) {
         return errorResponse(404, "not_found", "The requested route was not found.");
     }
     if (!authenticator_.isAuthorized(request.authorization)) {
         return errorResponse(401, "unauthorized", "A valid bearer token is required.");
+    }
+
+    if (request.path == V1_USD_STATE_PATH) {
+        if (request.method != HttpMethod::put) {
+            return errorResponse(400, "invalid_request", "The USD state route requires PUT.");
+        }
+        if (!isJsonContentType(request.contentType)) {
+            return errorResponse(415, "unsupported_media_type", "The USD state route requires application/json.");
+        }
+        if (request.body.size() > 128) {
+            return errorResponse(413, "payload_too_large", "The USD state body exceeds 128 bytes.");
+        }
+        UsdDeviceState state{};
+        UsdJsonParser parser(request.body);
+        if (!parser.parse(state)) {
+            return errorResponse(400, "invalid_request", "The USD state does not match its v1 contract.");
+        }
+        if (!scenes_.setUsdState(state)) {
+            return errorResponse(400, "invalid_request", "The USD state is outside the supported range.");
+        }
+        return noContent(204);
     }
 
     if (request.path == V1_MODE_PATH) {

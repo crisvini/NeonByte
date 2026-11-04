@@ -8,6 +8,7 @@ import { decodeAnimationV2, validateAnimationV2 } from "../media/animation-decod
 import type { PlaybackPoller } from "../spotify/poller.js";
 import type { NowPlayingV1, PlaybackSnapshot } from "../spotify/types.js";
 import type { DisplayMode } from "../web/scene.js";
+import { isValidUsdDeviceState, USD_STATE_BODY_LIMIT_BYTES, USD_STATE_TRANSPORT_BUDGET_MS, type UsdDeviceState } from "../exchange/usd-quote.js";
 
 export const MEDIA_STORAGE_RESERVE_BYTES = 32 * 1024;
 const ANIMATION_CHUNK_BYTES = 1024;
@@ -311,6 +312,20 @@ export class DeviceClient {
   async heartbeat(): Promise<void> { await this.mutate("/api/v1/heartbeat", "POST"); }
   async setMode(mode: DisplayMode): Promise<void> {
     await this.mutate("/api/v1/mode", "PUT", JSON.stringify({ mode }), { "Content-Type": "application/json" });
+  }
+  async sendUsdState(state: UsdDeviceState): Promise<"accepted" | "unsupported"> {
+    if (!isValidUsdDeviceState(state)) throw new Error("The USD state does not match the v1 device contract.");
+    const body = JSON.stringify(state);
+    if (Buffer.byteLength(body, "utf8") > USD_STATE_BODY_LIMIT_BYTES) {
+      throw new Error("The USD state exceeds the v1 request body limit.");
+    }
+    const response = await this.request("/api/v1/usd-state", "PUT", body,
+      { "Content-Type": "application/json" }, USD_STATE_TRANSPORT_BUDGET_MS, [204, 404]);
+    if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
+      return "unsupported";
+    }
+    return "accepted";
   }
   async sendPlayback(snapshot: PlaybackSnapshot): Promise<void> {
     // Unavailability is not a confirmed pause. Do not renew stale metadata;

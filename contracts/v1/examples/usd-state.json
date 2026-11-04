@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "priceCents": 525,
+  "changeBasisPoints": 42,
+  "validForMs": 300000
+}

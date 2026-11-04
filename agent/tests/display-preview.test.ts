@@ -22,7 +22,9 @@ async function preview() {
     beginPath() { pathClip = null; },
     rect(x: number, y: number, width: number, height: number) { pathClip = [x, y, width, height]; },
     roundRect() {}, clip() { if (pathClip) activeClip = [...pathClip]; },
+    createRadialGradient: () => ({ addColorStop() {} }),
     drawImage: (...args: unknown[]) => covers.push(args.slice(-4) as number[]),
+    putImageData() {},
   };
   const makeElement = () => ({
     textContent: "", value: "", checked: false, hidden: false,
@@ -165,4 +167,32 @@ test("Spotify preview restarts timing when delayed artwork appears and on scene 
   assert.equal(display.texts.at(-1)?.x, 6);
   display.run("spotifySceneActive = false; drawSpotify(2000);");
   assert.deepEqual(display.texts.slice(-2).map(({ x, y }) => [x, y]), [[8, 190], [8, 211]]);
+});
+
+test("auto preview alternates a playable GIF and a valid USD quote, then returns to the GIF", async () => {
+  const display = await preview();
+  display.run(`localAgentAvailable = true; mode = "auto";
+    status = { activeScene: "gif", usd: { enabled: true,
+      quote: { priceCents: 525, changeBasisPoints: 42 }, validForMs: 300000 } };
+    animationFrames = [{ image: {}, delayMs: 100 }];
+    render(0); render(15000);`);
+  assert.ok(display.texts.some(({ value }) => value === "R$ 5,25"));
+  assert.ok(display.texts.some(({ value }) => value === "+0.42%"));
+  assert.ok(display.texts.some(({ value }) => value === "USD/BRL"));
+  assert.equal(display.element("#scene-label").textContent, "USD DISPLAY");
+  display.run("render(20000)");
+  assert.equal(display.element("#scene-label").textContent, "GIF DISPLAY");
+});
+
+test("auto preview keeps USD continuous without a playable GIF and hides it outside auto mode", async () => {
+  const display = await preview();
+  display.run(`localAgentAvailable = true; mode = "auto";
+    status = { activeScene: "gif", usd: { enabled: true,
+      quote: { priceCents: 525, changeBasisPoints: 0 }, validForMs: 300000 } };
+    animationFrames = []; render(0);`);
+  assert.ok(display.texts.some(({ value }) => value === "R$ 5,25"));
+  assert.ok(display.texts.some(({ value }) => value === "0.00%"));
+  display.run(`mode = "gif"; status.usd.enabled = false; render(1000);`);
+  assert.equal(display.element("#scene-label").textContent, "GIF DISPLAY");
+  assert.ok(display.texts.some(({ value }) => value === "No GIF prepared"));
 });

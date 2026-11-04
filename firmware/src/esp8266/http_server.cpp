@@ -186,6 +186,7 @@ void DeviceHttpServer::headersComplete() {
     stockRestore_ = isStockRestorePath(headers_.path);
     maintenanceFirmware_ = isRawMaintenanceUploadPath(headers_.path);
     firmware_ = headers_.path == "/api/v1/firmware" || maintenanceFirmware_;
+    const bool usdStateRoute = headers_.path == "/api/v1/usd-state";
     if (maintenanceFirmware_) {
         const bool identityReady = startup_.identityValid() && !buildId_.empty() && !profile_.empty() &&
             recoveryIdentityFingerprint_.size() == 64;
@@ -274,9 +275,9 @@ void DeviceHttpServer::headersComplete() {
         }
         uploadActive_ = true; ++diagnostics_.uploadsStarted;
     } else {
-        const auto limit = maintenance_ || headers_.path == "/api/v1/config" ? 512U : JSON_BODY_LIMIT;
+        const auto limit = usdStateRoute ? 128U : maintenance_ || headers_.path == "/api/v1/config" ? 512U : JSON_BODY_LIMIT;
         if (headers_.contentLength > limit) { error(413,"payload_too_large",PSTR("The request body exceeds the route limit.")); return; }
-        if (limit == JSON_BODY_LIMIT) {
+        if (!usdStateRoute && limit == JSON_BODY_LIMIT) {
             body_.reset(new (std::nothrow) char[headers_.contentLength+1]);
             if (!body_) { error(500,"internal_error",PSTR("Insufficient memory for this request.")); return; }
         }
@@ -391,6 +392,11 @@ void DeviceHttpServer::dispatchJson() {
     }
     if (maintenance_) { handleMaintenance(request,startup_,lastActivity_,response_); prepareResponse(); return; }
     if (headers_.path == "/api/v1/config") { configureWifi(); return; }
+    if (request.path == "/api/v1/usd-state") {
+        response_ = protocol_->handle(request,{});
+        prepareResponse();
+        return;
+    }
     const String ip = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
     response_ = protocol_->handle(request,{"0.1.0-phase4",{ip.c_str(),ip.length()}}); prepareResponse();
 }

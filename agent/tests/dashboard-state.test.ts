@@ -81,3 +81,29 @@ test("preparing a GIF leaves the selected mode and behavior preview unchanged", 
   assert.equal(vm.runInContext("preparedGifPreview", sandbox), false);
   assert.deepEqual(calls, ["/api/animation"]);
 });
+
+test("changing the USD preference posts only the preference and keeps the mode selection", async () => {
+  const source = await sourcePromise;
+  const start = source.indexOf("async function setUsdEnabled(");
+  const end = source.indexOf("function updateLamp", start);
+  const posts: Array<{ path: string; body: unknown }> = [];
+  const sandbox = vm.createContext({ usdPending: false, mode: "auto", status: null, otaMutationLocked: () => false,
+    document: { querySelector: () => ({ checked: true, disabled: false }) },
+    postJson: async (path: string, body: unknown) => { posts.push({ path, body }); },
+    refreshStatus: async () => {}, setOtaMutationLock() {}, notify() {} });
+  vm.runInContext(source.slice(start, end), sandbox);
+  await vm.runInContext("setUsdEnabled(true)", sandbox) as Promise<void>;
+  assert.deepEqual(JSON.parse(JSON.stringify(posts)), [{ path: "/api/usd", body: { enabled: true } }]);
+  assert.equal(vm.runInContext("mode", sandbox), "auto");
+  assert.equal(vm.runInContext("usdPending", sandbox), false);
+});
+
+test("dashboard has one dollar preference toggle with the required label", async () => {
+  const [source, html] = await Promise.all([
+    sourcePromise,
+    readFile(new URL("../src/web/public/index.html", import.meta.url), "utf8"),
+  ]);
+  assert.equal((html.match(/id="usd-enabled"/g) ?? []).length, 1);
+  assert.match(html, /id="usd-enabled"[^>]*>Mostrar cotação do dólar<\/label>/);
+  assert.match(source, /querySelector\("#usd-enabled"\)/);
+});

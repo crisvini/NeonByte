@@ -13,6 +13,7 @@ interface PendingModeCommand {
 export interface StoredModeState {
   version: 1;
   mode: DisplayMode;
+  usdEnabled: boolean;
   revision: number;
   pendingCommand: PendingModeCommand | null;
 }
@@ -21,6 +22,7 @@ export type ModeSyncState = "local" | "pending" | "confirmed" | "failed";
 
 export interface DisplayModeView {
   mode: DisplayMode;
+  usdEnabled: boolean;
   confirmedMode: DisplayMode | null;
   pendingMode: DisplayMode | null;
   syncState: ModeSyncState;
@@ -42,6 +44,7 @@ function validStoredState(value: unknown): value is StoredModeState {
   const item = value as Record<string, unknown>;
   if (item["version"] !== 1 || !isDisplayMode(item["mode"]) ||
       !Number.isSafeInteger(item["revision"]) || (item["revision"] as number) < 0) return false;
+  if (Object.hasOwn(item, "usdEnabled") && typeof item["usdEnabled"] !== "boolean") return false;
   if (item["pendingCommand"] === null) return true;
   const pending = item["pendingCommand"];
   if (typeof pending !== "object" || pending === null || Array.isArray(pending)) return false;
@@ -81,7 +84,7 @@ export class FileDisplayModeStore implements DisplayModeStore {
     try {
       const value: unknown = JSON.parse(await readFile(this.path, "utf8"));
       if (!validStoredState(value)) throw new Error();
-      return value;
+      return Object.hasOwn(value, "usdEnabled") ? value : { ...value, usdEnabled: false };
     } catch {
       throw new Error("Local display mode settings are invalid.");
     }
@@ -123,13 +126,13 @@ export class DisplayModeController {
   private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly store: DisplayModeStore, private readonly defaultMode: DisplayMode) {
-    this.state = { version: 1, mode: defaultMode, revision: 0, pendingCommand: null };
+    this.state = { version: 1, mode: defaultMode, usdEnabled: false, revision: 0, pendingCommand: null };
   }
 
   get selectedMode(): DisplayMode { return this.state.mode; }
 
   get view(): DisplayModeView {
-    return { mode: this.state.mode, confirmedMode: this.confirmedMode,
+    return { mode: this.state.mode, usdEnabled: this.state.usdEnabled, confirmedMode: this.confirmedMode,
       pendingMode: this.state.pendingCommand?.mode ?? null, syncState: this.syncState,
       message: this.message, observedAtUnixMs: this.observedAtUnixMs };
   }
@@ -161,7 +164,7 @@ export class DisplayModeController {
       if (this.persistenceError) throw new Error(this.persistenceError);
       if (mode === this.state.mode && !this.state.pendingCommand) return;
       const revision = this.state.revision + 1;
-      const next: StoredModeState = { version: 1, mode, revision,
+      const next: StoredModeState = { version: 1, mode, usdEnabled: this.state.usdEnabled, revision,
         pendingCommand: targetFingerprint ? { mode, targetFingerprint, revision } : null };
       try { await this.store.save(next); }
       catch (error) {
@@ -175,6 +178,24 @@ export class DisplayModeController {
       this.message = targetFingerprint
         ? "Waiting for the paired device to confirm your manual selection."
         : "Saved for the local preview; no paired device was configured when you selected it.";
+    });
+  }
+
+  async setUsdEnabled(enabled: boolean): Promise<void> {
+    await this.serialize(async () => {
+      if (!this.ready) await this.initialize();
+      if (typeof enabled !== "boolean") throw new Error("USD display preference must be a boolean.");
+      if (this.persistenceError) throw new Error(this.persistenceError);
+      if (enabled === this.state.usdEnabled) return;
+      const next: StoredModeState = { ...this.state, usdEnabled: enabled };
+      try { await this.store.save(next); }
+      catch (error) {
+        this.persistenceError = error instanceof Error ? error.message : "Local display mode settings could not be saved.";
+        this.syncState = "failed";
+        this.message = `${this.persistenceError} The previous USD preference remains active.`;
+        throw new Error(this.message);
+      }
+      this.state = next;
     });
   }
 

@@ -444,6 +444,87 @@ void testProtocolModeRouteValidatesPersistsAndRequiresAuthentication() {
     TEST_ASSERT_NOT_NULL(std::strstr(unauthorized.body.data(), "\"code\":\"unauthorized\""));
 }
 
+void testUsdStateRouteValidatesAndOnlyChangesRamState() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeAuthenticator authenticator;
+    ProtocolHandler protocol(scenes, storage, authenticator);
+    const auto request = jsonRequest(HttpMethod::put, "/api/v1/usd-state",
+        R"({"enabled":true,"priceCents":525,"changeBasisPoints":-42,"validForMs":300000})");
+
+    const auto response = protocol.handle(request, {});
+    TEST_ASSERT_EQUAL_UINT16(204, response.statusCode);
+    TEST_ASSERT_TRUE(scenes.usdState().enabled);
+    TEST_ASSERT_EQUAL_UINT32(525, scenes.usdState().priceCents);
+    TEST_ASSERT_EQUAL_INT32(-42, scenes.usdState().changeBasisPoints);
+    TEST_ASSERT_EQUAL_UINT32(300000, scenes.usdState().validForMs);
+    TEST_ASSERT_FALSE(storage.modeAvailable);
+
+    const auto escapedKeyRequest = jsonRequest(HttpMethod::put, "/api/v1/usd-state",
+        R"({"\u0065nabled":true,"priceCents":525,"changeBasisPoints":-42,"validForMs":300000})");
+    TEST_ASSERT_EQUAL_UINT16(204, protocol.handle(escapedKeyRequest, {}).statusCode);
+
+    allocationCount = 0;
+    countAllocations = true;
+    const auto noAllocationResponse = protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/usd-state",
+        R"({"enabled":true,"priceCents":525,"changeBasisPoints":-42,"validForMs":300000})"), {});
+    countAllocations = false;
+    TEST_ASSERT_EQUAL_UINT16(204, noAllocationResponse.statusCode);
+    TEST_ASSERT_EQUAL_UINT32(0, allocationCount);
+
+    authenticator.allowRequests = false;
+    TEST_ASSERT_EQUAL_UINT16(401, protocol.handle(request, {}).statusCode);
+    TEST_ASSERT_EQUAL_UINT32(525, scenes.usdState().priceCents);
+}
+
+void testUsdStateRejectsInvalidAndOversizedBodiesWithoutMutation() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    FakeAuthenticator authenticator;
+    ProtocolHandler protocol(scenes, storage, authenticator);
+    const auto valid = jsonRequest(HttpMethod::put, "/api/v1/usd-state",
+        R"({"enabled":true,"priceCents":525,"changeBasisPoints":42,"validForMs":300000})");
+    TEST_ASSERT_EQUAL_UINT16(204, protocol.handle(valid, {}).statusCode);
+
+    const std::string_view invalid[] = {
+        R"({"enabled":false,"priceCents":0,"changeBasisPoints":0,"validForMs":1})",
+        R"({"enabled":true,"priceCents":0,"changeBasisPoints":42,"validForMs":0})",
+        R"({"enabled":true,"priceCents":525,"changeBasisPoints":42,"validForMs":900001})",
+        R"({"enabled":true,"priceCents":525,"changeBasisPoints":1000000000,"validForMs":1})",
+        R"({"enabled":true,"priceCents":525,"priceCents":525,"changeBasisPoints":42,"validForMs":1})",
+        R"({"enabled":true,"\u0065nabled":true,"priceCents":525,"changeBasisPoints":42,"validForMs":1})",
+        R"({"enabled":true,"priceCents":525,"changeBasisPoints":42,"validForMs":1,"other":0})",
+        R"({"enabled":true,"priceCents":525.0,"changeBasisPoints":42,"validForMs":1})",
+        R"({"enabled":true,"priceCents":525,"changeBasisPoints":42,"validForMs":1} trailing)",
+    };
+    for (const auto body : invalid) {
+        TEST_ASSERT_EQUAL_UINT16(400, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/usd-state", body), {}).statusCode);
+        TEST_ASSERT_EQUAL_UINT32(525, scenes.usdState().priceCents);
+    }
+    TEST_ASSERT_EQUAL_UINT16(413, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/usd-state",
+        std::string(129, ' ')), {}).statusCode);
+}
+
+void testUsdStateSnapshotsCannotExtendTheSameQuoteAndExpireMonotonically() {
+    FakeClock clock;
+    FakeStorage storage;
+    SceneManager scenes(clock, storage);
+    const UsdDeviceState first{true, 525, 42, 5000};
+    TEST_ASSERT_TRUE(scenes.setUsdState(first));
+    clock.currentMillis = 1000;
+    TEST_ASSERT_TRUE(scenes.setUsdState({true, 525, 42, 4000}));
+    TEST_ASSERT_EQUAL_UINT32(4000, scenes.usdState().validForMs);
+    clock.currentMillis = 4999;
+    TEST_ASSERT_EQUAL_UINT32(1, scenes.usdState().validForMs);
+    clock.currentMillis = 5000;
+    const auto expired = scenes.usdState();
+    TEST_ASSERT_TRUE(expired.enabled);
+    TEST_ASSERT_EQUAL_UINT32(0, expired.priceCents);
+    TEST_ASSERT_EQUAL_UINT32(0, expired.validForMs);
+}
+
 void testBearerAuthenticatorChecksSchemeAndExactConfiguredToken() {
     BearerTokenAuthenticator authenticator("secret-token");
 
@@ -720,7 +801,7 @@ void testEveryMutatingRouteAuthenticatesBeforeProcessing() {
     SceneManager scenes(clock, storage);
     BearerTokenAuthenticator authenticator("test-token");
     ProtocolHandler protocol(scenes, storage, authenticator);
-    const char* paths[] = {"/api/v1/mode", "/api/v1/spotify", "/api/v1/cover", "/api/v1/animation", "/api/v1/heartbeat"};
+    const char* paths[] = {"/api/v1/mode", "/api/v1/usd-state", "/api/v1/spotify", "/api/v1/cover", "/api/v1/animation", "/api/v1/heartbeat"};
     const char* credentials[] = {"", "test-token", "Bearer wrong-token", "Bearer test-token-extra", "Bearer test-token "};
     for (const auto* path : paths) {
         for (const auto* credential : credentials) {
@@ -747,6 +828,7 @@ void testProtocolRejectsWrongMethodsMediaTypesAndBodies() {
         {HttpMethod::post, "/api/v1/status", {}, {}, {}},
         {HttpMethod::get, "/api/v1/status", {}, {}, "{}"},
         {HttpMethod::post, "/api/v1/mode", {}, "application/json", R"({"mode":"gif"})"},
+        {HttpMethod::post, "/api/v1/usd-state", {}, "application/json", R"({"enabled":false,"priceCents":0,"changeBasisPoints":0,"validForMs":0})"},
         {HttpMethod::post, "/api/v1/spotify", {}, "application/json", "{}"},
         {HttpMethod::put, "/api/v1/heartbeat", {}, {}, {}},
         {HttpMethod::post, "/api/v1/heartbeat", {}, {}, "{}"},
@@ -756,6 +838,7 @@ void testProtocolRejectsWrongMethodsMediaTypesAndBodies() {
     for (const auto& request : invalidRequests) TEST_ASSERT_EQUAL_UINT16(400, protocol.handle(request, {}).statusCode);
     TEST_ASSERT_EQUAL_UINT16(415, protocol.handle({HttpMethod::put, "/api/v1/mode", {}, "text/plain", R"({"mode":"gif"})"}, {}).statusCode);
     TEST_ASSERT_EQUAL_UINT16(415, protocol.handle({HttpMethod::put, "/api/v1/spotify", {}, {}, "{}"}, {}).statusCode);
+    TEST_ASSERT_EQUAL_UINT16(415, protocol.handle({HttpMethod::put, "/api/v1/usd-state", {}, "text/plain", "{}"}, {}).statusCode);
     TEST_ASSERT_EQUAL_UINT16(204, protocol.handle({HttpMethod::put, "/api/v1/mode", {}, " APPLICATION/JSON ; charset=utf-8", R"({"mode":"gif"})"}, {}).statusCode);
     storage.modeWriteSucceeds = false;
     TEST_ASSERT_EQUAL_UINT16(500, protocol.handle(jsonRequest(HttpMethod::put, "/api/v1/mode", R"({"mode":"spotify"})"), {}).statusCode);
@@ -983,6 +1066,9 @@ int main(int, char**) {
     RUN_TEST(testProtocolStatusMatchesV1AndDoesNotRequireAuthentication);
     RUN_TEST(testStatusStringLimitsCountUtf8CodePointsLikeTheV1Schema);
     RUN_TEST(testProtocolModeRouteValidatesPersistsAndRequiresAuthentication);
+    RUN_TEST(testUsdStateRouteValidatesAndOnlyChangesRamState);
+    RUN_TEST(testUsdStateRejectsInvalidAndOversizedBodiesWithoutMutation);
+    RUN_TEST(testUsdStateSnapshotsCannotExtendTheSameQuoteAndExpireMonotonically);
     RUN_TEST(testBearerAuthenticatorChecksSchemeAndExactConfiguredToken);
     RUN_TEST(testProtocolRejectsInvalidClosedSchemaAndMalformedJson);
     RUN_TEST(testProtocolAcceptsJsonWhitespaceAroundEveryValueType);

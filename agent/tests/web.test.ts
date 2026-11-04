@@ -7,7 +7,7 @@ import type { DeviceIntegration } from "../src/device/integration.js";
 import { MockSpotifyProvider } from "../src/spotify/mock.js";
 import { PlaybackPoller } from "../src/spotify/poller.js";
 import { startLocalWebApp, type FirmwareUpdateControl } from "../src/web/server.js";
-import { createTestModeController } from "./helpers/mode-state.js";
+import { createTestModeController, MemoryDisplayModeStore } from "./helpers/mode-state.js";
 
 const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==", "base64");
 const track = (isPlaying = true, index = 0) => ({
@@ -68,6 +68,8 @@ test("serves the local panel and protects mode changes with a loopback origin ch
     assert.match(html, /20-frame capacity/);
     assert.match(html, /32 KiB reserve/);
     assert.match(html, /id="ota-reconcile"/);
+    assert.match(html, /id="usd-enabled"/);
+    assert.match(html, /Mostrar cotação do dólar/);
     assert.doesNotMatch(html, /device-token|Pairing token/);
 
     const rejected = await fetch(`${origin}/api/mode`, {
@@ -151,6 +153,50 @@ test("Spotify authorization leaves the manually selected display mode unchanged"
     assert.equal(callback.status, 303);
     const status = await fetch(`${origin}/api/status`).then((value) => value.json()) as { mode: string };
     assert.equal(status.mode, "gif");
+  } finally { await app.close(); }
+});
+
+test("USD preference changes are local-origin protected, persisted before service updates, and resynchronize the device", async () => {
+  const store = new MemoryDisplayModeStore();
+  const modeController = await createTestModeController("auto", store);
+  const serviceChanges: boolean[] = [];
+  let synchronizationRequests = 0;
+  const usdQuoteService = {
+    get view() { return { enabled: modeController.view.usdEnabled, quote: null, validForMs: 0 }; },
+    setEnabled(enabled: boolean) {
+      assert.equal(modeController.view.usdEnabled, enabled, "the setting must be saved before updating the quote service");
+      serviceChanges.push(enabled);
+      return Promise.resolve();
+    },
+  };
+  const device = { status: { connection: "disabled" }, requestModeSynchronization() { synchronizationRequests += 1; } } as unknown as DeviceIntegration;
+  const poller = new PlaybackPoller({ provider: new MockSpotifyProvider(track()), pollIntervalMs: 15_000 });
+  const app = await startLocalWebApp({ poller, modeController, oauth: null, spotifyConfigured: false, port: 0,
+    device, usdQuoteService });
+  const origin = `http://127.0.0.1:${app.port}`;
+  const post = (payload: string, withOrigin = true) => fetch(`${origin}/api/usd`, { method: "POST",
+    headers: { "Content-Type": "application/json", ...(withOrigin ? { Origin: origin } : {}) }, body: payload });
+  try {
+    const status = await fetch(`${origin}/api/status`).then((response) => response.json()) as { usd: { enabled: boolean; quote: unknown } };
+    assert.deepEqual(status.usd, { enabled: false, quote: null, validForMs: 0 }, JSON.stringify(status));
+    assert.equal(serviceChanges.length, 0, "dashboard status must not trigger a provider request");
+    assert.equal((await post(JSON.stringify({ enabled: true }), false)).status, 403);
+    assert.equal((await post(JSON.stringify({ enabled: true, extra: true }))).status, 400);
+    assert.equal(modeController.view.usdEnabled, false);
+    assert.equal(serviceChanges.length, 0);
+
+    assert.equal((await post(JSON.stringify({ enabled: true }))).status, 204);
+    assert.equal(modeController.view.usdEnabled, true);
+    assert.deepEqual(serviceChanges, [true]);
+    assert.equal(synchronizationRequests, 1);
+
+    const save = store.save.bind(store);
+    store.save = async () => { throw new Error("test persistence failure"); };
+    assert.equal((await post(JSON.stringify({ enabled: false }))).status, 400);
+    assert.equal(modeController.view.usdEnabled, true);
+    assert.deepEqual(serviceChanges, [true]);
+    assert.equal(synchronizationRequests, 1);
+    store.save = save;
   } finally { await app.close(); }
 });
 

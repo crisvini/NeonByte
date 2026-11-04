@@ -11,6 +11,23 @@ async function readJson(relativePath, root = contractRoot) {
 }
 
 function validateContractValue(schema, value, path = "$") {
+  const matches = (candidate) => {
+    try {
+      validateContractValue(candidate, value, path);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const candidate of schema.allOf ?? []) validateContractValue(candidate, value, path);
+  if (schema.anyOf) assert.ok(schema.anyOf.some(matches), path + " does not match any allowed schema");
+  if (schema.oneOf) assert.equal(schema.oneOf.filter(matches).length, 1, path + " must match exactly one schema");
+  if (schema.not) assert.equal(matches(schema.not), false, path + " matches a forbidden schema");
+  if (schema.if) {
+    if (matches(schema.if) && schema.then) validateContractValue(schema.then, value, path);
+    if (!matches(schema.if) && schema.else) validateContractValue(schema.else, value, path);
+  }
+
   if (schema.type === "object") {
     assert.equal(typeof value, "object", path + " must be an object");
     assert.notEqual(value, null, path + " must not be null");
@@ -80,6 +97,7 @@ test("all contract schemas use the declared JSON Schema draft and unique ids", a
     "now-playing.schema.json",
     "status.schema.json",
     "error.schema.json",
+    "usd-state.schema.json",
   ];
   const schemas = await Promise.all(schemaFiles.map((file) => readJson(file)));
 
@@ -132,6 +150,36 @@ test("error example has a stable code and bounded non-empty message", async () =
 
   validateContractValue(schema, example);
   assert.throws(() => validateContractValue(schema, { code: "invalid_request" }));
+});
+
+test("USD state contract bounds its wire values and accepts only consistent states", async () => {
+  const schema = await readJson("usd-state.schema.json");
+  const example = await readJson("examples/usd-state.json");
+  validateContractValue(schema, example);
+  assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
+  assert.deepEqual(Object.keys(example).sort(), [...schema.required].sort());
+  assert.ok(Buffer.byteLength(JSON.stringify(example), "utf8") <= 128);
+  assert.equal(schema.properties.priceCents.maximum, 99_999_999);
+  assert.equal(schema.properties.changeBasisPoints.minimum, -999_999_999);
+  assert.equal(schema.properties.changeBasisPoints.maximum, 999_999_999);
+  assert.equal(schema.properties.validForMs.maximum, 900_000);
+
+  const validStates = [
+    { enabled: false, priceCents: 0, changeBasisPoints: 0, validForMs: 0 },
+    { enabled: true, priceCents: 0, changeBasisPoints: 0, validForMs: 0 },
+    { enabled: true, priceCents: 525, changeBasisPoints: -42, validForMs: 300_000 },
+  ];
+  for (const state of validStates) validateContractValue(schema, state);
+
+  const invalidStates = [
+    { enabled: false, priceCents: 1, changeBasisPoints: 0, validForMs: 0 },
+    { enabled: true, priceCents: 0, changeBasisPoints: 1, validForMs: 0 },
+    { enabled: true, priceCents: 1, changeBasisPoints: 0, validForMs: 0 },
+    { enabled: true, priceCents: 1, changeBasisPoints: 0, validForMs: 900_001 },
+    { enabled: true, priceCents: 100_000_000, changeBasisPoints: 0, validForMs: 1 },
+    { enabled: true, priceCents: 1, changeBasisPoints: 1_000_000_000, validForMs: 1 },
+  ];
+  for (const state of invalidStates) assert.throws(() => validateContractValue(schema, state), JSON.stringify(state));
 });
 
 test("v2 animation schemas use the declared draft and unique ids", async () => {

@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neonbyte.dev/contracts/v1/usd-state.schema.json",
+  "title": "USD State",
+  "description": "Authenticated device presentation state for a locally retrieved USD/BRL quote. The UTF-8 JSON request body is limited to 128 bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "enabled",
+    "priceCents",
+    "changeBasisPoints",
+    "validForMs"
+  ],
+  "properties": {
+    "enabled": {
+      "type": "boolean"
+    },
+    "priceCents": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 99999999,
+      "description": "Positive prices represent at most six whole digits and two fractional digits. Zero means no usable quote."
+    },
+    "changeBasisPoints": {
+      "type": "integer",
+      "minimum": -999999999,
+      "maximum": 999999999,
+      "description": "Signed hundredths of a percentage point; one basis point equals 0.01 percentage point."
+    },
+    "validForMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 900000,
+      "description": "Positive only for a usable quote; firmware counts this remaining duration with its monotonic clock."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "const": false
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "priceCents": {
+            "const": 0
+          },
+          "changeBasisPoints": {
+            "const": 0
+          },
+          "validForMs": {
+            "const": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "const": true
+          },
+          "priceCents": {
+            "const": 0
+          }
+        },
+        "required": [
+          "enabled",
+          "priceCents"
+        ]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "changeBasisPoints": {
+            "const": 0
+          },
+          "validForMs": {
+            "const": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "const": true
+          },
+          "priceCents": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "enabled",
+          "priceCents"
+        ]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "validForMs": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  ]
+}

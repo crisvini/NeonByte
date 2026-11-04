@@ -31,6 +31,7 @@ let otaActionPending = false;
 let otaActionError = null;
 let mode = "auto";
 let modePending = false;
+let usdPending = false;
 let preparedGifPreview = false;
 let animationFrames = [];
 let animationSha256 = "";
@@ -40,6 +41,11 @@ let coverLoadId = 0;
 let frameIndex = -1;
 let frameDeadline = 0;
 let previousScene = "";
+let usdPreviewEligible = false;
+let usdPreviewHasGif = false;
+let usdPreviewPhase = "";
+let usdPreviewDeadline = 0;
+let usdDrawnKey = "";
 let toastTimer = 0;
 
 function notify(message) {
@@ -112,6 +118,22 @@ async function chooseMode(nextMode) {
   }
 }
 
+async function setUsdEnabled(enabled) {
+  if (typeof enabled !== "boolean" || usdPending || otaMutationLocked() || enabled === Boolean(status?.usd?.enabled)) return;
+  usdPending = true;
+  setOtaMutationLock();
+  try {
+    await postJson("/api/usd", { enabled });
+    await refreshStatus();
+  } catch (error) {
+    notify(error.message);
+    document.querySelector("#usd-enabled").checked = Boolean(status?.usd?.enabled);
+  } finally {
+    usdPending = false;
+    setOtaMutationLock();
+  }
+}
+
 function updateLamp(element, state) {
   element.classList.toggle("connected", state === "connected");
   element.classList.toggle("waiting", state === "waiting");
@@ -161,8 +183,17 @@ function updateStatusText() {
   document.querySelector("#connect-spotify").textContent = status.spotifyAuthorizing ? "Waiting for Spotify authorization…"
     : spotifyState === "unconfigured" ? "Configure Spotify first" : spotifyState === "connected" ? "Reconnect Spotify" : "Connect Spotify";
   const scene = preparedGifPreview && status.animation.available ? "local-gif-preview" : status.activeScene;
-  document.querySelector("#scene-label").textContent = scene === "local-gif-preview" ? "LOCAL GIF PREVIEW"
-    : scene === "spotify" ? "SPOTIFY DISPLAY" : scene === "gif" ? "GIF DISPLAY" : "WAITING FOR MODE";
+  const usdReady = Boolean(status.usd?.enabled && status.usd.quote && status.usd.validForMs > 0);
+  const showingUsd = !preparedGifPreview && mode === "auto" && scene === "gif" && usdReady && usdPreviewPhase === "usd";
+  document.querySelector("#scene-label").textContent = showingUsd ? "USD DISPLAY"
+    : scene === "local-gif-preview" ? "LOCAL GIF PREVIEW"
+      : scene === "spotify" ? "SPOTIFY DISPLAY" : scene === "gif" ? "GIF DISPLAY" : "WAITING FOR MODE";
+  const usdToggle = document.querySelector("#usd-enabled");
+  usdToggle.checked = Boolean(status.usd?.enabled);
+  document.querySelector("#usd-status").textContent = !status.usd?.enabled ? "Dollar quote is disabled."
+    : status.usd.quote && status.usd.validForMs > 0
+      ? `Quote available · R$ ${(status.usd.quote.priceCents / 100).toFixed(2).replace(".", ",")} · valid for up to ${Math.ceil(status.usd.validForMs / 1000)} seconds.`
+      : "Waiting for a valid quote from the exchange-rate provider.";
   const track = spotifyState === "connected" ? status.snapshot.nowPlaying : null;
   document.querySelector("#playback-state").textContent = spotifyState !== "connected" ? "SPOTIFY STATUS"
     : status.snapshot.status === "playing" ? "NOW PLAYING" : status.snapshot.status === "paused" ? "PAUSED" : "PLAYBACK";
@@ -207,8 +238,8 @@ function otaMutationLocked() {
 }
 
 function setOtaMutationLock() {
-  const locked = otaMutationLocked() || modePending;
-  document.querySelectorAll("#device-form input, #device-form button, [data-mode], #gif-file, #preview-animation, #replace-animation, #cancel-animation").forEach((element) => {
+  const locked = otaMutationLocked() || modePending || usdPending;
+  document.querySelectorAll("#device-form input, #device-form button, [data-mode], #usd-enabled, #gif-file, #preview-animation, #replace-animation, #cancel-animation").forEach((element) => {
     element.disabled = locked;
   });
   setModeButtons();
@@ -758,8 +789,43 @@ function drawGif(now) {
   }
 }
 
+function drawUsdPreview(quote) {
+  const key = `${quote.priceCents}:${quote.changeBasisPoints}`;
+  if (key === usdDrawnKey) return;
+  usdDrawnKey = key;
+  const change = quote.changeBasisPoints;
+  const accent = change > 0 ? "#80ed99" : change < 0 ? "#ff667d" : "#d2c8d5";
+  const direction = change > 0 ? "UP" : change < 0 ? "DOWN" : "UNCHANGED";
+  const percentage = `${change > 0 ? "+" : change < 0 ? "−" : ""}${(Math.abs(change) / 100).toFixed(2)}%`;
+  const price = `R$ ${(quote.priceCents / 100).toFixed(2).replace(".", ",")}`;
+  context.fillStyle = "#05060a";
+  context.fillRect(0, 0, DISPLAY_SIZE, DISPLAY_SIZE);
+  context.fillStyle = "#ff4aab";
+  context.fillRect(0, 0, DISPLAY_SIZE, 3);
+  context.fillStyle = "#6debF2";
+  context.fillRect(0, 237, DISPLAY_SIZE, 3);
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = "#c5a8bc";
+  context.font = "600 10px system-ui, sans-serif";
+  context.fillText("DÓLAR COMERCIAL", 120, 51);
+  context.fillStyle = "#6debF2";
+  context.font = "600 13px system-ui, sans-serif";
+  context.fillText("USD/BRL", 120, 80);
+  context.fillStyle = "#fff0f8";
+  context.font = "700 31px system-ui, sans-serif";
+  context.fillText(price, 120, 129);
+  context.fillStyle = accent;
+  context.font = "600 18px system-ui, sans-serif";
+  context.fillText(percentage, 120, 171);
+  context.font = "600 10px system-ui, sans-serif";
+  context.fillText(direction, 120, 194);
+}
+
 function render(now) {
   if (!localAgentAvailable) {
+    usdPreviewEligible = false;
+    usdPreviewPhase = "";
     if (previousScene !== "local-agent-offline") {
       previousScene = "local-agent-offline";
       context.fillStyle = "#100914";
@@ -776,6 +842,22 @@ function render(now) {
     return;
   }
   const scene = preparedGifPreview && status?.animation?.available ? "gif" : status?.activeScene ?? "gif";
+  const quote = status?.usd?.quote;
+  const usdReady = Boolean(status?.usd?.enabled && quote && status.usd.validForMs > 0);
+  const hasPlayableGif = animationFrames.length > 0;
+  const shouldPreviewUsd = !preparedGifPreview && mode === "auto" && scene === "gif" && usdReady;
+  if (shouldPreviewUsd !== usdPreviewEligible || (shouldPreviewUsd && hasPlayableGif !== usdPreviewHasGif)) {
+    const wasEligible = usdPreviewEligible;
+    usdPreviewEligible = shouldPreviewUsd;
+    usdPreviewHasGif = hasPlayableGif;
+    usdPreviewPhase = shouldPreviewUsd && hasPlayableGif ? "gif" : shouldPreviewUsd ? "usd" : "";
+    usdPreviewDeadline = now + (usdPreviewPhase === "gif" ? 15_000 : 5_000);
+    usdDrawnKey = "";
+    if (wasEligible && !shouldPreviewUsd) {
+      frameIndex = -1;
+      frameDeadline = 0;
+    }
+  }
   if (scene !== previousScene) {
     previousScene = scene;
     if (scene !== "spotify") spotifySceneActive = false;
@@ -783,7 +865,33 @@ function render(now) {
     frameDeadline = 0;
   }
   if (scene === "spotify") drawSpotify(now);
-  else drawGif(now);
+  else if (!shouldPreviewUsd) drawGif(now);
+  else if (!hasPlayableGif) {
+    usdPreviewPhase = "usd";
+    drawUsdPreview(quote);
+  } else if (usdPreviewPhase === "gif") {
+    if (now >= usdPreviewDeadline && (frameIndex < 0 || now >= frameDeadline)) {
+      usdPreviewPhase = "usd";
+      usdPreviewDeadline = now + 5_000;
+      usdDrawnKey = "";
+      document.querySelector("#scene-label").textContent = "USD DISPLAY";
+    }
+    if (usdPreviewPhase === "usd") drawUsdPreview(quote);
+    else drawGif(now);
+  } else {
+    if (now >= usdPreviewDeadline) {
+      usdPreviewPhase = "gif";
+      usdPreviewDeadline = now + 15_000;
+      frameIndex = -1;
+      frameDeadline = 0;
+      document.querySelector("#scene-label").textContent = "GIF DISPLAY";
+    }
+    if (usdPreviewPhase === "usd") drawUsdPreview(quote);
+    else drawGif(now);
+  }
+  document.querySelector("#scene-label").textContent = shouldPreviewUsd && usdPreviewPhase === "usd" ? "USD DISPLAY"
+    : scene === "local-gif-preview" ? "LOCAL GIF PREVIEW"
+      : scene === "spotify" ? "SPOTIFY DISPLAY" : scene === "gif" ? "GIF DISPLAY" : "WAITING FOR MODE";
   window.requestAnimationFrame(render);
 }
 
@@ -939,6 +1047,9 @@ document.querySelector("#ota-run").addEventListener("click", async () => {
 
 document.querySelectorAll("[data-mode]").forEach((button) => {
   button.addEventListener("click", () => void chooseMode(button.dataset.mode));
+});
+document.querySelector("#usd-enabled").addEventListener("change", (event) => {
+  void setUsdEnabled(event.target.checked);
 });
 document.querySelector("#connect-spotify").addEventListener("click", () => void connectSpotify());
 document.querySelector("#preview-animation").addEventListener("click", () => {
