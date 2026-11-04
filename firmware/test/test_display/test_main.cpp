@@ -1178,16 +1178,21 @@ void testUsdDisplayAlternatesOnlyAfterGifFrameDeadlineAndRestartsAtKeyframe() {
     DeviceDisplay display(storage);
     display.begin();
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 0);
-    TEST_ASSERT_FALSE(hasDisplayedText("USD/BRL"));
+    TEST_ASSERT_FALSE(hasDisplayedText("USD / BRL"));
 
     clock.now = 10000;
     TEST_ASSERT_TRUE(scenes.setUsdState({true, 525, 42, 20000}));
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 10000);
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 15000);
-    TEST_ASSERT_TRUE(hasDisplayedText("USD/BRL"));
+    TEST_ASSERT_TRUE(hasDisplayedText("USD / BRL"));
     TEST_ASSERT_TRUE(hasDisplayedText("R$ 5,25"));
-    TEST_ASSERT_TRUE(hasDisplayedText("+0.42%"));
-    TEST_ASSERT_TRUE(hasDisplayedText("UP"));
+    TEST_ASSERT_TRUE(hasDisplayedText("+0,42%"));
+    TEST_ASSERT_FALSE(hasDisplayedText("UP"));
+    for (const auto& text : display_test::panelState.texts) {
+        if (text.text == "+0,42%") { TEST_ASSERT_EQUAL_UINT8(2, text.size); TEST_ASSERT_EQUAL_INT(139, text.y); }
+    }
+    TEST_ASSERT_EQUAL_HEX16(0x07ff, display_test::panelState.pixels[84 * 240 + 57]);
+    TEST_ASSERT_EQUAL_HEX16(0x07e0, display_test::panelState.pixels[139 * 240 + 92]);
     TEST_ASSERT_EQUAL(ActiveScene::gif, scenes.currentState().activeScene);
     TEST_ASSERT_TRUE(scenes.currentState().usd.enabled);
 
@@ -1215,14 +1220,14 @@ void checkLongGifFrameBeforeUsd(bool v2) {
     TEST_ASSERT_EQUAL_HEX16(firstPixel, display_test::panelState.pixels[0]);
     clock.now = 15000;
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, clock.now);
-    TEST_ASSERT_FALSE(hasDisplayedText("USD/BRL"));
+    TEST_ASSERT_FALSE(hasDisplayedText("USD / BRL"));
     TEST_ASSERT_EQUAL_HEX16(firstPixel, display_test::panelState.pixels[0]);
     clock.now = 19999;
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, clock.now);
-    TEST_ASSERT_FALSE(hasDisplayedText("USD/BRL"));
+    TEST_ASSERT_FALSE(hasDisplayedText("USD / BRL"));
     clock.now = 20000;
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, clock.now);
-    TEST_ASSERT_TRUE(hasDisplayedText("USD/BRL"));
+    TEST_ASSERT_TRUE(hasDisplayedText("USD / BRL"));
     clock.now = 25000;
     for (unsigned tick = 0; tick < 350; ++tick) display.tick(scenes, clock.now);
     TEST_ASSERT_EQUAL_HEX16(firstPixel, display_test::panelState.pixels[0]);
@@ -1250,13 +1255,19 @@ void testUsdRemainsVisibleWithoutGifUntilQuoteExpires() {
         TEST_ASSERT_EQUAL_INT(0, clear.x);
         TEST_ASSERT_EQUAL_INT(240, clear.width);
         TEST_ASSERT_EQUAL_INT(8, clear.height);
-        TEST_ASSERT_FALSE(hasDisplayedText("USD/BRL"));
+        TEST_ASSERT_FALSE(hasDisplayedText("USD / BRL"));
     }
     display.tick(scenes, 0);
     TEST_ASSERT_EQUAL_UINT32(initialScreenClears, display_test::panelState.screenClears);
-    TEST_ASSERT_TRUE(hasDisplayedText("USD/BRL"));
+    TEST_ASSERT_TRUE(hasDisplayedText("USD / BRL"));
     TEST_ASSERT_TRUE(hasDisplayedText("DOLAR COMERCIAL"));
-    TEST_ASSERT_EQUAL_HEX16(0xd69a, display_test::panelState.pixels[37 * 240 + 84]);
+    const auto& texts = display_test::panelState.texts;
+    for (const auto& text : texts) {
+        if (text.text == "USD / BRL") { TEST_ASSERT_EQUAL_UINT8(2, text.size); TEST_ASSERT_EQUAL_INT(42, text.y); }
+        if (text.text == "R$ 5,25") { TEST_ASSERT_EQUAL_UINT8(3, text.size); TEST_ASSERT_EQUAL_INT(84, text.y); }
+        if (text.text == "DOLAR COMERCIAL") { TEST_ASSERT_EQUAL_UINT8(2, text.size); TEST_ASSERT_EQUAL_INT(181, text.y); }
+    }
+    TEST_ASSERT_EQUAL_HEX16(0xf81f, display_test::panelState.pixels[5 * 240 + 120]);
     const auto textCount = display_test::panelState.texts.size();
     display.tick(scenes, 100);
     TEST_ASSERT_EQUAL_UINT32(textCount, display_test::panelState.texts.size());
@@ -1279,7 +1290,7 @@ void testSpotifyInterruptsUsdAndRestartsTheGifPhaseWhenPlaybackStops() {
     display.begin();
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 0);
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 15000);
-    TEST_ASSERT_TRUE(hasDisplayedText("USD/BRL"));
+    TEST_ASSERT_TRUE(hasDisplayedText("USD / BRL"));
 
     auto value = track();
     scenes.updateNowPlaying(value);
@@ -1294,13 +1305,13 @@ void testSpotifyInterruptsUsdAndRestartsTheGifPhaseWhenPlaybackStops() {
     TEST_ASSERT_EQUAL(ActiveScene::gif, scenes.currentState().activeScene);
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 29999);
     TEST_ASSERT_EQUAL_HEX16(0xabcd, display_test::panelState.pixels[0]);
-    TEST_ASSERT_TRUE(display_test::panelState.texts.back().text != "USD/BRL");
+    TEST_ASSERT_TRUE(display_test::panelState.texts.back().text != "USD / BRL");
     const auto previousTextCount = display_test::panelState.texts.size();
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 30069);
     TEST_ASSERT_GREATER_THAN_UINT32(previousTextCount, display_test::panelState.texts.size());
     bool quoteRedrawn = false;
     for (std::size_t index = previousTextCount; index < display_test::panelState.texts.size(); ++index)
-        if (display_test::panelState.texts[index].text == "USD/BRL") quoteRedrawn = true;
+        if (display_test::panelState.texts[index].text == "USD / BRL") quoteRedrawn = true;
     TEST_ASSERT_TRUE(quoteRedrawn);
 }
 
@@ -1318,7 +1329,7 @@ void testManualGifAndSpotifyModesNeverShowUsd() {
         display.begin();
         for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 0);
         display.tick(scenes, 20000);
-        TEST_ASSERT_FALSE(hasDisplayedText("USD/BRL"));
+        TEST_ASSERT_FALSE(hasDisplayedText("USD / BRL"));
     }
 }
 
@@ -1335,7 +1346,7 @@ void testUsdKeepsTransientGifReadFailuresVisibleAndRetriesWithBackoff() {
     display.begin();
     display.tick(scenes, 0);
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 0);
-    TEST_ASSERT_TRUE(hasDisplayedText("USD/BRL"));
+    TEST_ASSERT_TRUE(hasDisplayedText("USD / BRL"));
     const auto readsAfterOpenFailure = storage.animationReadCalls;
     const auto textCount = display_test::panelState.texts.size();
     for (unsigned now = 1; now < 1000; ++now) display.tick(scenes, now);
@@ -1366,7 +1377,7 @@ void testRecoveredAnimationGetsAFreshGifPeriodAfterLongUsdFallback() {
     display.begin();
     display.tick(scenes, 0);
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 0);
-    TEST_ASSERT_TRUE(hasDisplayedText("USD/BRL"));
+    TEST_ASSERT_TRUE(hasDisplayedText("USD / BRL"));
 
     display.tick(scenes, 1000);
     storage.failAnimationReads = false;
@@ -1395,7 +1406,7 @@ void testUsdStopsRetryingARecognizedStructuralFailureUntilRevisionChanges() {
     display.begin();
     display.tick(scenes, 0);
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 0);
-    TEST_ASSERT_TRUE(hasDisplayedText("USD/BRL"));
+    TEST_ASSERT_TRUE(hasDisplayedText("USD / BRL"));
     const auto readsAfterStructuralError = storage.animationReadCalls;
     for (unsigned now = 1; now < 5000; ++now) display.tick(scenes, now);
     TEST_ASSERT_EQUAL_UINT32(readsAfterStructuralError, storage.animationReadCalls);

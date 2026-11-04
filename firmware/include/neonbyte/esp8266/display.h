@@ -71,7 +71,7 @@ private:
     void textLine(std::string_view text, int x, int y, unsigned limit, std::uint16_t color,
                   unsigned size = 1);
     void beginScreenClear();
-    bool clearScreenStep();
+    bool clearScreenStep(bool usdBackground = false);
     void beginUsdScreen();
     void showUsd(const UsdDeviceState& state, std::uint64_t now);
     bool startSpotifyTextRender(std::uint64_t now);

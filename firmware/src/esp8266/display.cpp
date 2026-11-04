@@ -66,10 +66,10 @@ void DeviceDisplay::beginScreenClear() {
     screenClearNextRow_ = 0;
     screenClearPending_ = true;
 }
-bool DeviceDisplay::clearScreenStep() {
+bool DeviceDisplay::clearScreenStep(bool usdBackground) {
     if (!screenClearPending_) return true;
     const auto rows = std::min<unsigned>(USD_SCREEN_CLEAR_ROWS_PER_TICK, 240U - screenClearNextRow_);
-    panel_.fillRect(0, screenClearNextRow_, 240, rows, ST77XX_BLACK);
+    panel_.fillRect(0, screenClearNextRow_, 240, rows, usdBackground ? 0x10a3 : ST77XX_BLACK);
     screenClearNextRow_ = static_cast<std::uint16_t>(screenClearNextRow_ + rows);
     if (screenClearNextRow_ == 240) screenClearPending_ = false;
     return !screenClearPending_;
@@ -87,7 +87,7 @@ void DeviceDisplay::showUsd(const UsdDeviceState& state, std::uint64_t now) {
         usdContentRendered_ = false;
         beginScreenClear();
     }
-    if (!clearScreenStep()) return;
+    if (!clearScreenStep(true)) return;
 
     char price[20];
     char change[16];
@@ -97,27 +97,46 @@ void DeviceDisplay::showUsd(const UsdDeviceState& state, std::uint64_t now) {
     const auto magnitude = static_cast<unsigned long>(state.changeBasisPoints < 0
         ? -static_cast<std::int64_t>(state.changeBasisPoints) : state.changeBasisPoints);
     if (state.changeBasisPoints == 0) {
-        std::snprintf(change, sizeof(change), "%lu.%02lu%%", magnitude / 100U, magnitude % 100U);
+        std::snprintf(change, sizeof(change), "%lu,%02lu%%", magnitude / 100U, magnitude % 100U);
     } else {
-        std::snprintf(change, sizeof(change), "%c%lu.%02lu%%", state.changeBasisPoints > 0 ? '+' : '-',
+        std::snprintf(change, sizeof(change), "%c%lu,%02lu%%", state.changeBasisPoints > 0 ? '+' : '-',
             magnitude / 100U, magnitude % 100U);
     }
-    const char* direction = state.changeBasisPoints > 0 ? "UP" : state.changeBasisPoints < 0 ? "DOWN" : "UNCHANGED";
     const std::uint16_t changeColor = state.changeBasisPoints > 0 ? 0x07e0
         : state.changeBasisPoints < 0 ? 0xf800 : 0xd69a;
     const auto centerText = [](std::string_view text, unsigned size) {
         return static_cast<int>((240U - static_cast<unsigned>(text.size()) * 6U * size) / 2U);
     };
 
-    panel_.fillRect(0, 0, 240, 3, 0xf81f);
-    panel_.fillRect(0, 237, 240, 3, 0x07ff);
-    textLine("DOLAR COMERCIAL", centerText("DOLAR COMERCIAL", 1), 40, 20, 0xd69a);
-    panel_.fillRect(84, 37, 1, 1, 0xd69a);
-    panel_.fillRect(85, 36, 1, 1, 0xd69a);
-    textLine("USD/BRL", centerText("USD/BRL", 1), 68, 10, 0x07ff);
-    textLine(price, centerText(price, 2), 104, 12, ST77XX_WHITE, 2);
-    textLine(change, centerText(change, 2), 150, 12, changeColor, 2);
-    textLine(direction, centerText(direction, 1), 184, 12, changeColor);
+    // Rounded frame, built from short rectangles without allocating a framebuffer.
+    panel_.fillRect(11, 5, 218, 2, 0xf81f);
+    panel_.fillRect(11, 233, 218, 2, 0xf81f);
+    panel_.fillRect(5, 11, 2, 218, 0xf81f);
+    panel_.fillRect(233, 11, 2, 218, 0xf81f);
+    for (int i = 0; i < 6; ++i) {
+        const int inset = i < 2 ? 3 - i : 0;
+        panel_.fillRect(5 + inset, 7 + i, 2, 1, 0xf81f);
+        panel_.fillRect(233 - inset, 7 + i, 2, 1, 0xf81f);
+        panel_.fillRect(5 + inset, 232 - i, 2, 1, 0xf81f);
+        panel_.fillRect(233 - inset, 232 - i, 2, 1, 0xf81f);
+    }
+    textLine("USD / BRL", centerText("USD / BRL", 2), 42, 10, 0xf81f, 2);
+    const unsigned priceSize = std::strlen(price) * 18U <= 216U ? 3 : 2;
+    textLine(price, centerText(price, priceSize), 84, 19, 0x07ff, priceSize);
+    const unsigned changeWidth = static_cast<unsigned>(std::strlen(change)) * 12U;
+    const int arrowWidth = state.changeBasisPoints == 0 ? 0 : 16;
+    const int changeX = static_cast<int>((240U - changeWidth - arrowWidth) / 2U);
+    if (arrowWidth != 0) {
+        for (int row = 0; row < 8; ++row) {
+            const int width = state.changeBasisPoints > 0 ? row + 1 : 8 - row;
+            panel_.fillRect(changeX + (8 - width), 143 + row, width * 2, 1, changeColor);
+        }
+    }
+    textLine(change, changeX + arrowWidth, 139, 15, changeColor, 2);
+    const int footerX = centerText("DOLAR COMERCIAL", 2);
+    textLine("DOLAR COMERCIAL", footerX, 181, 20, 0xd69a, 2);
+    panel_.fillRect(footerX + 15, 178, 2, 2, 0xd69a);
+    panel_.fillRect(footerX + 17, 176, 2, 2, 0xd69a);
     usdScreenVisible_ = true;
     usdContentRendered_ = true;
     usdRenderedPriceCents_ = state.priceCents;
