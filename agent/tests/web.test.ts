@@ -69,7 +69,7 @@ test("serves the local panel and protects mode changes with a loopback origin ch
     assert.match(html, /32 KiB reserve/);
     assert.match(html, /id="ota-reconcile"/);
     assert.match(html, /id="usd-enabled"/);
-    assert.match(html, /Mostrar cotação do dólar/);
+    assert.match(html, /Show dollar exchange rate/);
     assert.doesNotMatch(html, /device-token|Pairing token/);
 
     const rejected = await fetch(`${origin}/api/mode`, {

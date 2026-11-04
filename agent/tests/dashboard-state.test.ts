@@ -106,6 +106,6 @@ test("dashboard has one dollar preference toggle with the required label", async
   assert.equal((html.match(/id="usd-enabled"/g) ?? []).length, 1);
   assert.match(html, /<label[^>]*for="usd-enabled"[^>]*>[\s\S]*?<input[^>]*id="usd-enabled"[^>]*type="checkbox"[^>]*role="switch"/);
   assert.match(html, /aria-hidden="true"[^>]*>[\s\S]*?ON[\s\S]*?OFF[\s\S]*?<\/span>/);
-  assert.match(html, /Mostrar cotação do dólar<\/span>\s*<\/label>/);
+  assert.match(html, /Show dollar exchange rate<\/span>\s*<\/label>/);
   assert.match(source, /querySelector\("#usd-enabled"\)/);
 });
