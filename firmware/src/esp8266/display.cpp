@@ -540,13 +540,13 @@ void DeviceDisplay::tick(const SceneManager& scenes, std::uint64_t now) {
         usdPhaseStarted_ = true;
         usdPhaseStartedAt_ = now;
     }
-    if (usdEligible && hasPlayableAnimation && animationV2Active_ && animationFrameNeedsStart_ &&
+    if (usdEligible && hasPlayableAnimation && animationV2Active_ && animationFrameNeedsStart_ && now >= nextFrame_ &&
         now >= usdPhaseStartedAt_ && now - usdPhaseStartedAt_ >= USD_GIF_PHASE_MS) {
         beginUsdScreen();
         showUsd(state.usd, now);
         return;
     }
-    if (usdEligible && hasPlayableAnimation && !animationV2Active_ && offset_ == 0 &&
+    if (usdEligible && hasPlayableAnimation && !animationV2Active_ && offset_ == 0 && now >= nextFrame_ &&
         now >= usdPhaseStartedAt_ && now - usdPhaseStartedAt_ >= USD_GIF_PHASE_MS) {
         beginUsdScreen();
         showUsd(state.usd, now);

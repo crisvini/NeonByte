@@ -1195,6 +1195,43 @@ void testUsdDisplayAlternatesOnlyAfterGifFrameDeadlineAndRestartsAtKeyframe() {
     TEST_ASSERT_EQUAL_HEX16(0x1234, display_test::panelState.pixels[0]);
 }
 
+void checkLongGifFrameBeforeUsd(bool v2) {
+    display_test::panelState = {};
+    PersistentStorage storage;
+    if (v2) {
+        installV2Animation(storage);
+        storage.animationBytes[32] = 0x20; storage.animationBytes[33] = 0x4e;
+        storage.animationBytes[12] = 0x1a; storage.animationBytes[13] = 0x4f;
+    } else {
+        installTwoFrameAnimation(storage);
+        storage.animationBytes[11] = 0x20; storage.animationBytes[12] = 0x4e;
+    }
+    TestClock clock; SceneManager scenes(clock, storage);
+    scenes.heartbeat();
+    TEST_ASSERT_TRUE(scenes.setUsdState({true, 525, 42, 60000}));
+    DeviceDisplay display(storage); display.begin();
+    for (unsigned tick = 0; tick < 350; ++tick) display.tick(scenes, 0);
+    const auto firstPixel = v2 ? 0xf800 : 0x1234;
+    TEST_ASSERT_EQUAL_HEX16(firstPixel, display_test::panelState.pixels[0]);
+    clock.now = 15000;
+    for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, clock.now);
+    TEST_ASSERT_FALSE(hasDisplayedText("USD/BRL"));
+    TEST_ASSERT_EQUAL_HEX16(firstPixel, display_test::panelState.pixels[0]);
+    clock.now = 19999;
+    for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, clock.now);
+    TEST_ASSERT_FALSE(hasDisplayedText("USD/BRL"));
+    clock.now = 20000;
+    for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, clock.now);
+    TEST_ASSERT_TRUE(hasDisplayedText("USD/BRL"));
+    clock.now = 25000;
+    for (unsigned tick = 0; tick < 350; ++tick) display.tick(scenes, clock.now);
+    TEST_ASSERT_EQUAL_HEX16(firstPixel, display_test::panelState.pixels[0]);
+    TEST_ASSERT_EQUAL_HEX16(firstPixel, display_test::panelState.pixels.back());
+}
+
+void testV1LongFrameCompletesBeforeUsdAndRestarts() { checkLongGifFrameBeforeUsd(false); }
+void testV2LongFrameCompletesBeforeUsdAndRestarts() { checkLongGifFrameBeforeUsd(true); }
+
 void testUsdRemainsVisibleWithoutGifUntilQuoteExpires() {
     display_test::panelState = {};
     PersistentStorage storage;
@@ -1340,6 +1377,8 @@ void testRecoveredAnimationGetsAFreshGifPeriodAfterLongUsdFallback() {
     display.tick(scenes, 30999);
     TEST_ASSERT_EQUAL_UINT32(rectanglesAfterRecovery, display_test::panelState.rectangles.size());
     for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 31000);
+    TEST_ASSERT_EQUAL_UINT32(rectanglesAfterRecovery, display_test::panelState.rectangles.size());
+    for (unsigned tick = 0; tick < 40; ++tick) display.tick(scenes, 31049);
     TEST_ASSERT_TRUE(display_test::panelState.rectangles.size() > rectanglesAfterRecovery);
 }
 
@@ -1380,6 +1419,8 @@ int main() {
     RUN_TEST(testDiagnosticExitRestoresPlayingSpotifyAndClearsMissingGif);
     RUN_TEST(testDiagnosticAllowsPendingAnimationPromotionWhileIdle);
     RUN_TEST(testUsdDisplayAlternatesOnlyAfterGifFrameDeadlineAndRestartsAtKeyframe);
+    RUN_TEST(testV1LongFrameCompletesBeforeUsdAndRestarts);
+    RUN_TEST(testV2LongFrameCompletesBeforeUsdAndRestarts);
     RUN_TEST(testUsdRemainsVisibleWithoutGifUntilQuoteExpires);
     RUN_TEST(testSpotifyInterruptsUsdAndRestartsTheGifPhaseWhenPlaybackStops);
     RUN_TEST(testManualGifAndSpotifyModesNeverShowUsd);

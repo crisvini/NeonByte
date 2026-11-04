@@ -50,7 +50,8 @@ def extractBlock(source, signature):
 
 
 SOURCE = r'''
-#include "neonbyte/protocol.h"
+#include "neonbyte/http_headers.h"
+#include <cstdio>
 #include <array>
 #include <cassert>
 #include <cstddef>
@@ -61,8 +62,8 @@ SOURCE = r'''
 #include <new>
 #include <string_view>
 #define PSTR(value) (value)
+#define snprintf_P std::snprintf
 using namespace neonbyte;
-constexpr unsigned JSON_BODY_LIMIT = 12'288;
 namespace { bool countAllocations = false; std::size_t allocations = 0; }
 void* operator new(std::size_t size) {
     if (countAllocations) ++allocations;
@@ -102,10 +103,22 @@ public:
 };
 class AdapterDouble {
 public:
-    AdapterDouble(ProtocolHandler& protocol) : protocol_(&protocol) {}
+    AdapterDouble(ProtocolHandler& protocol, RequestAuthenticator& authenticator) : protocol_(&protocol), authenticator_(authenticator) {}
     bool begin(std::string_view path, std::size_t length) {
-        headers_.path = path; headers_.contentLength = length;
+        headers_.path = path; headers_.contentLength = length; headers_.method = HttpMethod::put;
+        headers_.authorization = "Bearer probe-only"; headers_.contentType = "application/json";
         expected_ = length; received_ = 0; rejected_ = false; readingBody_ = false; response_ = {};
+        headersComplete();
+        return !rejected_ && readingBody_;
+    }
+    bool beginRaw(std::string_view rawHeaders) {
+        headers_ = {}; response_ = {}; rejected_ = false; readingBody_ = false;
+        for (char character : rawHeaders) {
+            assert(headerSize_ < headerBytes_.size());
+            headerBytes_[headerSize_++] = character;
+        }
+        if (!headers_.parse({headerBytes_.data(), headerSize_})) return false;
+        expected_ = headers_.contentLength; received_ = 0;
         headersComplete();
         return !rejected_ && readingBody_;
     }
@@ -128,13 +141,17 @@ public:
         return response_;
     }
     bool hasDynamicBody() const { return body_ != nullptr; }
-    void close() { body_.reset(); received_ = expected_ = 0; headers_ = {}; readingBody_ = false; }
+    std::string_view responseHeaders() const { return {responseHeaders_.data(), responseHeaderSize_}; }
+    void close() { body_.reset(); received_ = expected_ = 0; headers_ = {}; headerSize_ = 0; readingBody_ = false; }
 private:
-    struct Headers { std::string_view path; std::size_t contentLength = 0; } headers_;
+    HttpHeaders headers_;
+    std::array<char, 4096> headerBytes_{};
+    std::size_t headerSize_ = 0;
     enum class AnimationV2Request { none, chunk };
     void headersComplete() {
         const bool binary_ = false;
 @@ROUTE_CLASSIFICATION@@
+@@AUTHENTICATION@@
         if (binary_) {
         } else {
 @@LIMIT_LINE@@
@@ -148,7 +165,7 @@ private:
     }
     void dispatchJson() {
         bodyData()[received_] = '\0';
-        const HttpRequest request{HttpMethod::put, headers_.path, "Bearer probe-only", "application/json",
+        const HttpRequest request{headers_.method, headers_.path, headers_.authorization, headers_.contentType,
             {bodyData(), received_}};
 @@USD_DISPATCH@@
         response_ = protocol_->handle(request, {});
@@ -156,21 +173,28 @@ private:
     void error(unsigned status, const char*, const char*) {
         rejected_ = true; readingBody_ = false; response_ = {}; response_.statusCode = status;
     }
-    void prepareResponse() {}
+    void prepareResponse() {
+@@PREPARE_RESPONSE@@
+    }
     char* bodyData() { return body_ ? body_.get() : control_.data(); }
+    struct StartupDouble { bool authorized(std::string_view) const { return false; } } startup_;
     ProtocolHandler* protocol_;
+    RequestAuthenticator& authenticator_;
     std::unique_ptr<char[]> body_;
     std::array<char, 513> control_{};
     std::array<char, 512> chunk_{};
     std::size_t expected_ = 0, received_ = 0;
     HttpResponse response_{};
+    std::array<char, 256> responseHeaders_{};
+    std::size_t responseHeaderSize_ = 0, sent_ = 0;
+    bool sending_ = false;
     bool readingBody_ = false, rejected_ = false, binary_ = false, maintenance_ = false, animationV2Route_ = false;
     AnimationV2Request animationV2Request_ = AnimationV2Request::none;
 };
 int main() {
     ClockDouble clock; StorageDouble storage; SceneManager scenes(clock, storage);
     BearerTokenAuthenticator auth("probe-only"); ProtocolHandler protocol(scenes, storage, auth);
-    AdapterDouble adapter(protocol);
+    AdapterDouble adapter(protocol, auth);
 
     constexpr std::string_view modePath = "/api/v1/mode";
     constexpr std::string_view modeBody = R"({"mode":"gif"})";
@@ -183,9 +207,11 @@ int main() {
     constexpr std::string_view usdPath = "/api/v1/usd-state";
     constexpr std::string_view usdBody = R"({"enabled":true,"priceCents":525,"changeBasisPoints":42,"validForMs":300000})";
     assert(usdBody.size() <= 128);
-    assert(adapter.begin(usdPath, usdBody.size()));
-    assert(!adapter.hasDynamicBody());
+    constexpr std::string_view usdHeaders = "PUT /api/v1/usd-state HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer probe-only\r\nContent-Type: application/json\r\nContent-Length: 76\r\n\r\n";
+    assert(usdBody.size() == 76);
     allocations = 0; countAllocations = true;
+    assert(adapter.beginRaw(usdHeaders));
+    assert(!adapter.hasDynamicBody());
     adapter.append(usdBody.substr(0, 13));
     assert(!adapter.hasDynamicBody());
     adapter.append(usdBody.substr(13, 29));
@@ -194,6 +220,8 @@ int main() {
     const auto response = adapter.finish(HttpMethod::put);
     countAllocations = false;
     assert(response.statusCode == 204 && allocations == 0);
+    assert(adapter.responseHeaders().find("HTTP/1.1 204 OK\r\n") == 0);
+    std::printf("USD HTTP allocation probe: %zu C++ allocations\n", allocations);
     assert(scenes.usdState().priceCents == 525);
 
     assert(!adapter.begin(usdPath, 129));
@@ -211,6 +239,7 @@ def main():
     dispatch_json = extractFunction(adapter_source, "void DeviceHttpServer::dispatchJson()")
     body_loop = extractFunction(adapter_source, "void DeviceHttpServer::tick(")
     body_complete = extractFunction(adapter_source, "void DeviceHttpServer::bodyComplete()")
+    prepare_response = extractFunction(adapter_source, "void DeviceHttpServer::prepareResponse()")
     close = extractFunction(adapter_source, "void DeviceHttpServer::close()")
 
     route_classification = 'const bool usdStateRoute = headers_.path == "/api/v1/usd-state";'
@@ -218,6 +247,8 @@ def main():
     body_limit_check = extractBlock(headers_complete,
         'if (headers_.contentLength > limit) { error(413,"payload_too_large",PSTR("The request body exceeds the route limit.")); return; }')
     body_allocation = extractBlock(headers_complete, "if (!usdStateRoute && limit == JSON_BODY_LIMIT)")
+    authentication = extractBlock(headers_complete, "else if (maintenance_ ? !startup_.authorized(headers_.authorization)")
+    authentication = authentication.removeprefix("else ")
     receive_copy = "} else memcpy(bodyData()+received_,chunk_.data(),bytes);"
     usd_dispatch = extractBlock(dispatch_json, 'if (request.path == "/api/v1/usd-state")')
     body_complete_dispatch = "if (!binary_) { dispatchJson(); return; }"
@@ -239,7 +270,9 @@ def main():
         executable = Path(temporary) / "probe"
         source_text = SOURCE
         for placeholder, replacement in {
+            "@@PREPARE_RESPONSE@@": prepare_response[prepare_response.index("{") + 1:prepare_response.rindex("}")],
             "@@ROUTE_CLASSIFICATION@@": route_classification,
+            "@@AUTHENTICATION@@": authentication,
             "@@LIMIT_LINE@@": limit_line,
             "@@BODY_LIMIT_CHECK@@": body_limit_check,
             "@@BODY_ALLOCATION@@": body_allocation,
@@ -252,6 +285,7 @@ def main():
         subprocess.run([
             "g++", "-std=c++17", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
             f"-I{repository / 'firmware/include'}", str(source),
+            str(repository / "firmware/src/http_headers.cpp"),
             str(repository / "firmware/src/protocol.cpp"),
             str(repository / "firmware/src/scene_manager.cpp"), "-o", str(executable),
         ], check=True)
