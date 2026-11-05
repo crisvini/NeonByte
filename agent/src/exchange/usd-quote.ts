@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 
 export const USD_QUOTE_ENDPOINT = "https://economia.awesomeapi.com.br/json/last/USD-BRL";
 export const USD_QUOTE_POLL_INTERVAL_MS = 5 * 60_000;
+const USD_QUOTE_TRANSIENT_RETRY_MS = 30_000;
 export const USD_QUOTE_TTL_MS = 15 * 60_000;
 export const USD_QUOTE_REQUEST_TIMEOUT_MS = 5_000;
 export const USD_QUOTE_RESPONSE_LIMIT_BYTES = 8 * 1024;
@@ -163,6 +164,7 @@ export class UsdQuoteService {
   private inFlight: Promise<void> | null = null;
   private activeController: AbortController | null = null;
   private retryAfterMs = 0;
+  private transientFailure = false;
 
   constructor(options: UsdQuoteServiceOptions = {}) {
     this.fetchQuote = options.fetch ?? fetch;
@@ -237,6 +239,7 @@ export class UsdQuoteService {
     if (!this.enabled || this.stopped || generation !== this.generation) return Promise.resolve();
     const controller = new AbortController();
     this.activeController = controller;
+    this.transientFailure = false;
     let request!: Promise<void>;
     request = this.fetchAndStore(controller, generation)
       .catch(() => undefined)
@@ -244,7 +247,9 @@ export class UsdQuoteService {
         if (this.activeController === controller) this.activeController = null;
         if (this.inFlight === request) this.inFlight = null;
         if (this.enabled && !this.stopped && generation === this.generation) {
-          const delayMs = Math.min(Math.max(USD_QUOTE_POLL_INTERVAL_MS, this.retryAfterMs), MAX_TIMER_DELAY_MS);
+          const intervalMs = this.transientFailure && this.remainingValidityMs() <= 0
+            ? USD_QUOTE_TRANSIENT_RETRY_MS : USD_QUOTE_POLL_INTERVAL_MS;
+          const delayMs = Math.min(Math.max(intervalMs, this.retryAfterMs), MAX_TIMER_DELAY_MS);
           this.retryAfterMs = 0;
           this.timer = this.timers.setTimeout(() => {
             this.timer = null;
@@ -267,9 +272,11 @@ export class UsdQuoteService {
         signal,
       });
     } catch {
+      this.transientFailure = true;
       return;
     }
     if (response.status !== 200) {
+      this.transientFailure = response.status >= 500;
       this.retryAfterMs = response.status === 429
         ? retryAfterDelay(response.headers.get("retry-after"), this.unixNow())
         : 0;

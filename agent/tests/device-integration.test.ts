@@ -428,6 +428,39 @@ test("credential-manager failures are safe and do not start a connection", async
   await device.stop();
 });
 
+test("a restarted device receives the enabled quote again after reconnecting", async () => {
+  const modeController = await createTestModeController();
+  await modeController.setUsdEnabled(true);
+  let online = true;
+  let receivedQuote: unknown = null;
+  const device = new DeviceIntegration({ modeController, store: new MemoryStore(), poller: poller(), intervalMs: 20,
+    usdQuoteService: { deviceState: () => ({ enabled: true, priceCents: 525, changeBasisPoints: 42, validForMs: 300_000 }) },
+    fetchDevice: async (input, init) => {
+      if (!online) throw new Error("device offline");
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/v1/status") return new Response(JSON.stringify(deviceStatus));
+      if (path === "/api/v1/usd-state") receivedQuote = JSON.parse(String(init?.body));
+      return new Response(null, { status: 204 });
+    } });
+  const waitFor = async (predicate: () => boolean) => {
+    const deadline = Date.now() + 2000;
+    while (!predicate()) {
+      if (Date.now() >= deadline) throw new Error("Device restart synchronization did not settle.");
+      await delay(5);
+    }
+  };
+  await device.configure({ address: "http://127.0.0.1:1", token: "test-pairing", enabled: true });
+  try {
+    await waitFor(() => receivedQuote !== null);
+    online = false;
+    receivedQuote = null;
+    await waitFor(() => device.status.connection === "disconnected");
+    online = true;
+    await waitFor(() => receivedQuote !== null);
+    assert.deepEqual(receivedQuote, { enabled: true, priceCents: 525, changeBasisPoints: 42, validForMs: 300_000 });
+  } finally { await device.stop(); }
+});
+
 test("USD transport failures leave the successful main synchronization connected and retry on the next cycle", async () => {
   const modeController = await createTestModeController();
   await modeController.setUsdEnabled(true);

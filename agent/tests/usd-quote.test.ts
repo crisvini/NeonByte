@@ -157,15 +157,24 @@ test("rejects malformed provider data, out-of-range values, and timestamps outsi
   }
 });
 
-test("network and ordinary HTTP errors leave polling on its normal bounded interval", async () => {
+test("startup retries transient failures promptly and makes the recovered quote available for the device", async () => {
   for (const fetchQuote of [
     async () => { throw new TypeError("network unavailable"); },
     async () => new Response("{}", { status: 503 }),
   ] as Array<typeof fetch>) {
-    const harness = createService(fetchQuote);
+    let first = true;
+    const harness = createService(async (...args) => {
+      if (first) { first = false; return fetchQuote(...args); }
+      return responseFor(harness.nowUnixMs);
+    });
     await harness.service.setEnabled(true);
     assert.equal(harness.service.view.quote, null);
+    assert.deepEqual(harness.timers.delays, [30_000]);
+    harness.timers.runNext();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(harness.service.deviceState().priceCents, 525);
     assert.deepEqual(harness.timers.delays, [USD_QUOTE_POLL_INTERVAL_MS]);
+    harness.service.stop();
   }
 });
 
