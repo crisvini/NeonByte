@@ -288,9 +288,9 @@ export class UsdQuoteService {
     catch { return; }
     const quote = parseProviderQuote(parsed, this.unixNow());
     if (!quote || !this.enabled || this.stopped || generation !== this.generation) return;
-    if (this.cachedQuote && quote.sourceTimestampUnixMs <= this.cachedQuote.sourceTimestampUnixMs) return;
-    const expiresAtUnixMs = quote.sourceTimestampUnixMs + USD_QUOTE_TTL_MS;
-    const remainingMs = Math.max(0, expiresAtUnixMs - this.unixNow());
+    if (this.cachedQuote && quote.sourceTimestampUnixMs < this.cachedQuote.sourceTimestampUnixMs) return;
+    const expiresAtUnixMs = this.unixNow() + USD_QUOTE_TTL_MS;
+    const remainingMs = USD_QUOTE_TTL_MS;
     this.cachedQuote = { ...quote, expiresAtUnixMs,
       expiresAtMonotonicMs: this.monotonicNow() + remainingMs };
     this.retryAfterMs = 0;

@@ -77,17 +77,20 @@ test("fetches only the fixed AwesomeAPI pair and normalizes price and change to 
   assert.equal(harness.timers.delays[0], USD_QUOTE_POLL_INTERVAL_MS);
 });
 
-test("repeated source timestamps keep their original expiration", async () => {
-  const harness = createService(async () => responseFor(Date.UTC(2026, 10, 4, 12) - 120_000));
+test("a provider-confirmed older quote survives restarts and repeated market closures", async () => {
+  const sourceTime = Date.UTC(2026, 10, 4, 12) - 24 * 60 * 60_000;
+  const harness = createService(async () => responseFor(sourceTime));
   await harness.service.setEnabled(true);
-  const originalValidity = harness.service.deviceState(0).validForMs;
-  assert.equal(originalValidity, USD_QUOTE_TTL_MS - 120_000);
+  assert.equal(harness.service.view.quote?.sourceTimestampUnixMs, sourceTime);
+  assert.equal(harness.service.deviceState(0).validForMs, USD_QUOTE_TTL_MS);
 
   harness.setTime(harness.nowUnixMs + 5 * 60_000, harness.nowMonotonicMs + 5 * 60_000);
   harness.timers.runNext();
   await new Promise<void>((resolve) => setImmediate(resolve));
 
-  assert.equal(harness.service.deviceState(0).validForMs, originalValidity - 5 * 60_000);
+  assert.equal(harness.service.deviceState(0).validForMs, USD_QUOTE_TTL_MS);
+  harness.setTime(harness.nowUnixMs + USD_QUOTE_TTL_MS, harness.nowMonotonicMs + USD_QUOTE_TTL_MS);
+  assert.equal(harness.service.view.quote, null);
 });
 
 test("the monotonic deadline prevents a backward wall-clock adjustment from extending a quote", async () => {

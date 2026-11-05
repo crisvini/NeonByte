@@ -192,7 +192,7 @@ function updateStatusText() {
   usdToggle.checked = Boolean(status.usd?.enabled);
   document.querySelector("#usd-status").textContent = !status.usd?.enabled ? "Dollar quote is disabled."
     : status.usd.quote && status.usd.validForMs > 0
-      ? `Quote available · R$ ${(status.usd.quote.priceCents / 100).toFixed(2).replace(".", ",")} · valid for up to ${Math.ceil(status.usd.validForMs / 1000)} seconds.`
+      ? `Quote available · R$ ${(status.usd.quote.priceCents / 100).toFixed(2).replace(".", ",")} · provider update: ${new Date(status.usd.quote.sourceTimestampUnixMs).toLocaleString("en-US")} · confirmed for up to ${Math.ceil(status.usd.validForMs / 1000)} seconds.`
       : "Waiting for a valid quote from the exchange-rate provider.";
   const track = spotifyState === "connected" ? status.snapshot.nowPlaying : null;
   document.querySelector("#playback-state").textContent = spotifyState !== "connected" ? "SPOTIFY STATUS"
